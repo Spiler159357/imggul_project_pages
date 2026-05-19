@@ -1,13 +1,8 @@
 name = "imggul-project"
-main = "src/index.js" # Workers의 시작점
+pages_build_output_dir = "./public" # 정적 에셋이 포함된 디렉토리 명시
 compatibility_date = "2024-09-23"
 
-# R2 버킷 연결
+# R2 버킷 연결 (Pages Functions 환경에서도 동일하게 바인딩됩니다)
 [[r2_buckets]]
 binding = "imgBucket" 
 bucket_name = "imggul-storage"
-
-[[rules]]
-type = "Text"
-globs = ["**/*.txt", "**/*.html", "**/*.css"]
-fallback = true

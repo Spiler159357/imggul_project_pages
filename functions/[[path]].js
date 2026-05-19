@@ -1,17 +1,5 @@
-import loginHtml from './login.html';
-import appHtml from './app.html';
-import guestHtml from './guest.html';
-import styleCss from './style.css';
-
-// ES Modules: 번들러(Wrangler, Vite 등) 환경에 따라 raw 텍스트로 가져오도록 확장자나 옵션을 주의하세요.
-import stateJs from './js/state.js.txt';
-import apiJs from './js/api.js.txt';
-import uiJs from './js/ui.js.txt';
-import explorerJs from './js/explorer.js.txt';
-import craftJs from './js/craft.js.txt';
-import tempGalleryJs from './js/temp_gallery.js.txt';
-import modalsJs from './js/modals.js.txt';
-import mainJs from './js/main.js.txt';
+// functions/[[path]].js
+// Cloudflare Pages Functions - Catch-all 라우터 및 API 서버리스 핸들러
 
 function isTextFile(key) {
     return key.toLowerCase().endsWith('.txt');
@@ -24,8 +12,9 @@ function splitPath(key) {
     return { prefix, fileName };
 }
 
-export default {
-  async fetch(request, env) {
+// Pages Functions의 Entry Point (모든 Method 요청을 처리하는 Catch-all 핸들러)
+export async function onRequest(context) {
+    const { request, env } = context;
     const url = new URL(request.url);
     const path = url.pathname;
     const method = request.method;
@@ -45,46 +34,26 @@ export default {
     const cookies = getCookies(request.headers.get('Cookie'));
     const isAdmin = cookies['auth'] === secret;
 
-    if (path === "/style.css" && method === "GET") {
-        return new Response(styleCss, { headers: { "Content-Type": "text/css; charset=UTF-8" } });
-    }
-    
-    // JS 모듈 파일별 개별 라우팅 처리
-    if (path === "/js/state.js" && method === "GET") return new Response(stateJs, { headers: { "Content-Type": "application/javascript; charset=UTF-8" } });
-    if (path === "/js/api.js" && method === "GET") return new Response(apiJs, { headers: { "Content-Type": "application/javascript; charset=UTF-8" } });
-    if (path === "/js/ui.js" && method === "GET") return new Response(uiJs, { headers: { "Content-Type": "application/javascript; charset=UTF-8" } });
-    if (path === "/js/explorer.js" && method === "GET") return new Response(explorerJs, { headers: { "Content-Type": "application/javascript; charset=UTF-8" } });
-    if (path === "/js/craft.js" && method === "GET") return new Response(craftJs, { headers: { "Content-Type": "application/javascript; charset=UTF-8" } });
-    if (path === "/js/temp_gallery.js" && method === "GET") return new Response(tempGalleryJs, { headers: { "Content-Type": "application/javascript; charset=UTF-8" } });
-    if (path === "/js/modals.js" && method === "GET") return new Response(modalsJs, { headers: { "Content-Type": "application/javascript; charset=UTF-8" } });
-    if (path === "/js/main.js" && method === "GET") return new Response(mainJs, { headers: { "Content-Type": "application/javascript; charset=UTF-8" } });
-
-    if (path === "/" || path === "/login") {
-        if (method === "GET") {
-            if (!isAdmin && path === "/login") {
-                return new Response(loginHtml.replace('{{ERROR_STYLE}}', 'none'), { headers: { "Content-Type": "text/html; charset=UTF-8" } });
-            } else if (!isAdmin) {
-                return new Response(loginHtml.replace('{{ERROR_STYLE}}', 'none'), { headers: { "Content-Type": "text/html; charset=UTF-8" } });
+    // 1. 로그인 POST 라우팅 처리
+    if (path === "/login" && method === "POST") {
+        try {
+            const body = await request.json();
+            if (body.password === secret) {
+                return new Response(JSON.stringify({ success: true }), {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Set-Cookie': `auth=${body.password}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
+                    }
+                });
+            } else {
+                return new Response(JSON.stringify({ success: false, error: 'Wrong password' }), { 
+                    status: 401, headers: { 'Content-Type': 'application/json' }
+                });
             }
-        } else if (method === "POST" && path === "/login") {
-            try {
-                const body = await request.json();
-                if (body.password === secret) {
-                    return new Response(JSON.stringify({ success: true }), {
-                        headers: {
-                            'Content-Type': 'application/json',
-                            'Set-Cookie': `auth=${body.password}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
-                        }
-                    });
-                } else {
-                    return new Response(JSON.stringify({ success: false, error: 'Wrong password' }), { 
-                        status: 401, headers: { 'Content-Type': 'application/json' }
-                    });
-                }
-            } catch (e) { return new Response(JSON.stringify({ success: false, error: 'Error' }), { status: 400 }); }
-        }
+        } catch (e) { return new Response(JSON.stringify({ success: false, error: 'Error' }), { status: 400 }); }
     }
 
+    // 2. 로그아웃 GET 라우팅 처리
     if (path === "/logout" && method === "GET") {
         return new Response(null, {
             status: 302,
@@ -92,6 +61,7 @@ export default {
         });
     }
 
+    // 3. API 라우팅 처리
     if (path === "/api/generate" && method === "POST") {
         if (!isAdmin) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 403 });
         if (!env.NOVELAI_TOKEN) return new Response(JSON.stringify({ error: 'Novel AI API 토큰이 설정되지 않았습니다.' }), { status: 500 });
@@ -486,83 +456,98 @@ export default {
       }
     }
 
-    let objectKey = null;
-    if (path.startsWith("/i/")) objectKey = path.split("/i/")[1];
-    else if (path.includes(".") && !path.startsWith("/api")) objectKey = path.slice(1);
-
-    if (objectKey) {
-        objectKey = decodeURIComponent(objectKey);
-
-        if (objectKey.endsWith('_meta.json') && !isAdmin) {
-            return new Response("Forbidden: You don't have permission to access this metadata.", { status: 403 });
+    // 4. 정적 자산(Static Assets) 서빙 여부 검사
+    const hasExtension = path.includes(".");
+    if (hasExtension) {
+        // public 폴더 내 실제 정적 파일(js, css 등) 존재 여부 우선 검사
+        const assetResponse = await env.ASSETS.fetch(request);
+        if (assetResponse.status !== 404) {
+            return assetResponse;
         }
 
-        try {
-            let object = await env.imgBucket.get(objectKey);
-            
-            if (!object && isTextFile(objectKey)) {
-                const { prefix: mPrefix, fileName: mFileName } = splitPath(objectKey);
-                const memoObj = await env.imgBucket.get(mPrefix + '.memos.json');
-                if (memoObj) {
-                    const memos = await memoObj.json();
-                    if (memos[mFileName]) {
-                        const mData = memos[mFileName];
-                        if (!mData.isPublic && !isAdmin) {
-                            return new Response("Access Denied: Private Text File", { status: 403 });
+        // 정적 에셋에 없는 파일인 경우 R2에서 조회 및 다운로드 서빙
+        let objectKey = null;
+        if (path.startsWith("/i/")) objectKey = path.split("/i/")[1];
+        else objectKey = path.slice(1);
+
+        if (objectKey) {
+            objectKey = decodeURIComponent(objectKey);
+
+            if (objectKey.endsWith('_meta.json') && !isAdmin) {
+                return new Response("Forbidden: You don't have permission to access this metadata.", { status: 403 });
+            }
+
+            try {
+                let object = await env.imgBucket.get(objectKey);
+                
+                if (!object && isTextFile(objectKey)) {
+                    const { prefix: mPrefix, fileName: mFileName } = splitPath(objectKey);
+                    const memoObj = await env.imgBucket.get(mPrefix + '.memos.json');
+                    if (memoObj) {
+                        const memos = await memoObj.json();
+                        if (memos[mFileName]) {
+                            const mData = memos[mFileName];
+                            if (!mData.isPublic && !isAdmin) {
+                                return new Response("Access Denied: Private Text File", { status: 403 });
+                            }
+                            return new Response(mData.content, { 
+                                headers: { 
+                                    'Content-Type': 'text/plain; charset=UTF-8',
+                                    'Cache-Control': 'no-cache'
+                                } 
+                            });
                         }
-                        return new Response(mData.content, { 
-                            headers: { 
-                                'Content-Type': 'text/plain; charset=UTF-8',
-                                'Cache-Control': 'no-cache'
-                            } 
-                        });
                     }
                 }
-            }
 
-            if (!object) return new Response("Not found", { status: 404 });
+                if (!object) return new Response("Not found", { status: 404 });
 
-            if (isTextFile(objectKey)) {
-                const isPublic = object.customMetadata?.ispublic === 'true';
-                if (!isPublic && !isAdmin) {
-                    return new Response("Access Denied: Private Text File", { status: 403 });
+                if (isTextFile(objectKey)) {
+                    const isPublic = object.customMetadata?.ispublic === 'true';
+                    if (!isPublic && !isAdmin) {
+                        return new Response("Access Denied: Private Text File", { status: 403 });
+                    }
                 }
-            }
 
-            const headers = new Headers();
-            object.writeHttpMetadata(headers);
-            headers.set('etag', object.httpEtag);
-            headers.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=86400');
-            return new Response(object.body, { headers });
+                const headers = new Headers();
+                object.writeHttpMetadata(headers);
+                headers.set('etag', object.httpEtag);
+                headers.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=86400');
+                return new Response(object.body, { headers });
 
-        } catch (e) { return new Response("Error", { status: 500 }); }
-    }
-
-    const isApiOrFile = path.startsWith("/api") || (path.includes(".") && !path.startsWith("/api"));
-    
-    if (!isApiOrFile && path !== "/login") {
-        let initialPath = path === "/" ? "" : path.slice(1);
-        if (initialPath && !initialPath.endsWith('/')) initialPath += '/';
-        
-        let isEmpty = false;
-
-        if (isAdmin) {
-            initialPath = ''; 
-        } else {
-            if (initialPath !== '') {
-                const list = await env.imgBucket.list({ prefix: initialPath, limit: 1 });
-                isEmpty = list.objects.length === 0;
-            }
+            } catch (e) { return new Response("Error", { status: 500 }); }
         }
-        
-        let htmlContent = isAdmin ? appHtml : guestHtml;
-        htmlContent = htmlContent.replace('{{IS_ADMIN}}', isAdmin ? 'true' : 'false');
-        htmlContent = htmlContent.replace('{{INITIAL_PATH}}', initialPath);
-        htmlContent = htmlContent.replace('{{IS_EMPTY}}', isEmpty ? 'true' : 'false');
-        
-        return new Response(htmlContent, { headers: { "Content-Type": "text/html; charset=UTF-8" } });
     }
+
+    // 5. 비인증 접속인데 로그인 페이지 또는 루트 요청일 때 처리
+    if (!isAdmin && (path === "/login" || path === "/")) {
+        const loginRes = await env.ASSETS.fetch(new URL('/login.html', request.url));
+        let loginHtmlText = await loginRes.text();
+        return new Response(loginHtmlText.replace('{{ERROR_STYLE}}', 'none'), { headers: { "Content-Type": "text/html; charset=UTF-8" } });
+    }
+
+    // 6. 어드민 / 게스트 뷰 동적 바인딩 및 파라미터 주입 처리
+    let initialPath = path === "/" ? "" : path.slice(1);
+    if (initialPath && !initialPath.endsWith('/')) initialPath += '/';
     
-    return new Response("Not Found", { status: 404 });
-  }
-};
+    let isEmpty = false;
+
+    if (isAdmin) {
+        initialPath = ''; 
+    } else {
+        if (initialPath !== '') {
+            const list = await env.imgBucket.list({ prefix: initialPath, limit: 1 });
+            isEmpty = list.objects.length === 0;
+        }
+    }
+
+    const templatePath = isAdmin ? '/app.html' : '/guest.html';
+    const templateRes = await env.ASSETS.fetch(new URL(templatePath, request.url));
+    let htmlContent = await templateRes.text();
+
+    htmlContent = htmlContent.replace('{{IS_ADMIN}}', isAdmin ? 'true' : 'false');
+    htmlContent = htmlContent.replace('{{INITIAL_PATH}}', initialPath);
+    htmlContent = htmlContent.replace('{{IS_EMPTY}}', isEmpty ? 'true' : 'false');
+    
+    return new Response(htmlContent, { headers: { "Content-Type": "text/html; charset=UTF-8" } });
+}
