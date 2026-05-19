@@ -80,29 +80,25 @@ export function updateThemeIcon() {
     }
 }
 
-// [레이아웃 변경 반영] 탭 전환 및 사이드바 가시성 제어 유틸리티 대폭 개편
 export function switchTab(tabName, skipHistory = false) {
     const navExplorer = document.getElementById('nav-explorer');
     const navCraft = document.getElementById('nav-craft');
-    const navProject = document.getElementById('nav-project'); // 신설 프로젝트 탭 활성화 바인딩
+    const navProject = document.getElementById('nav-project');
 
     const tabExplorer = document.getElementById('main-explorer-content');
     const tabCraft = document.getElementById('main-craft-content');
-    const tabProject = document.getElementById('main-project-content'); // 신설 프로젝트 컨텐츠 바인딩
+    const tabProject = document.getElementById('main-project-content');
 
     const sidebar = document.getElementById('sidebar');
-    const hamburgerBtn = document.getElementById('hamburger-btn');
 
-    // 프리미엄 활성/비활성 탭 공통 버튼 테일윈드 토큰 지정
-    const activeClass = 'px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm font-bold rounded-lg shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 transition-all flex items-center justify-center';
-    const inactiveClass = 'px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm font-bold rounded-lg text-gray-505 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-all flex items-center justify-center';
+    // [버그 수정] whitespace-nowrap 및 flex-shrink-0을 부여하여 어떤 크기에서도 텍스트가 줄넘김/깨짐 현상 없도록 차단합니다.
+    const activeClass = 'px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm font-bold rounded-lg shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0';
+    const inactiveClass = 'px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm font-bold rounded-lg text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0';
 
-    // 탭 버튼 선택 스타일 매핑
-    if(navExplorer) navExplorer.className = (tabName === 'explorer') ? activeClass : inactiveClass;
-    if(navCraft) navCraft.className = (tabName === 'craft') ? activeClass : inactiveClass;
-    if(navProject) navProject.className = (tabName === 'project') ? activeClass : inactiveClass;
+    if (navExplorer) navExplorer.className = (tabName === 'explorer') ? activeClass : inactiveClass;
+    if (navCraft) navCraft.className = (tabName === 'craft') ? activeClass : inactiveClass;
+    if (navProject) navProject.className = (tabName === 'project') ? activeClass : inactiveClass;
 
-    // 메인 본문 영역 뷰 토글
     if (tabExplorer) {
         if (tabName === 'explorer') { tabExplorer.classList.remove('hidden'); tabExplorer.classList.add('flex'); }
         else { tabExplorer.classList.add('hidden'); tabExplorer.classList.remove('flex'); }
@@ -116,15 +112,15 @@ export function switchTab(tabName, skipHistory = false) {
         else { tabProject.classList.add('hidden'); tabProject.classList.remove('flex'); }
     }
 
-    // [요청 반영] 이미지 생성(Craft) 탭에서만 사이드바 및 햄버거 버튼이 보이고, 다른 탭에서는 강제 완전 은닉 처리
+    // [버그 수정 및 복원] 사이드바와 햄버거 버튼 제어 로직
+    // 이미지 생성(craft) 탭에서만 사이드바가 노출되며, 햄버거 단독 이동 배치를 통해 자연스럽게 가시성이 제어됩니다.
     if (sidebar) {
         if (tabName === 'craft') {
             sidebar.classList.remove('hidden');
             sidebar.classList.add('flex');
             
-            // 모바일 디바이스인 경우 사이드바 초기 오프셋 설정 적용
             if (window.innerWidth < 768) {
-                sidebar.classList.add('-translate-x-full');
+                sidebar.classList.add('-translate-x-full'); // 모바일은 닫힌 상태로 대기
             } else {
                 sidebar.classList.remove('-translate-x-full');
                 sidebar.classList.remove('md:-ml-72', 'md:-ml-[380px]', 'md:-ml-[360px]', 'md:-ml-80');
@@ -135,15 +131,6 @@ export function switchTab(tabName, skipHistory = false) {
         }
     }
 
-    if (hamburgerBtn) {
-        if (tabName === 'craft') {
-            hamburgerBtn.classList.remove('hidden');
-        } else {
-            hamburgerBtn.classList.add('hidden');
-        }
-    }
-
-    // 탭 선택에 따른 서브데이터 비동기 로딩 연동 및 상태 푸시
     if (tabName === 'explorer') {
         if (document.getElementById('file-grid') && document.getElementById('file-grid').children.length === 0) {
             window.loadPath(window.ROOT_PATH, true);

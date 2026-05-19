@@ -25,16 +25,19 @@ if (window.IS_ADMIN) {
     if(textEditor) textEditor.setAttribute('readonly', 'true');
 }
 
+// [버그 수정] 사이트 진입 최초 시점에 기본 탭('explorer') 활성화 상태를 강제로 부여합니다
 if (window.loadAliases) {
     window.loadAliases().then(() => {
         const initPath = window.INITIAL_PATH || '';
         history.replaceState({ tab: 'explorer', path: initPath }, '', '#' + initPath);
         window.loadPath(initPath, true);
+        window.switchTab('explorer', true); // 최초 탭 상태 적용
     });
 } else {
     const initPath = window.INITIAL_PATH || '';
     history.replaceState({ tab: 'explorer', path: initPath }, '', '#' + initPath);
     window.loadPath(initPath, true);
+    window.switchTab('explorer', true); // 최초 탭 상태 적용
 }
 
 // ----------------------------------------------------
@@ -208,7 +211,7 @@ window.addEventListener('popstate', (e) => {
     if (modalClosed) return; 
 
     if (e.state && e.state.tab === 'craft') { window.switchTab('craft', true); return; } 
-    else if (e.state && e.state.tab === 'project') { window.switchTab('project', true); return; } // [추가] popstate 타겟으로 프로젝트 탭 바인딩 추가
+    else if (e.state && e.state.tab === 'project') { window.switchTab('project', true); return; }
     else if (e.state && e.state.tab === 'explorer') {
         window.switchTab('explorer', true);
         if (e.state.path !== undefined && e.state.path !== window.currentPrefix) window.loadPath(e.state.path, true);
