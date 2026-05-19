@@ -10,7 +10,7 @@ import * as Modals from './modals.js';
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals);
 
-// 즉시 실행 (ES 모듈이므로 DOM은 이미 파싱된 상태에서 호출됨)
+// 즉시 실행
 lucide.createIcons();
 window.initDarkMode();
 window.loadCraftSettings();
@@ -25,19 +25,21 @@ if (window.IS_ADMIN) {
     if(textEditor) textEditor.setAttribute('readonly', 'true');
 }
 
-// [버그 수정] 사이트 진입 최초 시점에 기본 탭('explorer') 활성화 상태를 강제로 부여합니다
+// [버그 해결] 브라우저 최초 구동 시 찰나의 순간에도 탐색기가 올바르게 활성화되도록 이벤트 리스너를 통해 스위칭을 확정 보장합니다.
+document.addEventListener('DOMContentLoaded', () => {
+    window.switchTab('explorer', true);
+});
+
 if (window.loadAliases) {
     window.loadAliases().then(() => {
         const initPath = window.INITIAL_PATH || '';
         history.replaceState({ tab: 'explorer', path: initPath }, '', '#' + initPath);
         window.loadPath(initPath, true);
-        window.switchTab('explorer', true); // 최초 탭 상태 적용
     });
 } else {
     const initPath = window.INITIAL_PATH || '';
     history.replaceState({ tab: 'explorer', path: initPath }, '', '#' + initPath);
     window.loadPath(initPath, true);
-    window.switchTab('explorer', true); // 최초 탭 상태 적용
 }
 
 // ----------------------------------------------------
@@ -112,7 +114,7 @@ if (preciseDropZone && preciseFileInput) {
     preciseDropZone.addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') preciseFileInput.click(); });
     preciseDropZone.addEventListener('dragover', (e) => { e.preventDefault(); preciseDropZone.classList.add('border-indigo-500'); });
     preciseDropZone.addEventListener('dragleave', (e) => { e.preventDefault(); preciseDropZone.classList.remove('border-indigo-500'); });
-    preciseDropZone.addEventListener('drop', (e) => { e.preventDefault(); preciseDropZone.classList.remove('precise-image-dropzone'); if (e.dataTransfer.files.length) window.handlePreciseImageUpload(e.dataTransfer.files[0]); });
+    preciseDropZone.addEventListener('drop', (e) => { e.preventDefault(); preciseDropZone.classList.remove('border-indigo-500'); if (e.dataTransfer.files.length) window.handlePreciseImageUpload(e.dataTransfer.files[0]); });
     preciseFileInput.addEventListener('change', (e) => { if (e.target.files.length) window.handlePreciseImageUpload(e.target.files[0]); });
 }
 

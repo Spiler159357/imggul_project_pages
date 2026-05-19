@@ -27,8 +27,7 @@
 </head>
 <body class="flex flex-col h-[100dvh] overflow-hidden text-gray-800 bg-white dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200">
 
-    <!-- 글로벌 헤더에서 중복되었던 햄버거 버튼을 영구히 제거했습니다 -->
-    <header class="flex items-center justify-between h-14 px-4 sm:px-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0 z-50">
+    <header class="flex items-center justify-between h-14 px-4 sm:px-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0 z-50 relative">
         <div class="flex items-center flex-shrink-0">
             <a href="#" onclick="window.switchTab('explorer'); window.loadPath(window.INITIAL_PATH || ''); return false;" class="flex items-center hover:opacity-80 transition mr-2 sm:mr-4">
                 <i data-lucide="image" class="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600 dark:text-indigo-400 mr-1.5"></i>
@@ -37,16 +36,16 @@
             </a>
         </div>
 
-        <!-- 헤더 중앙 탭 메뉴 (선택 전후로 너비가 변하지 않도록 고정 너비와 whitespace-nowrap을 강제했습니다) -->
+        <!-- [버그 해결] 탭 버튼들에 고정폭과 레이아웃 고정을 적용하고, 탐색기 버튼에 초기 활성화 스타일을 심었습니다 -->
         <div class="flex bg-gray-100 dark:bg-gray-900/50 rounded-xl p-1 border border-gray-200 dark:border-gray-700 mx-2 flex-shrink-0 overflow-x-auto scrollbar-hide flex-nowrap whitespace-nowrap">
-            <button id="nav-explorer" onclick="window.switchTab('explorer')" class="w-24 xs:w-28 sm:w-36 py-1.5 text-xs sm:text-sm font-bold rounded-lg transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0">
-                <i data-lucide="folder-search" class="w-3.5 h-3.5 sm:mr-1.5"></i> <span class="hidden sm:inline">탐색기</span>
+            <button id="nav-explorer" onclick="window.switchTab('explorer')" class="w-24 xs:w-28 sm:w-32 py-1.5 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400">
+                <i data-lucide="folder-search" class="w-3.5 h-3.5 sm:mr-1.5 flex-shrink-0"></i> <span class="hidden sm:inline">탐색기</span>
             </button>
-            <button id="nav-craft" onclick="window.switchTab('craft')" class="w-24 xs:w-28 sm:w-36 py-1.5 text-xs sm:text-sm font-bold rounded-lg transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0">
-                <i data-lucide="wand-2" class="w-3.5 h-3.5 sm:mr-1.5"></i> <span class="hidden sm:inline">이미지 생성</span>
+            <button id="nav-craft" onclick="window.switchTab('craft')" class="w-24 xs:w-28 sm:w-32 py-1.5 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                <i data-lucide="wand-2" class="w-3.5 h-3.5 sm:mr-1.5 flex-shrink-0"></i> <span class="hidden sm:inline">이미지 생성</span>
             </button>
-            <button id="nav-project" onclick="window.switchTab('project')" class="w-24 xs:w-28 sm:w-36 py-1.5 text-xs sm:text-sm font-bold rounded-lg transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0">
-                <i data-lucide="kanban" class="w-3.5 h-3.5 sm:mr-1.5"></i> <span class="hidden sm:inline">프로젝트</span>
+            <button id="nav-project" onclick="window.switchTab('project')" class="w-24 xs:w-28 sm:w-32 py-1.5 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                <i data-lucide="kanban" class="w-3.5 h-3.5 sm:mr-1.5 flex-shrink-0"></i> <span class="hidden sm:inline">프로젝트</span>
             </button>
         </div>
 
@@ -59,10 +58,20 @@
     </header>
 
     <div class="flex flex-1 overflow-hidden relative">
-        <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-30 hidden md:hidden transition-opacity duration-300 opacity-0" onclick="window.toggleSidebar(true)"></div>
+        <!-- [개선] 사이드바 배경 어두워지는 오버레이를 모든 디바이스에서 공통 사용하도록 z-40 고정 및 flex 처리 준비 -->
+        <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-40 hidden transition-opacity duration-300 opacity-0 backdrop-blur-sm" onclick="window.toggleSidebar(true)"></div>
         
-        <aside id="sidebar" class="absolute md:relative z-40 w-80 md:w-[380px] h-full border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/95 flex-col flex-shrink-0 transform -translate-x-full md:translate-x-0 transition-all duration-300 shadow-xl md:shadow-none hidden">
+        <!-- [버그 해결] 모바일/데스크탑 구분 없이 프롬프트 창은 화면 좌측 밖(-translate-x-full)에 숨어있게 됩니다. 햄버거를 누르면 스윽 나옵니다 -->
+        <aside id="sidebar" class="fixed inset-y-0 left-0 z-50 w-80 md:w-[380px] h-full border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-col flex-shrink-0 transform -translate-x-full transition-transform duration-300 shadow-2xl hidden">
             
+            <!-- 프롬프트 헤더 영역 (사이드바 자체 닫기 버튼 추가) -->
+            <div class="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80 flex-shrink-0">
+                <span class="font-bold text-sm text-gray-700 dark:text-gray-300">생성 프롬프트 패널</span>
+                <button onclick="window.toggleSidebar(true)" class="p-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 transition">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
             <div id="sidebar-craft-content" class="flex-1 flex flex-col overflow-hidden bg-white dark:bg-gray-800">
                 <div class="flex-1 overflow-y-auto p-4 space-y-6">
                     
@@ -120,7 +129,7 @@
                                 <textarea id="prompt-action" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="캐릭터의 동작 등이 포함된 태그"></textarea>
                             </div>
                             <div class="flex items-start gap-2">
-                                <span class="w-10 text-[10px] font-bold text-gray-505 text-right flex-shrink-0 pt-2">배경</span>
+                                <span class="w-10 text-[10px] font-bold text-gray-500 text-right flex-shrink-0 pt-2">배경</span>
                                 <textarea id="prompt-background" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="배경 묘사 및 주변 환경 관련 태그"></textarea>
                             </div>
                         </div>
@@ -191,7 +200,7 @@
 
                         <div id="precise-sliders" class="hidden flex-col gap-2 mt-2">
                             <div>
-                                <label class="block text-[10px] font-bold text-gray-505 mb-1">참조 타입 (Type)</label>
+                                <label class="block text-[10px] font-bold text-gray-500 mb-1">참조 타입 (Type)</label>
                                 <select id="precise-type" class="w-full p-1.5 text-[10px] border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white">
                                     <option value="character&style" selected>캐릭터 + 스타일 동시에 참조</option>
                                     <option value="character">캐릭터만 참조</option>
@@ -199,11 +208,11 @@
                                 </select>
                             </div>
                             <div>
-                                <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-505">Strength (강도)</span><span id="precise-strength-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">1.0</span></div>
+                                <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">Strength (강도)</span><span id="precise-strength-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">1.0</span></div>
                                 <input type="range" id="precise-strength" min="0" max="1" step="0.1" value="1.0" class="w-full accent-indigo-600">
                             </div>
                             <div>
-                                <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-505">Fidelity (충실도)</span><span id="precise-fidelity-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">0.5</span></div>
+                                <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">Fidelity (충실도)</span><span id="precise-fidelity-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">0.5</span></div>
                                 <input type="range" id="precise-fidelity" min="0" max="1" step="0.1" value="0.5" class="w-full accent-indigo-600">
                             </div>
                         </div>
@@ -241,17 +250,17 @@
                         
                         <div class="grid grid-cols-2 gap-3 mb-3">
                             <div>
-                                <label class="block text-[10px] font-bold text-gray-550 mb-1">Steps</label>
+                                <label class="block text-[10px] font-bold text-gray-500 mb-1">Steps</label>
                                 <input type="number" id="nai-steps" value="28" min="1" max="50" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
                             </div>
                             <div>
-                                <label class="block text-[10px] font-bold text-gray-550 mb-1">CFG Scale</label>
+                                <label class="block text-[10px] font-bold text-gray-500 mb-1">CFG Scale</label>
                                 <input type="number" id="nai-scale" value="5.0" step="0.1" min="1" max="10" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
                             </div>
                         </div>
                         
                         <div class="mb-3">
-                            <label class="block text-[10px] font-bold text-gray-550 mb-1">Sampler</label>
+                            <label class="block text-[10px] font-bold text-gray-500 mb-1">Sampler</label>
                             <select id="nai-sampler" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
                                 <option value="k_euler_ancestral" selected>Euler Ancestral</option>
                                 <option value="k_euler">Euler</option>
@@ -307,7 +316,7 @@
                     </div>
                     
                     <div id="craft-progress-container" class="hidden flex-col items-center w-full mt-2 px-1">
-                        <div class="flex justify-between w-full text-[10px] font-bold text-gray-550 mb-1.5">
+                        <div class="flex justify-between w-full text-[10px] font-bold text-gray-500 mb-1.5">
                             <span id="craft-progress-text">준비 중...</span>
                             <span id="craft-progress-percent">0%</span>
                         </div>
@@ -361,7 +370,6 @@
                 
                 <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex flex-row items-center px-3 sm:px-4 bg-white dark:bg-gray-800 flex-shrink-0 w-full overflow-x-auto scrollbar-hide gap-2 flex-nowrap whitespace-nowrap z-10">
                     
-                    <!-- [버그 해결] 헤더에서 완전히 분리된 유일무이한 아이디의 햄버거 버튼입니다. 클릭 시 ui.js 모듈과 안정적으로 연동됩니다 -->
                     <button id="hamburger-btn" onclick="window.toggleSidebar()" class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition flex-shrink-0 mr-1" title="설정 창 열기">
                         <i data-lucide="menu" class="w-5 h-5 sm:w-6 sm:h-6"></i>
                     </button>
@@ -427,7 +435,7 @@
                     <div id="craft-history-panel" class="w-[90px] sm:w-[140px] md:w-[240px] lg:w-[280px] border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col flex-shrink-0 transition-all duration-300 z-10 shadow-[-4px_0_15px_-3px_rgba(0,0,0,0.05)] h-full">
                         <div class="p-2 sm:p-3 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/80 flex-shrink-0">
                             <span class="text-[10px] sm:text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wide truncate">임시 보관함 (<span id="craft-history-count">0</span>)</span>
-                            <button onclick="window.toggleCraftHistoryExpanded()" class="text-gray-505 hover:text-indigo-600 transition p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 flex-shrink-0" title="목록 넓게 보기">
+                            <button onclick="window.toggleCraftHistoryExpanded()" class="text-gray-500 hover:text-indigo-600 transition p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 flex-shrink-0" title="목록 넓게 보기">
                                 <i id="craft-history-icon" data-lucide="expand" class="w-4 h-4"></i>
                             </button>
                         </div>
@@ -450,7 +458,7 @@
                                 <h3 class="text-sm font-bold text-gray-800 dark:text-white leading-none">생성 진행 중</h3>
                                 <span id="craft-floating-percent" class="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">0%</span>
                             </div>
-                            <p id="craft-floating-text" class="text-[10px] text-gray-555 dark:text-gray-400 mb-2 font-mono truncate w-full">모델 추론 진행 중</p>
+                            <p id="craft-floating-text" class="text-[10px] text-gray-500 dark:text-gray-400 mb-2 font-mono truncate w-full">모델 추론 진행 중</p>
                             <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
                                 <div id="craft-floating-bar" class="bg-indigo-600 h-full rounded-full transition-all duration-200 ease-out" style="width: 0%"></div>
                             </div>
@@ -460,14 +468,14 @@
                 </div>
             </div>
 
-            <!-- 3. 프로젝트 탭 영역 (임시 보관 플레이스홀더 화면) -->
+            <!-- 3. 프로젝트 탭 영역 -->
             <div id="main-project-content" class="hidden flex-col absolute inset-0 w-full h-full bg-gray-50 dark:bg-gray-900 justify-center items-center text-gray-400 dark:text-gray-500">
                 <div class="text-center p-8 bg-white dark:bg-gray-800 rounded-2xl shadow-xl border border-gray-100 dark:border-gray-700 max-w-sm mx-4">
                     <div class="w-16 h-16 bg-indigo-50 dark:bg-indigo-950/40 rounded-full flex items-center justify-center mx-auto mb-4 text-indigo-600 dark:text-indigo-400">
                         <i data-lucide="kanban" class="w-8 h-8"></i>
                     </div>
                     <h3 class="text-lg font-bold text-gray-800 dark:text-white mb-2">프로젝트 관리</h3>
-                    <p class="text-xs text-gray-555 dark:text-gray-400 leading-relaxed mb-4">현재 화면은 신설된 탭 영역입니다. 추후 프로젝트 대시보드 및 통계 연동 기능이 추가될 공간입니다.</p>
+                    <p class="text-xs text-gray-500 dark:text-gray-400 leading-relaxed mb-4">현재 화면은 신설된 탭 영역입니다. 추후 프로젝트 대시보드 및 통계 연동 기능이 추가될 공간입니다.</p>
                     <div class="inline-flex px-3 py-1 bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 text-[10px] rounded-full font-mono">Coming Soon</div>
                 </div>
             </div>
@@ -480,7 +488,7 @@
         <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-200">
             <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white">현재 폴더에 업로드</h3>
-                <button id="close-gallery-btn" onclick="window.closeGalleryUploadModal()" class="text-gray-555 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                <button id="close-gallery-btn" onclick="window.closeGalleryUploadModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
                     <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
                 </button>
             </div>
@@ -520,13 +528,13 @@
         <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-200">
             <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white">새 텍스트 메모</h3>
-                <button id="close-memo-btn" onclick="window.closeMemoCreateModal()" class="text-gray-555 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                <button id="close-memo-btn" onclick="window.closeMemoCreateModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
                     <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
                 </button>
             </div>
             <div class="p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
                 <div class="mb-4 flex flex-col">
-                    <label class="block text-xs font-medium text-gray-550 dark:text-gray-400 mb-1">파일명 (선택, 빈칸 시 자동 생성)</label>
+                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">파일명 (선택, 빈칸 시 자동 생성)</label>
                     <div class="flex items-center w-full">
                         <span id="memo-create-prefix" class="text-gray-500 dark:text-gray-400 text-xs sm:text-sm mr-2 truncate max-w-[100px] sm:max-w-[150px] font-mono"></span>
                         <input type="text" id="memo-create-filename" class="flex-1 p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="예: note_01">
@@ -534,7 +542,7 @@
                     </div>
                 </div>
                 <div class="mb-6">
-                    <label class="block text-xs font-medium text-gray-555 dark:text-gray-400 mb-1">메모 내용</label>
+                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">메모 내용</label>
                     <textarea id="memo-create-content" rows="6" class="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white font-mono text-sm resize-none" placeholder="내용을 입력하세요..."></textarea>
                 </div>
                 <button id="memo-create-submit-btn" class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition dark:bg-indigo-700 dark:hover:bg-indigo-600">
@@ -549,7 +557,7 @@
         <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl h-[85vh] sm:max-h-[90vh] flex flex-col transition-colors duration-200">
             <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl flex-shrink-0">
                 <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white">메타데이터 불러오기 (Import)</h3>
-                <button id="close-import-btn" onclick="window.closeImportModal()" class="text-gray-555 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                <button id="close-import-btn" onclick="window.closeImportModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
                     <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
                 </button>
             </div>
@@ -579,25 +587,25 @@
                         </label>
                         <label class="cursor-pointer group select-none">
                             <input type="checkbox" id="import-opt-clothing" class="peer hidden" checked>
-                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-505 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
                                 의상
                             </div>
                         </label>
                         <label class="cursor-pointer group select-none">
                             <input type="checkbox" id="import-opt-expression" class="peer hidden" checked>
-                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-505 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
                                 표정
                             </div>
                         </label>
                         <label class="cursor-pointer group select-none">
                             <input type="checkbox" id="import-opt-action" class="peer hidden" checked>
-                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-505 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
                                 행위
                             </div>
                         </label>
                         <label class="cursor-pointer group select-none">
                             <input type="checkbox" id="import-opt-background" class="peer hidden" checked>
-                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-505 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
                                 배경
                             </div>
                         </label>
@@ -619,13 +627,13 @@
                         </label>
                         <label class="cursor-pointer group select-none">
                             <input type="checkbox" id="import-opt-settings" class="peer hidden">
-                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-505 dark:text-gray-400 peer-checked:bg-amber-500 peer-checked:border-amber-500 peer-checked:text-white hover:shadow-md">
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-amber-500 peer-checked:border-amber-500 peer-checked:text-white hover:shadow-md">
                                 세부 설정(비권장)
                             </div>
                         </label>
                         <label class="cursor-pointer group select-none">
                             <input type="checkbox" id="import-opt-seed" class="peer hidden">
-                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-505 dark:text-gray-400 peer-checked:bg-amber-500 peer-checked:border-amber-500 peer-checked:text-white hover:shadow-md">
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-amber-500 peer-checked:border-amber-500 peer-checked:text-white hover:shadow-md">
                                 시드(Seed)
                             </div>
                         </label>
@@ -654,7 +662,7 @@
                     <h3 id="modal-title" class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate leading-tight">파일명</h3>
                     <p id="modal-key" class="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400 truncate"></p>
                 </div>
-                <button id="close-btn" onclick="window.closeModal()" class="text-gray-555 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400 flex-shrink-0 p-1">
+                <button id="close-btn" onclick="window.closeModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400 flex-shrink-0 p-1">
                     <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
                 </button>
             </div>
