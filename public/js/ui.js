@@ -91,9 +91,9 @@ export function switchTab(tabName, skipHistory = false) {
 
     const sidebar = document.getElementById('sidebar');
 
-    // [버그 수정] whitespace-nowrap 및 flex-shrink-0을 부여하여 어떤 크기에서도 텍스트가 줄넘김/깨짐 현상 없도록 차단합니다.
-    const activeClass = 'px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm font-bold rounded-lg shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0';
-    const inactiveClass = 'px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm font-bold rounded-lg text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0';
+    // [버그 수정] 가로 폭 크기에 맞춰 줄바꿈이나 자잘한 너비 Shifting이 없도록 w-24, w-28, w-36 등 완벽히 대칭되는 고정 폭과 flex-shrink-0 설정을 적용하였습니다.
+    const activeClass = 'w-20 xs:w-28 sm:w-36 py-1.5 text-xs sm:text-sm font-bold rounded-lg shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0';
+    const inactiveClass = 'w-20 xs:w-28 sm:w-36 py-1.5 text-xs sm:text-sm font-bold rounded-lg text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-all flex items-center justify-center whitespace-nowrap flex-shrink-0';
 
     if (navExplorer) navExplorer.className = (tabName === 'explorer') ? activeClass : inactiveClass;
     if (navCraft) navCraft.className = (tabName === 'craft') ? activeClass : inactiveClass;
@@ -112,15 +112,14 @@ export function switchTab(tabName, skipHistory = false) {
         else { tabProject.classList.add('hidden'); tabProject.classList.remove('flex'); }
     }
 
-    // [버그 수정 및 복원] 사이드바와 햄버거 버튼 제어 로직
-    // 이미지 생성(craft) 탭에서만 사이드바가 노출되며, 햄버거 단독 이동 배치를 통해 자연스럽게 가시성이 제어됩니다.
+    // [버그 해결] 이미지 생성(craft) 탭에서만 사이드바가 노출되고, 모바일/데스크톱 햄버거 토글이 완전히 살아나도록 hidden 및 오프셋 클래스들을 똑똑하게 초기화/제어합니다.
     if (sidebar) {
         if (tabName === 'craft') {
             sidebar.classList.remove('hidden');
             sidebar.classList.add('flex');
             
             if (window.innerWidth < 768) {
-                sidebar.classList.add('-translate-x-full'); // 모바일은 닫힌 상태로 대기
+                sidebar.classList.add('-translate-x-full'); // 모바일은 일단 닫힘 상태로 시작
             } else {
                 sidebar.classList.remove('-translate-x-full');
                 sidebar.classList.remove('md:-ml-72', 'md:-ml-[380px]', 'md:-ml-[360px]', 'md:-ml-80');
@@ -154,6 +153,11 @@ export function switchTab(tabName, skipHistory = false) {
         if (!skipHistory) history.pushState({ tab: 'craft' }, '', '#craft');
     } else if (tabName === 'project') {
         if (!skipHistory) history.pushState({ tab: 'project' }, '', '#project');
+    }
+
+    // 아이콘들이 깨지지 않도록 Lucide를 재바인딩해 줍니다.
+    if (window.lucide) {
+        window.lucide.createIcons();
     }
 }
 

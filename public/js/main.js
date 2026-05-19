@@ -112,7 +112,7 @@ if (preciseDropZone && preciseFileInput) {
     preciseDropZone.addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') preciseFileInput.click(); });
     preciseDropZone.addEventListener('dragover', (e) => { e.preventDefault(); preciseDropZone.classList.add('border-indigo-500'); });
     preciseDropZone.addEventListener('dragleave', (e) => { e.preventDefault(); preciseDropZone.classList.remove('border-indigo-500'); });
-    preciseDropZone.addEventListener('drop', (e) => { e.preventDefault(); preciseDropZone.classList.remove('border-indigo-500'); if (e.dataTransfer.files.length) window.handlePreciseImageUpload(e.dataTransfer.files[0]); });
+    preciseDropZone.addEventListener('drop', (e) => { e.preventDefault(); preciseDropZone.classList.remove('precise-image-dropzone'); if (e.dataTransfer.files.length) window.handlePreciseImageUpload(e.dataTransfer.files[0]); });
     preciseFileInput.addEventListener('change', (e) => { if (e.target.files.length) window.handlePreciseImageUpload(e.target.files[0]); });
 }
 
