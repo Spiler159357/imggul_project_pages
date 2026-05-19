@@ -25,7 +25,7 @@ if (window.IS_ADMIN) {
     if(textEditor) textEditor.setAttribute('readonly', 'true');
 }
 
-// [버그 해결] 브라우저 최초 구동 시 찰나의 순간에도 탐색기가 올바르게 활성화되도록 이벤트 리스너를 통해 스위칭을 확정 보장합니다.
+// [버그 해결] 찰나의 시간차가 없도록, DOMContentLoaded 가 끝나자마자 강제 탭 초기화를 진행합니다.
 document.addEventListener('DOMContentLoaded', () => {
     window.switchTab('explorer', true);
 });

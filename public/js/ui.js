@@ -1,6 +1,6 @@
 // 3. ui.js: 공통 UI 조작 및 유틸리티
 
-// [버그 해결] 데스크탑 및 모바일에서 햄버거 토글이 완전히 동작하도록 오프캔버스(Overlay) 방식으로 통일했습니다.
+// [버그 해결] 햄버거 토글이 화면 밖(off-canvas)에서 부드럽게 튀어나오고 들어갈 수 있도록 확실하게 통제합니다.
 export function toggleSidebar(forceClose = false) {
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebar-overlay');
@@ -22,18 +22,14 @@ export function toggleSidebar(forceClose = false) {
         }
     } else {
         // 사이드바 열기
-        sidebar.classList.remove('hidden'); 
         if (overlay) {
             overlay.classList.remove('hidden');
-            // 브라우저 렌더링 강제 유발(리플로우)하여 opacity 트랜지션이 작동하게 함
+            // CSS 애니메이션 트리거를 위한 리플로우 강제 유발
             void overlay.offsetWidth; 
-            
-            sidebar.classList.remove('-translate-x-full');
             overlay.classList.remove('opacity-0');
             overlay.classList.add('opacity-100');
-        } else {
-            sidebar.classList.remove('-translate-x-full');
         }
+        sidebar.classList.remove('-translate-x-full');
     }
 }
 
@@ -81,48 +77,48 @@ export function updateThemeIcon() {
     }
 }
 
-// [버그 해결] 무식하게 전체 클래스를 덮어써서 발생하던 UI 크기 변경(Shifting) 현상을 해결했습니다.
 export function switchTab(tabName, skipHistory = false) {
     const tabs = ['explorer', 'craft', 'project'];
     
+    // [버그 해결] 크기와 레이아웃을 고정해둔 HTML 클래스를 파괴하지 않고 색상(텍스트, 배경, 그림자) 클래스만 섬세하게 토글합니다.
     tabs.forEach(tab => {
         const btn = document.getElementById(`nav-${tab}`);
         const content = document.getElementById(`main-${tab}-content`);
         if (!btn || !content) return;
 
         if (tab === tabName) {
-            // 버튼 활성화 스타일 (크기나 레이아웃 변경 없음)
+            // 버튼 활성화 (배경, 그림자, 텍스트 색상 추가)
             btn.classList.add('shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400');
+            // 비활성화 색상 제거
             btn.classList.remove('text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200');
             
-            // 메인 뷰 노출
+            // 메인 콘텐츠 뷰 노출
             content.classList.remove('hidden');
             content.classList.add('flex');
         } else {
-            // 버튼 비활성화 스타일
-            btn.classList.remove('shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400');
+            // 버튼 비활성화 (기본 회색 텍스트 추가)
             btn.classList.add('text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200');
+            // 활성화 색상 제거
+            btn.classList.remove('shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400');
             
-            // 메인 뷰 숨김
+            // 메인 콘텐츠 뷰 숨김
             content.classList.add('hidden');
             content.classList.remove('flex');
         }
     });
 
-    const sidebar = document.getElementById('sidebar');
-    if (sidebar) {
+    // 햄버거 버튼 제어 (craft 탭에서만 보임)
+    const hamburgerBtn = document.getElementById('hamburger-btn');
+    if (hamburgerBtn) {
         if (tabName === 'craft') {
-            // 이미지 생성 탭에 진입하면, 사이드바를 DOM에 띄우되 화면 밖에 숨겨둡니다 (-translate-x-full)
-            sidebar.classList.remove('hidden');
-            sidebar.classList.add('flex');
-            sidebar.classList.add('-translate-x-full');
+            hamburgerBtn.classList.remove('hidden');
         } else {
-            // 다른 탭 진입 시 사이드바를 완전히 제거하고 열려있다면 닫아줍니다
-            sidebar.classList.add('hidden');
-            sidebar.classList.remove('flex');
-            window.toggleSidebar(true);
+            hamburgerBtn.classList.add('hidden');
         }
     }
+
+    // 다른 탭으로 넘어갈 때 혹시라도 열려있던 프롬프트 사이드바가 있으면 무조건 강제 닫힘 처리
+    window.toggleSidebar(true);
 
     if (tabName === 'explorer') {
         if (document.getElementById('file-grid') && document.getElementById('file-grid').children.length === 0) {
@@ -149,10 +145,7 @@ export function switchTab(tabName, skipHistory = false) {
         if (!skipHistory) history.pushState({ tab: 'project' }, '', '#project');
     }
 
-    // 변경된 뷰에 맞춰 아이콘 재배치
-    if (window.lucide) {
-        window.lucide.createIcons();
-    }
+    if (window.lucide) window.lucide.createIcons();
 }
 
 export async function logErrorToStorage(errContext, error) {
