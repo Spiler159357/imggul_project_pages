@@ -1,4 +1,4 @@
-// 3. ui.js: 공통 UI 조작 및 유틸리티  
+// 3. ui.js: 공통 UI 조작 및 유틸리티
 export function toggleSidebar(forceClose = false) {
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebar-overlay');
