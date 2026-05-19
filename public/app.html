@@ -1,0 +1,717 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ImgGul Admin</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: { 800: '#171717', 900: '#0a0a0a' }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="flex flex-col h-[100dvh] overflow-hidden text-gray-800 bg-white dark:bg-gray-900 dark:text-gray-100 transition-colors duration-200">
+
+    <header class="flex items-center justify-between h-14 px-4 sm:px-6 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0 z-50">
+        <div class="flex items-center">
+            <button id="hamburger-btn" onclick="window.toggleSidebar()" class="mr-2 sm:mr-3 p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition">
+                <i data-lucide="menu" class="w-5 h-5 sm:w-6 sm:h-6"></i>
+            </button>
+            
+            <a href="#" onclick="window.switchTab('explorer'); window.loadPath(window.INITIAL_PATH || ''); return false;" class="flex items-center hover:opacity-80 transition">
+                <i data-lucide="image" class="h-5 w-5 sm:h-6 sm:w-6 text-indigo-600 dark:text-indigo-400 mr-1 sm:mr-2"></i>
+                <span class="font-bold text-lg sm:text-xl text-gray-900 dark:text-white mr-2">ImgGul</span>
+                <span class="text-[10px] sm:text-xs font-bold text-green-700 bg-green-100 dark:bg-green-900/40 dark:text-green-400 px-2 py-0.5 rounded-md whitespace-nowrap hidden sm:inline-block">관리자 모드</span>
+            </a>
+        </div>
+        <div class="flex items-center space-x-2 sm:space-x-4">
+             <button id="theme-toggle-btn" onclick="window.toggleDarkMode()" class="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                <i data-lucide="sun" class="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 dark:text-gray-400"></i>
+             </button>
+             <a href="/logout" class="text-xs sm:text-sm text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 font-medium">로그아웃</a>
+        </div>
+    </header>
+
+    <div class="flex flex-1 overflow-hidden relative">
+        <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-30 hidden md:hidden transition-opacity duration-300 opacity-0" onclick="window.toggleSidebar(true)"></div>
+        
+        <aside id="sidebar" class="absolute md:relative z-40 w-80 md:w-[380px] h-full border-r border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/95 flex flex-col flex-shrink-0 transform -translate-x-full md:translate-x-0 transition-all duration-300 shadow-xl md:shadow-none">
+            
+            <div class="p-2 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0">
+                <div class="flex bg-gray-100 dark:bg-gray-900/50 rounded-lg p-1 w-full border border-gray-200 dark:border-gray-700">
+                    <button id="nav-explorer" onclick="window.switchTab('explorer')" class="flex-1 py-1.5 text-xs sm:text-sm font-bold rounded-md shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 transition-all flex items-center justify-center">
+                        <i data-lucide="folder-search" class="w-3.5 h-3.5 mr-1.5"></i> 탐색기
+                    </button>
+                    <button id="nav-craft" onclick="window.switchTab('craft')" class="flex-1 py-1.5 text-xs sm:text-sm font-bold rounded-md text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-all flex items-center justify-center">
+                        <i data-lucide="wand-2" class="w-3.5 h-3.5 mr-1.5"></i> 이미지 생성
+                    </button>
+                </div>
+            </div>
+
+            <div id="sidebar-explorer-content" class="flex-1 flex flex-col overflow-hidden">
+                <div class="p-2.5 bg-gray-100 dark:bg-gray-800/80 font-bold text-xs border-b border-gray-200 dark:border-gray-700 flex-shrink-0 text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    폴더 및 파일
+                </div>
+                <ul id="sidebar-folder-list" class="flex-1 overflow-y-auto p-2 space-y-0.5"></ul>
+            </div>
+
+            <div id="sidebar-craft-content" class="hidden flex-1 flex flex-col overflow-hidden bg-white dark:bg-gray-800">
+                <div class="flex-1 overflow-y-auto p-4 space-y-6">
+                    
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wide">Model</label>
+                        <select id="nai-model" class="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 dark:text-white shadow-sm">
+                            <option value="nai-diffusion-4-5-full" selected>NAI Diffusion Anime V4.5 (Full)</option>
+                            <option value="nai-diffusion-4-5-curated">NAI Diffusion Anime V4.5 (Curated)</option>
+                            <option value="nai-diffusion-4-full">NAI Diffusion Anime V4.0 (Full)</option>
+                            <option value="nai-diffusion-4-curated-preview">NAI Diffusion Anime V4.0 (Curated Preview)</option>
+                            <option value="nai-diffusion-3">NAI Diffusion Anime V3</option>
+                            <option value="nai-diffusion-furry-3">NAI Diffusion Furry V3</option>
+                        </select>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between items-center mb-2">
+                            <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Positive Prompts</label>
+                            <div class="flex items-center gap-3">
+                                <!-- 통합 입력 태그형 체크박스 반영 (hidden으로 변경) -->
+                                <label class="cursor-pointer group select-none">
+                                    <input type="checkbox" id="prompt-toggle-simple" class="peer hidden">
+                                    <div class="px-2 py-1 text-[10px] font-bold rounded border transition-all duration-200 ease-in-out bg-gray-50 dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-sm">
+                                        통합 입력
+                                    </div>
+                                </label>
+                                <button onclick="window.clearPrompts()" class="text-[10px] text-gray-400 hover:text-red-500 transition">모두 지우기</button>
+                            </div>
+                        </div>
+                        
+                        <textarea id="prompt-raw" rows="4" class="prompt-input auto-resize-textarea w-full p-2.5 text-xs border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50 dark:bg-gray-700 dark:text-white shadow-sm hidden" placeholder="여기에 전체 프롬프트를 한 번에 이어서 입력하세요..."></textarea>
+
+                        <div id="prompt-detailed-container" class="space-y-2.5 bg-gray-50 dark:bg-gray-800/50 p-3 rounded-lg border border-gray-100 dark:border-gray-700 shadow-sm block">
+                            <div class="flex items-start gap-2">
+                                <span class="w-10 text-[10px] font-bold text-gray-500 text-right flex-shrink-0 pt-2">그림체</span>
+                                <textarea id="prompt-style" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="작가 태그"></textarea>
+                            </div>
+                            <div class="flex items-start gap-2">
+                                <span class="w-10 text-[10px] font-bold text-gray-500 text-right flex-shrink-0 pt-2">구도</span>
+                                <textarea id="prompt-composition" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="1girl, solo, from side, straight on..."></textarea>
+                            </div>
+                            <div class="flex items-start gap-2">
+                                <span class="w-10 text-[10px] font-bold text-gray-500 text-right flex-shrink-0 pt-2">캐릭터</span>
+                                <textarea id="prompt-character" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="캐릭터의 신체, 얼굴에 대한 다양한 태그"></textarea>
+                            </div>
+                            <div class="flex items-start gap-2">
+                                <span class="w-10 text-[10px] font-bold text-gray-500 text-right flex-shrink-0 pt-2">의상</span>
+                                <textarea id="prompt-clothing" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="캐릭터의 의상 정보가 담긴 태그"></textarea>
+                            </div>
+                            <div class="flex items-start gap-2">
+                                <span class="w-10 text-[10px] font-bold text-gray-500 text-right flex-shrink-0 pt-2">표정</span>
+                                <textarea id="prompt-expression" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="캐릭터의 표정 등에 대한 정보"></textarea>
+                            </div>
+                            <div class="flex items-start gap-2">
+                                <span class="w-10 text-[10px] font-bold text-gray-500 text-right flex-shrink-0 pt-2">행위</span>
+                                <textarea id="prompt-action" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="캐릭터의 동작 등이 포함된 태그"></textarea>
+                            </div>
+                            <div class="flex items-start gap-2">
+                                <span class="w-10 text-[10px] font-bold text-gray-500 text-right flex-shrink-0 pt-2">배경</span>
+                                <textarea id="prompt-background" rows="1" class="prompt-input auto-resize-textarea flex-1 p-2 text-xs border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="배경 묘사 및 주변 환경 관련 태그"></textarea>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div>
+                        <div class="flex justify-between items-center mb-1.5">
+                            <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Negative Prompt</label>
+                            <button onclick="document.getElementById('nai-negative').value=''; window.saveCraftSettings();" class="text-[10px] text-gray-400 hover:text-red-500 transition">지우기</button>
+                        </div>
+                        <textarea id="nai-negative" rows="2" class="auto-resize-textarea w-full p-2.5 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50 dark:bg-gray-700 dark:text-white text-xs shadow-sm" placeholder="lowres, bad anatomy, bad hands, text, error..."></textarea>
+                    </div>
+
+                    <div id="setting-v3" class="hidden flex-col gap-2 bg-indigo-50/50 dark:bg-indigo-900/10 p-3 rounded-lg border border-indigo-100 dark:border-indigo-800/50">
+                        <label class="block text-[11px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wide">Vibe Transfer (V3+)</label>
+                        <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1 leading-tight">단일 이미지는 추가 소모가 없으나, 다중 업로드시 Anlas가 소모됩니다.</p>
+                        
+                        <div id="vibe-image-dropzone" class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-3 text-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition relative bg-white dark:bg-gray-800 shadow-sm">
+                            <input type="file" id="vibe-image-input" class="hidden" accept="image/*">
+                            <div id="vibe-image-prompt" class="flex flex-col items-center pointer-events-none py-2">
+                                <i data-lucide="image-plus" class="w-5 h-5 text-gray-400 mb-1"></i>
+                                <span class="text-[10px] text-gray-500">Vibe 이미지 드래그 또는 클릭</span>
+                            </div>
+                            <div id="vibe-image-preview-container" class="hidden relative w-full">
+                                <img id="vibe-image-preview" src="" class="mx-auto max-h-28 rounded object-contain shadow-sm">
+                                <button onclick="window.clearVibeImage(); event.stopPropagation();" class="absolute top-0 right-0 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 shadow-md transform translate-x-2 -translate-y-2"><i data-lucide="x" class="w-3 h-3"></i></button>
+                            </div>
+                        </div>
+
+                        <div id="vibe-sliders" class="hidden flex-col gap-2 mt-2">
+                            <div>
+                                <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">Reference Strength</span><span id="vibe-strength-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">0.6</span></div>
+                                <input type="range" id="vibe-strength" min="0" max="1" step="0.1" value="0.6" class="w-full accent-indigo-600">
+                            </div>
+                            <div>
+                                <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">Information Extracted</span><span id="vibe-info-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">1.0</span></div>
+                                <input type="range" id="vibe-info" min="0" max="1" step="0.1" value="1.0" class="w-full accent-indigo-600">
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div id="setting-v4" class="hidden flex-col gap-2 bg-indigo-50/50 dark:bg-indigo-900/10 p-3 rounded-lg border border-indigo-100 dark:border-indigo-800/50">
+                        <div class="flex justify-between items-center">
+                            <label class="block text-[11px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wide">Director Tools (V4+)</label>
+                            <button onclick="window.addExtraCharacter()" class="text-[10px] bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700 flex items-center gap-1 transition"><i data-lucide="user-plus" class="w-3 h-3"></i> 캐릭터 추가</button>
+                        </div>
+                        <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1 leading-tight">다중 캐릭터 구도를 위한 픽셀 공간(v4_prompt) 분할을 지원합니다.</p>
+                        
+                        <div id="extra-chars-container" class="flex flex-col gap-3 mt-1">
+                        </div>
+                    </div>
+
+                    <div id="setting-v45" class="hidden flex-col gap-2 bg-indigo-50/50 dark:bg-indigo-900/10 p-3 rounded-lg border border-indigo-100 dark:border-indigo-800/50">
+                        <label class="block text-[11px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wide">Precise Reference (V4.5+)</label>
+                        <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1 leading-tight">주의: 이미지 업로드 시 <span class="font-bold text-red-500">5 Anlas</span>가 추가로 소모됩니다.</p>
+                        
+                        <div id="precise-image-dropzone" class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-3 text-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition relative bg-white dark:bg-gray-800 shadow-sm">
+                            <input type="file" id="precise-image-input" class="hidden" accept="image/*">
+                            <div id="precise-image-prompt" class="flex flex-col items-center pointer-events-none py-2">
+                                <i data-lucide="image-plus" class="w-5 h-5 text-gray-400 mb-1"></i>
+                                <span class="text-[10px] text-gray-500">Precise 레퍼런스 드래그/클릭</span>
+                            </div>
+                            <div id="precise-image-preview-container" class="hidden relative w-full">
+                                <img id="precise-image-preview" src="" class="mx-auto max-h-28 rounded object-contain shadow-sm">
+                                <button onclick="window.clearPreciseImage(); event.stopPropagation();" class="absolute top-0 right-0 bg-red-500 text-white rounded-full p-1 hover:bg-red-600 shadow-md transform translate-x-2 -translate-y-2"><i data-lucide="x" class="w-3 h-3"></i></button>
+                            </div>
+                        </div>
+
+                        <div id="precise-sliders" class="hidden flex-col gap-2 mt-2">
+                            <div>
+                                <label class="block text-[10px] font-bold text-gray-500 mb-1">참조 타입 (Type)</label>
+                                <select id="precise-type" class="w-full p-1.5 text-[10px] border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white">
+                                    <option value="character&style" selected>캐릭터 + 스타일 동시에 참조</option>
+                                    <option value="character">캐릭터만 참조</option>
+                                    <option value="style">스타일만 참조</option>
+                                </select>
+                            </div>
+                            <div>
+                                <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">Strength (강도)</span><span id="precise-strength-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">1.0</span></div>
+                                <input type="range" id="precise-strength" min="0" max="1" step="0.1" value="1.0" class="w-full accent-indigo-600">
+                            </div>
+                            <div>
+                                <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">Fidelity (충실도)</span><span id="precise-fidelity-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">0.5</span></div>
+                                <input type="range" id="precise-fidelity" min="0" max="1" step="0.1" value="0.5" class="w-full accent-indigo-600">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="mt-2">
+                        <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wide">Resolution</label>
+                        <div class="grid grid-cols-3 gap-1.5">
+                            <label class="cursor-pointer group">
+                                <input type="radio" name="nai-res" value="832x1216" class="peer hidden" checked>
+                                <div class="text-center p-2 border border-gray-200 dark:border-gray-600 rounded-lg peer-checked:border-indigo-500 peer-checked:bg-indigo-50 dark:peer-checked:bg-indigo-900/30 peer-checked:text-indigo-700 dark:peer-checked:text-indigo-300 group-hover:border-indigo-300 transition bg-white dark:bg-gray-800 shadow-sm">
+                                    <i data-lucide="smartphone" class="w-4 h-4 mx-auto mb-1 text-gray-400 peer-checked:text-indigo-600"></i>
+                                    <div class="text-[10px] font-bold">세로형</div>
+                                </div>
+                            </label>
+                            <label class="cursor-pointer group">
+                                <input type="radio" name="nai-res" value="1024x1024" class="peer hidden">
+                                <div class="text-center p-2 border border-gray-200 dark:border-gray-600 rounded-lg peer-checked:border-indigo-500 peer-checked:bg-indigo-50 dark:peer-checked:bg-indigo-900/30 peer-checked:text-indigo-700 dark:peer-checked:text-indigo-300 group-hover:border-indigo-300 transition bg-white dark:bg-gray-800 shadow-sm">
+                                    <i data-lucide="square" class="w-4 h-4 mx-auto mb-1 text-gray-400 peer-checked:text-indigo-600"></i>
+                                    <div class="text-[10px] font-bold">정방형</div>
+                                </div>
+                            </label>
+                            <label class="cursor-pointer group">
+                                <input type="radio" name="nai-res" value="1216x832" class="peer hidden">
+                                <div class="text-center p-2 border border-gray-200 dark:border-gray-600 rounded-lg peer-checked:border-indigo-500 peer-checked:bg-indigo-50 dark:peer-checked:bg-indigo-900/30 peer-checked:text-indigo-700 dark:peer-checked:text-indigo-300 group-hover:border-indigo-300 transition bg-white dark:bg-gray-800 shadow-sm">
+                                    <i data-lucide="monitor" class="w-4 h-4 mx-auto mb-1 text-gray-400 peer-checked:text-indigo-600"></i>
+                                    <div class="text-[10px] font-bold">가로형</div>
+                                </div>
+                            </label>
+                        </div>
+                    </div>
+
+                    <div class="bg-gray-50 dark:bg-gray-800/30 p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                        <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-3 uppercase tracking-wide">Advanced Settings</label>
+                        
+                        <div class="grid grid-cols-2 gap-3 mb-3">
+                            <div>
+                                <label class="block text-[10px] font-bold text-gray-500 mb-1">Steps</label>
+                                <input type="number" id="nai-steps" value="28" min="1" max="50" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
+                            </div>
+                            <div>
+                                <label class="block text-[10px] font-bold text-gray-500 mb-1">CFG Scale</label>
+                                <input type="number" id="nai-scale" value="5.0" step="0.1" min="1" max="10" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
+                            </div>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label class="block text-[10px] font-bold text-gray-500 mb-1">Sampler</label>
+                            <select id="nai-sampler" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
+                                <option value="k_euler_ancestral" selected>Euler Ancestral</option>
+                                <option value="k_euler">Euler</option>
+                                <option value="k_dpmpp_2s_ancestral">DPM++ 2S Ancestral</option>
+                                <option value="k_dpmpp_2m">DPM++ 2M</option>
+                                <option value="k_dpmpp_sde">DPM++ SDE</option>
+                            </select>
+                        </div>
+
+                        <!-- SMEA, DYN 태그형 체크박스 반영 (hidden으로 변경) -->
+                        <div class="flex gap-2 mb-3">
+                            <label class="cursor-pointer group select-none" title="V3 전용 옵션">
+                                <input type="checkbox" id="nai-sm" class="peer hidden">
+                                <div class="px-2.5 py-1 text-[10px] font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-sm">
+                                    SMEA
+                                </div>
+                            </label>
+                            <label class="cursor-pointer group select-none" title="V3 전용 옵션">
+                                <input type="checkbox" id="nai-sm-dyn" class="peer hidden">
+                                <div class="px-2.5 py-1 text-[10px] font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-sm">
+                                    DYN
+                                </div>
+                            </label>
+                        </div>
+
+                        <div class="flex justify-between items-center mb-1">
+                            <label class="block text-[10px] font-bold text-gray-500">Seed</label>
+                            <button onclick="document.getElementById('nai-seed').value=''; window.saveCraftSettings();" class="text-[9px] text-indigo-600 dark:text-indigo-400 hover:underline">랜덤 (비우기)</button>
+                        </div>
+                        <input type="number" id="nai-seed" placeholder="비워두면 랜덤 시드" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
+                    </div>
+
+                    <div class="bg-indigo-50 dark:bg-indigo-900/20 p-2.5 rounded border border-indigo-100 dark:border-indigo-800/50 flex items-center justify-between mb-4">
+                        <span class="text-xs font-bold text-indigo-700 dark:text-indigo-300 flex items-center"><i data-lucide="coins" class="w-4 h-4 mr-1.5"></i> 소모 예상</span>
+                        <div id="nai-anlas-cost" class="text-xs text-gray-600 dark:text-gray-400">계산 중...</div>
+                    </div>
+                    
+                    <div class="h-4 flex-shrink-0"></div>
+                </div>
+                
+                <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0 z-10 shadow-[0_-10px_15px_-3px_rgba(0,0,0,0.05)] md:shadow-none pb-8 sm:pb-4">
+                    <div class="flex gap-2 mb-2">
+                        <div class="flex items-center bg-gray-100 dark:bg-gray-900/50 dark:bg-gray-700 rounded-xl px-3 flex-shrink-0 border border-gray-200 dark:border-gray-600">
+                            <span class="text-xs font-bold text-gray-500 dark:text-gray-400 mr-1">반복</span>
+                            <input type="number" id="nai-batch-count" value="1" min="1" max="100" class="w-10 bg-transparent text-sm font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none text-center">
+                            <span class="text-xs font-bold text-gray-500 dark:text-gray-400">회</span>
+                        </div>
+                        <button id="nai-generate-btn" onclick="window.generateNaiImage()" class="flex-1 bg-indigo-600 text-white py-3.5 rounded-xl shadow-md hover:bg-indigo-700 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
+                            <i data-lucide="sparkles" class="w-5 h-5"></i> 생성
+                        </button>
+                        <button id="nai-cancel-btn" onclick="window.cancelNaiGeneration()" class="hidden flex-1 bg-red-500 text-white py-3.5 rounded-xl shadow-md hover:bg-red-600 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
+                            <i data-lucide="stop-circle" class="w-5 h-5"></i> 중지 (<span id="nai-batch-status">0/0</span>)
+                        </button>
+                    </div>
+                    
+                    <div id="craft-progress-container" class="hidden flex-col items-center w-full mt-2 px-1">
+                        <div class="flex justify-between w-full text-[10px] font-bold text-gray-500 mb-1.5">
+                            <span id="craft-progress-text">준비 중...</span>
+                            <span id="craft-progress-percent">0%</span>
+                        </div>
+                        <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden shadow-inner">
+                            <div id="craft-progress-bar" class="bg-indigo-600 h-full rounded-full transition-all duration-200 ease-out" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </aside>
+
+        <main class="flex-1 flex flex-col relative bg-white dark:bg-gray-900 overflow-hidden min-h-0 w-full">
+            
+            <div id="main-explorer-content" class="flex flex-col absolute inset-0 w-full h-full">
+                <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex flex-row items-center px-3 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 w-full overflow-x-auto scrollbar-hide flex-nowrap whitespace-nowrap gap-3">
+                    <div id="breadcrumbs" class="flex items-center text-sm text-gray-600 dark:text-gray-300 whitespace-nowrap flex-shrink-0"></div>
+                    
+                    <div class="flex-1 min-w-[8px]"></div>
+                    
+                    <div class="flex items-center gap-1.5 flex-shrink-0 admin-only-ui">
+                        <button onclick="window.openGalleryUploadModal()" class="flex-shrink-0 flex items-center text-xs bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-3 py-1.5 rounded transition">
+                            <i data-lucide="upload-cloud" class="w-3.5 h-3.5 sm:mr-1"></i> <span class="hidden sm:inline">업로드</span>
+                        </button>
+                        <button onclick="window.openMemoCreateModal()" class="flex-shrink-0 flex items-center text-xs bg-green-50 dark:bg-green-900/30 hover:bg-green-100 dark:hover:bg-green-900/50 text-green-700 dark:text-green-300 px-3 py-1.5 rounded transition">
+                            <i data-lucide="file-plus" class="w-3.5 h-3.5 sm:mr-1"></i> <span class="hidden sm:inline">새 메모</span>
+                        </button>
+                        <button onclick="window.createNewFolder()" class="flex-shrink-0 flex items-center text-xs bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded transition">
+                            <i data-lucide="folder-plus" class="w-3.5 h-3.5 sm:mr-1"></i> <span class="hidden sm:inline">새 폴더</span>
+                        </button>
+                        <button onclick="window.setCurrentFolderAlias()" class="flex-shrink-0 flex items-center text-xs bg-purple-50 dark:bg-purple-900/30 hover:bg-purple-100 dark:hover:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-3 py-1.5 rounded transition">
+                            <i data-lucide="tag" class="w-3.5 h-3.5 sm:mr-1"></i> <span class="hidden sm:inline">별칭 설정</span>
+                        </button>
+                        <button onclick="window.refreshGallery()" class="flex-shrink-0 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="새로고침">
+                            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                        </button>
+                    </div>
+                </div>
+
+                <div id="gallery-content" class="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 dark:bg-gray-900/50 relative">
+                    <div id="gallery-loading" class="hidden flex justify-center items-center h-40"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400"></div></div>
+                    <div id="file-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4"></div>
+                    <div id="gallery-empty" class="hidden flex flex-col items-center justify-center h-40 text-gray-400 dark:text-gray-500"><i data-lucide="folder-open" class="w-12 h-12 mb-2 opacity-50"></i><p>폴더가 비어있습니다.</p></div>
+                    <div class="h-24 w-full flex-shrink-0 pointer-events-none"></div>
+                </div>
+            </div>
+
+            <div id="main-craft-content" class="hidden flex-col absolute inset-0 w-full h-full bg-gray-100 dark:bg-gray-900">
+                
+                <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex flex-row items-center px-3 sm:px-4 bg-white dark:bg-gray-800 flex-shrink-0 w-full overflow-x-auto scrollbar-hide gap-2 flex-nowrap whitespace-nowrap z-10">
+                    
+                    <button onclick="window.openImportModal()" class="flex-shrink-0 flex items-center text-xs bg-indigo-50 dark:bg-indigo-900/30 hover:bg-indigo-100 dark:hover:bg-indigo-900/50 text-indigo-700 dark:text-indigo-300 px-3 py-1.5 rounded-lg border border-indigo-100 dark:border-indigo-800/50 h-8 sm:h-9 transition">
+                        <i data-lucide="import" class="w-3.5 h-3.5 mr-1.5"></i> <span class="font-medium">Import</span>
+                    </button>
+                    
+                    <span class="font-bold text-xs sm:text-sm text-gray-700 dark:text-gray-300 flex-shrink-0 ml-1 sm:ml-2"><i data-lucide="map-pin" class="inline w-3.5 h-3.5 mr-1 mb-0.5"></i>업로드 타겟:</span>
+                    
+                    <select id="craft-project-select" onchange="window.onCraftProjectChange()" class="flex-shrink-0 w-32 sm:w-44 p-1.5 text-xs sm:text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50 dark:bg-gray-700 dark:text-white font-bold text-indigo-700 dark:text-indigo-300 h-8 sm:h-9">
+                        <option value="">프로젝트 선택</option>
+                    </select>
+                    
+                    <select id="craft-char-select" class="flex-shrink-0 w-32 sm:w-44 p-1.5 text-xs sm:text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50 dark:bg-gray-700 dark:text-white font-medium h-8 sm:h-9" disabled>
+                        <option value="">캐릭터 선택</option>
+                    </select>
+                    
+                    <div class="flex-1 min-w-[8px]"></div> 
+                    
+                    <button id="craft-clear-temp-btn" onclick="window.clearTempGallery()" class="flex-shrink-0 text-red-500 hover:text-white hover:bg-red-500 dark:text-red-400 p-1.5 rounded-md transition bg-red-50 dark:bg-red-900/30 dark:hover:bg-red-600 h-8 sm:h-9 flex items-center justify-center ml-auto px-3" title="임시 보관함 일괄 삭제">
+                        <i data-lucide="trash-2" class="w-4 h-4 sm:mr-1"></i> <span class="hidden sm:inline text-xs font-bold">임시함 비우기</span>
+                    </button>
+                </div>
+                
+                <div class="flex-1 flex flex-row overflow-hidden relative w-full h-full min-h-0">
+
+                    <div id="craft-preview-panel" class="flex-1 flex flex-col bg-gray-200 dark:bg-gray-900/80 transition-all overflow-hidden relative min-w-0">
+                        
+                        <div id="craft-history-overlay" class="hidden absolute inset-0 z-30 bg-black/10 dark:bg-black/50 backdrop-blur-[2px] cursor-pointer transition-opacity flex-col items-center justify-center" onclick="window.toggleCraftHistoryExpanded()">
+                            <div class="bg-black/40 rounded-full p-2 sm:p-3 text-white backdrop-blur-md hover:bg-black/60 transition shadow-lg">
+                                <i data-lucide="chevron-right" class="w-8 h-8 sm:w-12 sm:h-12"></i>
+                            </div>
+                        </div>
+
+                        <div id="craft-active-empty" class="flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 h-full w-full">
+                            <i data-lucide="image" class="w-16 h-16 mb-4 opacity-50"></i>
+                            <p class="text-sm font-medium">선택된 이미지가 없습니다.</p>
+                            <p class="text-xs mt-1">좌측 패널에서 이미지를 생성해보세요.</p>
+                        </div>
+
+                        <div id="craft-active-container" class="hidden flex-col w-full h-full relative">
+                            <div class="flex-1 w-full h-full flex items-center justify-center p-4 min-h-0">
+                                <img id="craft-active-image" src="" class="max-w-full max-h-full object-contain rounded-xl shadow-lg border border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-800">
+                            </div>
+
+                            <div class="absolute bottom-6 left-1/2 transform -translate-x-1/2 flex items-center gap-2 sm:gap-4 bg-white/95 dark:bg-gray-800/95 backdrop-blur-md px-4 sm:px-6 py-2 sm:py-3 rounded-full shadow-2xl border border-gray-200 dark:border-gray-700 z-10 transition-transform">
+                                <button id="craft-action-delete" onclick="window.removeActiveTempImage()" class="flex items-center text-xs sm:text-sm font-bold text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 transition px-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <i data-lucide="trash-2" class="w-4 h-4 sm:w-5 sm:h-5 sm:mr-1"></i> <span class="hidden sm:inline">삭제</span>
+                                </button>
+                                <div class="w-px h-5 sm:h-6 bg-gray-300 dark:bg-gray-600"></div>
+                                <button id="craft-action-download" onclick="window.downloadActiveTempImage()" class="flex items-center text-xs sm:text-sm font-bold text-gray-700 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400 transition px-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <i data-lucide="download" class="w-4 h-4 sm:w-5 sm:h-5 sm:mr-1"></i> <span class="hidden sm:inline">다운로드</span>
+                                </button>
+                                <div class="w-px h-5 sm:h-6 bg-gray-300 dark:bg-gray-600"></div>
+                                <button id="craft-action-upload" onclick="window.prepareUploadActiveTempImage()" class="flex items-center text-xs sm:text-sm font-bold text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 transition px-2 disabled:opacity-50 disabled:cursor-not-allowed">
+                                    <i data-lucide="upload-cloud" class="w-4 h-4 sm:w-5 sm:h-5 sm:mr-1"></i> <span>업로드</span>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div id="craft-history-panel" class="w-[90px] sm:w-[140px] md:w-[240px] lg:w-[280px] border-l border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex flex-col flex-shrink-0 transition-all duration-300 z-10 shadow-[-4px_0_15px_-3px_rgba(0,0,0,0.05)] h-full">
+                        <div class="p-2 sm:p-3 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-800/80 flex-shrink-0">
+                            <span class="text-[10px] sm:text-xs font-bold text-gray-600 dark:text-gray-300 uppercase tracking-wide truncate">임시 보관함 (<span id="craft-history-count">0</span>)</span>
+                            <button onclick="window.toggleCraftHistoryExpanded()" class="text-gray-500 hover:text-indigo-600 transition p-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 flex-shrink-0" title="목록 넓게 보기">
+                                <i id="craft-history-icon" data-lucide="expand" class="w-4 h-4"></i>
+                            </button>
+                        </div>
+                        <div class="flex-1 overflow-y-auto p-2 sm:p-3 relative w-full bg-gray-50 dark:bg-gray-900/30">
+                            <div id="craft-temp-grid" class="grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3"></div>
+                            <div class="h-20 w-full flex-shrink-0 pointer-events-none"></div>
+                        </div>
+                    </div>
+
+                    <div id="craft-progress-overlay" class="hidden absolute bottom-20 right-6 z-40 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md flex-row items-center p-4 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-72 transition-all">
+                        <div class="relative w-10 h-10 mr-4 flex-shrink-0">
+                            <i data-lucide="sparkles" class="w-5 h-5 text-indigo-500 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 animate-pulse"></i>
+                            <svg class="animate-spin w-full h-full text-indigo-200 dark:text-indigo-900/50" viewBox="0 0 24 24">
+                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none"></circle>
+                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                            </svg>
+                        </div>
+                        <div class="flex-1 w-full">
+                            <div class="flex justify-between items-center mb-1">
+                                <h3 class="text-sm font-bold text-gray-800 dark:text-white leading-none">생성 진행 중</h3>
+                                <span id="craft-floating-percent" class="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">0%</span>
+                            </div>
+                            <p id="craft-floating-text" class="text-[10px] text-gray-500 dark:text-gray-400 mb-2 font-mono truncate w-full">모델 추론 진행 중</p>
+                            <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
+                                <div id="craft-floating-bar" class="bg-indigo-600 h-full rounded-full transition-all duration-200 ease-out" style="width: 0%"></div>
+                            </div>
+                        </div>
+                    </div>
+
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <!-- Modals -->
+    <div id="gallery-upload-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeGalleryUploadModal(event)">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-200">
+            <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
+                <h3 class="text-lg font-bold text-gray-900 dark:text-white">현재 폴더에 업로드</h3>
+                <button id="close-gallery-btn" onclick="window.closeGalleryUploadModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
+            </div>
+            <div class="p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
+                <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">저장 경로: <span id="gallery-upload-path" class="font-mono text-indigo-600 dark:text-indigo-400 font-medium"></span></p>
+
+                <div class="mb-4">
+                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">파일명 (선택, 빈칸 시 원본 이름)</label>
+                    <input type="text" id="gallery-upload-filename" class="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="예: icon_01">
+                </div>
+
+                <p class="text-xs text-indigo-500 dark:text-indigo-400 mb-4 flex items-center">
+                    <i data-lucide="info" class="w-3.5 h-3.5 mr-1 flex-shrink-0"></i> <span>모든 이미지는 자동으로 WebP로 최적화됩니다. (GIF, SVG 제외)</span>
+                </p>
+
+                <div id="gallery-drop-zone" class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-xl p-4 sm:p-6 text-center cursor-pointer transition-all hover:border-indigo-400 dark:hover:border-indigo-500 hover:bg-gray-50 dark:hover:bg-gray-700 relative">
+                    <input type="file" id="gallery-file-input" class="hidden" accept="image/*">
+                    <div id="gallery-upload-prompt" class="flex flex-col items-center pointer-events-none">
+                        <i data-lucide="upload-cloud" class="h-8 w-8 text-gray-400 dark:text-gray-500 mb-2"></i>
+                        <p class="text-xs sm:text-sm text-gray-600 dark:text-gray-400">터치 또는 이미지 드래그</p>
+                    </div>
+                    <div id="gallery-preview-container" class="hidden flex-col items-center w-full mt-2">
+                        <img id="gallery-image-preview" src="" class="max-h-32 sm:max-h-40 rounded-lg shadow-sm object-contain">
+                        <div class="mt-2 text-xs sm:text-sm text-gray-500 dark:text-gray-400 truncate w-full font-mono" id="gallery-preview-filename"></div>
+                        <button id="gallery-remove-btn" class="mt-1 text-xs text-red-500 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 px-2 py-1 rounded border border-red-200 dark:border-red-900 bg-red-50 dark:bg-red-900/20">제거</button>
+                    </div>
+                </div>
+
+                <button id="gallery-upload-submit-btn" class="w-full mt-6 bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition dark:bg-indigo-700 dark:hover:bg-indigo-600" disabled>
+                    업로드 하기
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="memo-create-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeMemoCreateModal(event)">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-200">
+            <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
+                <h3 class="text-lg font-bold text-gray-900 dark:text-white">새 텍스트 메모</h3>
+                <button id="close-memo-btn" onclick="window.closeMemoCreateModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
+            </div>
+            <div class="p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
+                <div class="mb-4 flex flex-col">
+                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">파일명 (선택, 빈칸 시 자동 생성)</label>
+                    <div class="flex items-center w-full">
+                        <span id="memo-create-prefix" class="text-gray-500 dark:text-gray-400 text-xs sm:text-sm mr-2 truncate max-w-[100px] sm:max-w-[150px] font-mono"></span>
+                        <input type="text" id="memo-create-filename" class="flex-1 p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="예: note_01">
+                        <span class="text-gray-500 dark:text-gray-400 text-sm ml-2 font-mono">.txt</span>
+                    </div>
+                </div>
+                <div class="mb-6">
+                    <label class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">메모 내용</label>
+                    <textarea id="memo-create-content" rows="6" class="w-full p-3 border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white font-mono text-sm resize-none" placeholder="내용을 입력하세요..."></textarea>
+                </div>
+                <button id="memo-create-submit-btn" class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 transition dark:bg-indigo-700 dark:hover:bg-indigo-600">
+                    저장하기
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Import Modal -->
+    <div id="import-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeImportModal(event)">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl h-[85vh] sm:max-h-[90vh] flex flex-col transition-colors duration-200">
+            <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl flex-shrink-0">
+                <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white">메타데이터 불러오기 (Import)</h3>
+                <button id="close-import-btn" onclick="window.closeImportModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
+            </div>
+            
+            <div class="p-3 sm:p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0 bg-white dark:bg-gray-800 flex flex-col gap-3">
+                <div class="flex flex-col">
+                    <span class="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">불러올 항목 선택</span>
+                    <div class="flex flex-wrap gap-1.5 sm:gap-2">
+                        <!-- 프롬프트 파트 -->
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-style" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                                그림체
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-composition" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                                구도
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-character" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                                캐릭터(+다중)
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-clothing" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                                의상
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-expression" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                                표정
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-action" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                                행위
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-background" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-md">
+                                배경
+                            </div>
+                        </label>
+                        
+                        <div class="w-px h-6 bg-gray-300 dark:bg-gray-600 mx-1 self-center hidden sm:block"></div>
+                        
+                        <!-- 기타 항목 -->
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-negative" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-rose-500 peer-checked:border-rose-500 peer-checked:text-white hover:shadow-md">
+                                네거티브
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-res" class="peer hidden" checked>
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-emerald-600 peer-checked:border-emerald-600 peer-checked:text-white hover:shadow-md">
+                                해상도
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-settings" class="peer hidden">
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-amber-500 peer-checked:border-amber-500 peer-checked:text-white hover:shadow-md">
+                                세부 설정(비권장)
+                            </div>
+                        </label>
+                        <label class="cursor-pointer group select-none">
+                            <input type="checkbox" id="import-opt-seed" class="peer hidden">
+                            <div class="px-2.5 py-1.5 text-xs font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-amber-500 peer-checked:border-amber-500 peer-checked:text-white hover:shadow-md">
+                                시드(Seed)
+                            </div>
+                        </label>
+                    </div>
+                </div>
+                
+                <div class="bg-gray-100 dark:bg-gray-900/50 p-2 rounded-lg border border-gray-200 dark:border-gray-700 flex items-center mt-1">
+                    <i data-lucide="folder-open" class="w-4 h-4 mr-2 text-indigo-500"></i> 
+                    <span class="text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap flex-shrink-0">현재 경로:</span>
+                    <span id="import-modal-path" class="text-xs font-mono text-indigo-600 dark:text-indigo-400 font-medium ml-2 truncate"></span>
+                </div>
+            </div>
+
+            <div id="import-modal-content" class="flex-1 overflow-y-auto p-3 sm:p-6 bg-gray-50 dark:bg-gray-900/30">
+                <div id="import-loading" class="hidden flex justify-center items-center h-40"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400"></div></div>
+                <div id="import-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4"></div>
+                <div id="import-empty" class="hidden flex flex-col items-center justify-center h-40 text-gray-400 dark:text-gray-500"><i data-lucide="image-off" class="w-12 h-12 mb-2 opacity-50"></i><p class="text-sm">해당 경로에 이미지가 없습니다.</p></div>
+            </div>
+        </div>
+    </div>
+
+    <div id="preview-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-2 sm:p-4 backdrop-blur-sm" onclick="window.closeModal(event)">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl overflow-hidden max-w-4xl w-full h-[95vh] sm:max-h-[90vh] flex flex-col shadow-2xl transition-colors duration-200">
+            <div class="flex justify-between items-center p-3 sm:p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 flex-shrink-0">
+                <div class="flex flex-col overflow-hidden mr-4">
+                    <h3 id="modal-title" class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate leading-tight">파일명</h3>
+                    <p id="modal-key" class="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400 truncate"></p>
+                </div>
+                <button id="close-btn" onclick="window.closeModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400 flex-shrink-0 p-1">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
+            </div>
+            
+            <div id="modal-content-area" class="flex-grow bg-gray-100 dark:bg-gray-900 overflow-auto flex items-center justify-center p-2 sm:p-4">
+                <img id="modal-img" src="" class="max-w-full max-h-full object-contain shadow-md rounded hidden bg-checkered">
+                <textarea id="modal-text-editor" class="w-full h-full p-3 sm:p-4 border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 font-mono text-xs sm:text-sm resize-none hidden bg-white dark:bg-gray-800 dark:text-white"></textarea>
+            </div>
+
+            <div class="p-3 sm:p-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-3 flex-shrink-0">
+                
+                <div class="flex items-center admin-only-ui" id="public-check-wrapper">
+                    <input type="checkbox" id="modal-public-check" class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600">
+                    <label for="modal-public-check" class="ml-2 text-xs sm:text-sm text-gray-700 dark:text-gray-300 flex items-center cursor-pointer">
+                        <i data-lucide="eye" class="w-3 h-3 sm:w-3.5 sm:h-3.5 mr-1"></i> 이 파일을 공개로 설정 (게스트 허용)
+                    </label>
+                </div>
+
+                <div class="flex flex-col sm:flex-row w-full gap-2 sm:gap-0">
+                    <input type="text" id="modal-url" class="flex-1 text-xs sm:text-sm text-gray-600 dark:text-gray-300 border border-gray-300 dark:border-gray-600 rounded sm:rounded-r-none px-3 py-2 bg-gray-50 dark:bg-gray-700 focus:outline-none font-mono" readonly>
+                    <button id="modal-copy-btn" onclick="window.copyModalUrl()" class="w-full sm:w-auto bg-indigo-600 text-white px-4 py-2 rounded sm:rounded-l-none hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 text-sm font-medium whitespace-nowrap">
+                        URL 복사
+                    </button>
+                </div>
+                
+                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-2 sm:pt-2 border-t border-gray-100 dark:border-gray-700 admin-only-ui gap-3 sm:gap-0">
+                    <div class="flex flex-wrap gap-2 w-full sm:w-auto">
+                         <button id="modal-download-btn" onclick="window.downloadModalImage()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                            <i data-lucide="download" class="w-4 h-4 mr-1"></i> 다운로드
+                         </button>
+                         <div id="img-actions" class="hidden flex gap-2 w-full sm:w-auto">
+                             <input type="file" id="replace-input" class="hidden" accept="image/*" onchange="window.handleReplaceFile(this)">
+                             <button onclick="document.getElementById('replace-input').click()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                                <i data-lucide="upload" class="w-4 h-4 mr-1"></i> 교체
+                             </button>
+                         </div>
+
+                         <div id="text-actions" class="hidden flex gap-2 w-full sm:w-auto">
+                            <button onclick="window.copyTextContent()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                                <i data-lucide="copy" class="w-4 h-4 mr-1"></i> 내용 복사
+                            </button>
+                            <button onclick="window.saveEditedText()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 px-3 py-2 rounded transition">
+                                <i data-lucide="save" class="w-4 h-4 mr-1"></i> 내용 저장
+                            </button>
+                         </div>
+                         
+                         <button onclick="window.setModalFileAlias()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-purple-600 dark:hover:text-purple-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                            <i data-lucide="tag" class="w-4 h-4 mr-1"></i> 별칭 설정
+                         </button>
+
+                         <button onclick="window.renameCurrentFileOnly()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                            <i data-lucide="edit-2" class="w-4 h-4 mr-1"></i> 이름 변경
+                         </button>
+                         
+                         <button onclick="window.moveCurrentFile()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
+                            <i data-lucide="folder-output" class="w-4 h-4 mr-1"></i> 경로 이동
+                         </button>
+                    </div>
+                    <button onclick="window.deleteCurrentFile()" class="w-full sm:w-auto mt-2 sm:mt-0 flex justify-center items-center text-xs sm:text-sm text-red-500 hover:text-white hover:bg-red-500 dark:text-red-400 dark:hover:text-white dark:hover:bg-red-600 px-3 py-2 border border-red-200 dark:border-red-900 sm:border-transparent rounded transition">
+                        <i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> 삭제
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        window.IS_ADMIN = {{IS_ADMIN}};
+        window.INITIAL_PATH = "{{INITIAL_PATH}}";
+    </script>
+    <script type="module" src="/js/main.js"></script>
+</body>
+</html>

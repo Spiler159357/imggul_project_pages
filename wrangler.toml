@@ -1,0 +1,13 @@
+name = "imggul-project"
+main = "src/index.js" # Workers의 시작점
+compatibility_date = "2024-09-23"
+
+# R2 버킷 연결
+[[r2_buckets]]
+binding = "imgBucket" 
+bucket_name = "imggul-storage"
+
+[[rules]]
+type = "Text"
+globs = ["**/*.txt", "**/*.html", "**/*.css"]
+fallback = true

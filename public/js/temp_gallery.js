@@ -1,0 +1,262 @@
+// 6. temp_gallery.js: 임시 보관함 및 변환 유예 관리
+export function clearVibeImage() {
+    window.VIBE_IMAGE_FILE = null;
+    document.getElementById('vibe-image-input').value = '';
+    document.getElementById('vibe-image-preview-container').classList.add('hidden');
+    document.getElementById('vibe-image-prompt').classList.remove('hidden');
+    document.getElementById('vibe-sliders').classList.add('hidden');
+    document.getElementById('vibe-sliders').classList.remove('flex');
+    window.calculateAnlas();
+}
+
+export function handleVibeImageUpload(file) {
+    if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 가능합니다.');
+    window.VIBE_IMAGE_FILE = file;
+    const preview = document.getElementById('vibe-image-preview');
+    if(preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
+    preview.src = URL.createObjectURL(file);
+    document.getElementById('vibe-image-preview-container').classList.remove('hidden');
+    document.getElementById('vibe-image-prompt').classList.add('hidden');
+    document.getElementById('vibe-sliders').classList.remove('hidden');
+    document.getElementById('vibe-sliders').classList.add('flex');
+    window.calculateAnlas();
+}
+
+export function clearPreciseImage() {
+    window.PRECISE_IMAGE_FILE = null;
+    document.getElementById('precise-image-input').value = '';
+    document.getElementById('precise-image-preview-container').classList.add('hidden');
+    document.getElementById('precise-image-prompt').classList.remove('hidden');
+    document.getElementById('precise-sliders').classList.add('hidden');
+    document.getElementById('precise-sliders').classList.remove('flex');
+    window.calculateAnlas();
+}
+
+export function handlePreciseImageUpload(file) {
+    if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 가능합니다.');
+    window.PRECISE_IMAGE_FILE = file;
+    const preview = document.getElementById('precise-image-preview');
+    if(preview.src.startsWith('blob:')) URL.revokeObjectURL(preview.src);
+    preview.src = URL.createObjectURL(file);
+    document.getElementById('precise-image-preview-container').classList.remove('hidden');
+    document.getElementById('precise-image-prompt').classList.add('hidden');
+    document.getElementById('precise-sliders').classList.remove('hidden');
+    document.getElementById('precise-sliders').classList.add('flex');
+    window.calculateAnlas();
+}
+
+export async function loadTempImages() {
+    try {
+        const res = await fetch(`/api/list?prefix=${encodeURIComponent(window.TEMP_FOLDER)}&_t=${Date.now()}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        let files = data.files.filter(f => !f.key.endsWith('.keep') && !f.key.endsWith('.txt') && !f.key.endsWith('_meta.json'));
+        files.sort((a, b) => {
+            const nameA = a.key.split('/').pop(); const nameB = b.key.split('/').pop(); return nameB.localeCompare(nameA);
+        });
+
+        if (files.length > 100) {
+            const toDelete = files.slice(100); files = files.slice(0, 100);
+            (async () => {
+                const namesToDelete = toDelete.map(f => f.key.split('/').pop());
+                await window.removeMultipleMetadataFromDB(window.TEMP_FOLDER, namesToDelete);
+                for (const f of toDelete) {
+                    try {
+                        await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: f.key }) });
+                        const txtKey = f.key.replace(/\.[^/.]+$/, "") + ".txt";
+                        await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: txtKey }) });
+                        await new Promise(r => setTimeout(r, 50)); 
+                    } catch (err) { console.error('초기 로드 임시 파일 삭제 에러:', err); }
+                }
+            })();
+        }
+        window.TEMP_IMAGES = files;
+        window.renderTempGallery();
+        window.processDelayedWebPConversion(); 
+    } catch(e) { if (window.logErrorToStorage) window.logErrorToStorage("임시 저장소 로드 실패", e); }
+}
+
+export async function clearTempGallery() {
+    if (window.TEMP_IMAGES.length === 0) return alert('임시 보관함이 이미 비어있습니다.');
+    if (!confirm(`임시 보관함에 있는 ${window.TEMP_IMAGES.length}개의 이미지를 모두 영구 삭제하시겠습니까?\n(이 작업은 복구할 수 없습니다)`)) return;
+    const btn = document.getElementById('craft-clear-temp-btn'); const oldHtml = btn.innerHTML;
+    btn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin"></i>`; btn.disabled = true;
+
+    try {
+        const keysToDelete = window.TEMP_IMAGES.map(img => img.key);
+        const res = await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete_multiple', keys: keysToDelete }) });
+        if (!res.ok) throw new Error('파일 삭제 처리 중 서버 오류가 발생했습니다.');
+        
+        const blob = new Blob([JSON.stringify({}, null, 2)], { type: 'application/json;charset=utf-8' });
+        const buffer = await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsArrayBuffer(blob); });
+        await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-File-Name': '_meta.json', 'X-Absolute-Path': encodeURIComponent(window.TEMP_FOLDER + '_meta.json') }, body: buffer, cache: 'no-store' });
+        
+        window.TEMP_IMAGES = []; window.CRAFT_ACTIVE_INDEX = null; window.renderTempGallery();
+        alert('임시 보관함이 성공적으로 완전히 비워졌습니다!');
+    } catch (err) { alert('오류 발생: ' + err.message); if (window.logErrorToStorage) window.logErrorToStorage('임시 보관함 일괄 삭제 에러', err); } 
+    finally { btn.innerHTML = oldHtml; btn.disabled = false; lucide.createIcons(); }
+}
+
+export function toggleCraftHistoryExpanded() {
+    window.CRAFT_HISTORY_EXPANDED = !window.CRAFT_HISTORY_EXPANDED;
+    const historyPanel = document.getElementById('craft-history-panel'); const historyIcon = document.getElementById('craft-history-icon');
+    const tempGrid = document.getElementById('craft-temp-grid'); const overlay = document.getElementById('craft-history-overlay');
+    if (window.CRAFT_HISTORY_EXPANDED) {
+        historyPanel.classList.remove('w-[90px]', 'sm:w-[140px]', 'md:w-[240px]', 'lg:w-[280px]'); historyPanel.classList.add('w-[85%]', 'sm:w-[360px]', 'md:w-[480px]', 'lg:w-[640px]');
+        tempGrid.className = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4';
+        if (overlay) { overlay.classList.remove('hidden'); overlay.classList.add('flex'); }
+        historyIcon.parentElement.innerHTML = `<i id="craft-history-icon" data-lucide="shrink" class="w-4 h-4"></i>`;
+    } else {
+        historyPanel.classList.remove('w-[85%]', 'sm:w-[360px]', 'md:w-[480px]', 'lg:w-[640px]'); historyPanel.classList.add('w-[90px]', 'sm:w-[140px]', 'md:w-[240px]', 'lg:w-[280px]');
+        tempGrid.className = 'grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3';
+        if (overlay) { overlay.classList.remove('flex'); overlay.classList.add('hidden'); }
+        historyIcon.parentElement.innerHTML = `<i id="craft-history-icon" data-lucide="expand" class="w-4 h-4"></i>`;
+    }
+    lucide.createIcons();
+}
+
+export function renderTempGallery() {
+    const grid = document.getElementById('craft-temp-grid'); const countSpan = document.getElementById('craft-history-count');
+    const activeEmpty = document.getElementById('craft-active-empty'); const activeContainer = document.getElementById('craft-active-container');
+    const activeImage = document.getElementById('craft-active-image');
+    const deleteBtn = document.getElementById('craft-action-delete'); const downloadBtn = document.getElementById('craft-action-download'); const uploadBtn = document.getElementById('craft-action-upload');
+    if (!grid) return; grid.innerHTML = '';
+    if (countSpan) countSpan.innerText = `${window.TEMP_IMAGES.length}/100`;
+
+    if (uploadBtn && !document.getElementById('craft-action-import')) {
+        const actionBar = uploadBtn.parentNode; actionBar.classList.add('flex-nowrap', 'whitespace-nowrap', 'w-max');
+        [deleteBtn, downloadBtn, uploadBtn].forEach(btn => { if (btn) { btn.classList.add('flex-shrink-0'); const icon = btn.querySelector('i'); if (icon) { icon.classList.remove('mr-1'); icon.classList.add('sm:mr-1'); } const span = btn.querySelector('span'); if (span) span.className = 'hidden sm:inline'; } });
+        const sep = document.createElement('div'); sep.className = 'w-px h-5 sm:h-6 bg-gray-300 dark:bg-gray-600 flex-shrink-0'; actionBar.appendChild(sep);
+        const importBtn = document.createElement('button'); importBtn.id = 'craft-action-import'; importBtn.className = 'flex items-center text-xs sm:text-sm font-bold text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-300 transition px-2 disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0'; importBtn.innerHTML = `<i data-lucide="import" class="w-4 h-4 sm:w-5 sm:h-5 sm:mr-1"></i> <span class="hidden sm:inline">불러오기</span>`; importBtn.onclick = window.importTempImageMetadata;
+        actionBar.appendChild(importBtn); lucide.createIcons();
+    }
+    const importBtn = document.getElementById('craft-action-import');
+
+    if (window.TEMP_IMAGES.length === 0) {
+        window.CRAFT_ACTIVE_INDEX = null;
+        if(activeEmpty) { activeEmpty.classList.remove('hidden'); activeEmpty.classList.add('flex'); }
+        if(activeContainer) { activeContainer.classList.add('hidden'); activeContainer.classList.remove('flex'); }
+        if(deleteBtn) deleteBtn.disabled = true; if(downloadBtn) downloadBtn.disabled = true; if(uploadBtn) uploadBtn.disabled = true; if(importBtn) importBtn.disabled = true;
+    } else {
+        if (window.CRAFT_ACTIVE_INDEX === null || window.CRAFT_ACTIVE_INDEX >= window.TEMP_IMAGES.length) window.CRAFT_ACTIVE_INDEX = 0;
+        const activeData = window.TEMP_IMAGES[window.CRAFT_ACTIVE_INDEX];
+        if(activeImage) activeImage.src = `/${activeData.key}?t=${new Date(activeData.uploaded).getTime()}`;
+        if(activeEmpty) { activeEmpty.classList.add('hidden'); activeEmpty.classList.remove('flex'); }
+        if(activeContainer) { activeContainer.classList.remove('hidden'); activeContainer.classList.add('flex'); }
+        if(deleteBtn) deleteBtn.disabled = false; if(downloadBtn) downloadBtn.disabled = false; if(uploadBtn) uploadBtn.disabled = false; if(importBtn) importBtn.disabled = false;
+    }
+
+    window.TEMP_IMAGES.forEach((imgData, index) => {
+        const isActive = (index === window.CRAFT_ACTIVE_INDEX);
+        const url = `/${imgData.key}?t=${new Date(imgData.uploaded).getTime()}`;
+        const div = document.createElement('div');
+        div.className = `relative w-full aspect-[3/4] bg-gray-100 dark:bg-gray-900 group rounded-lg overflow-hidden shadow-sm border-2 cursor-pointer transition-all ${isActive ? 'border-indigo-500 scale-[0.98] ring-2 ring-indigo-500/50' : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-700'}`;
+        div.onclick = () => { window.CRAFT_ACTIVE_INDEX = index; window.renderTempGallery(); };
+        div.innerHTML = `<img src="${url}" class="absolute inset-0 object-cover w-full h-full transition-opacity duration-200 ${isActive ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}">${isActive ? `<div class="absolute inset-0 border-4 border-indigo-500 rounded-lg pointer-events-none"></div>` : ''}`;
+        grid.appendChild(div);
+    });
+    lucide.createIcons();
+}
+
+export async function downloadActiveTempImage() {
+    if (window.CRAFT_ACTIVE_INDEX === null) return;
+    const imgData = window.TEMP_IMAGES[window.CRAFT_ACTIVE_INDEX];
+    if (!imgData) return;
+
+    let downloadUrl = `/${imgData.key}?t=${new Date(imgData.uploaded).getTime()}`;
+    let downloadName = imgData.key.split('/').pop() || `nai_${Date.now()}.png`;
+
+    if (imgData.key.endsWith('.webp')) {
+        try {
+            const res = await fetch(downloadUrl); if (!res.ok) throw new Error("이미지 패치 실패");
+            const blob = await res.blob();
+            const img = new Image(); const objectUrl = URL.createObjectURL(blob);
+            await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; img.src = objectUrl; });
+            const canvas = document.createElement('canvas'); canvas.width = img.width; canvas.height = img.height;
+            canvas.getContext('2d').drawImage(img, 0, 0);
+            const pngBlob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+            downloadUrl = URL.createObjectURL(pngBlob); downloadName = downloadName.replace('.webp', '.png'); URL.revokeObjectURL(objectUrl);
+        } catch (error) { console.error("PNG 변환 다운로드 실패", error); }
+    }
+    const a = document.createElement('a'); a.href = downloadUrl; a.download = downloadName; document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    if (downloadUrl.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
+}
+
+export async function removeActiveTempImage() {
+    if (window.CRAFT_ACTIVE_INDEX === null) return;
+    if (!confirm('임시 보관소에서 이 이미지를 영구 삭제하시겠습니까?')) return;
+    const imgData = window.TEMP_IMAGES[window.CRAFT_ACTIVE_INDEX];
+    fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: imgData.key }) });
+    window.removeMetadataFromDB(window.TEMP_FOLDER, imgData.key.split('/').pop());
+    window.TEMP_IMAGES.splice(window.CRAFT_ACTIVE_INDEX, 1);
+    if (window.CRAFT_ACTIVE_INDEX >= window.TEMP_IMAGES.length) window.CRAFT_ACTIVE_INDEX = window.TEMP_IMAGES.length - 1;
+    if (window.CRAFT_ACTIVE_INDEX < 0) window.CRAFT_ACTIVE_INDEX = null;
+    window.renderTempGallery();
+}
+
+export async function prepareUploadActiveTempImage() {
+    if (window.CRAFT_ACTIVE_INDEX === null) return;
+    const index = window.CRAFT_ACTIVE_INDEX; const imgData = window.TEMP_IMAGES[index]; if (!imgData) return;
+    
+    const projSelect = document.getElementById('craft-project-select'); const charSelect = document.getElementById('craft-char-select');
+    const proj = projSelect ? projSelect.value : ''; const char = charSelect ? charSelect.value : '';
+    if (!proj) return alert('상단 툴바에서 저장할 업로드 타겟(프로젝트)을 먼저 선택해주세요.');
+    let targetPath = char ? char : proj; if (targetPath && !targetPath.endsWith('/')) targetPath += '/';
+    
+    let defaultName = 'nai_' + Date.now();
+    let fileNameInput = prompt(`업로드 대상: ${window.getDisplayName(targetPath, true)}\n\n저장될 파일명을 입력하세요 (확장자 생략):`, defaultName);
+    if (fileNameInput === null) return; fileNameInput = fileNameInput.trim() || defaultName;
+    
+    const btn = document.getElementById('craft-action-upload'); const oldText = btn.innerHTML;
+    btn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin mr-1.5"></i> 처리 중...`; btn.disabled = true; lucide.createIcons();
+    
+    try {
+        const fetchRes = await fetch(`/${imgData.key}`); if(!fetchRes.ok) throw new Error("원본 임시 파일을 불러오지 못했습니다.");
+        const originalBlob = await fetchRes.blob(); const originalFile = new File([originalBlob], imgData.key.split('/').pop(), { type: originalBlob.type });
+        let extractedMetadata = null;
+        try { const metaRes = await fetch(`/${window.TEMP_FOLDER}_meta.json?_t=${Date.now()}`); if (metaRes.ok) { const db = await metaRes.json(); extractedMetadata = db[imgData.key.split('/').pop()]; } } catch(e) {}
+        
+        let finalFile = originalFile;
+        if (originalFile.type !== 'image/webp') {
+            if (!extractedMetadata) extractedMetadata = await window.extractMetadata(originalFile);
+            finalFile = await window.convertToWebP(originalFile);
+        }
+        let fileName = `${fileNameInput}.webp`; const finalPath = targetPath + fileName;
+        const headers = { 'X-File-Name': encodeURIComponent(fileName), 'Content-Type': finalFile.type || 'application/octet-stream', 'X-Absolute-Path': encodeURIComponent(finalPath) };
+        const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(finalFile); });
+        const res = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers, body: buffer, cache: 'no-store' });
+        if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+        
+        if (extractedMetadata) await window.saveMetadataToDB(targetPath, fileName, extractedMetadata);
+        await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: imgData.key }) });
+        await window.removeMetadataFromDB(window.TEMP_FOLDER, imgData.key.split('/').pop());
+
+        alert(`성공적으로 프로젝트에 업로드 되었습니다!`);
+        window.TEMP_IMAGES.splice(index, 1);
+        if (window.CRAFT_ACTIVE_INDEX >= window.TEMP_IMAGES.length) window.CRAFT_ACTIVE_INDEX = window.TEMP_IMAGES.length - 1;
+        if (window.CRAFT_ACTIVE_INDEX < 0) window.CRAFT_ACTIVE_INDEX = null;
+        window.renderTempGallery();
+    } catch (err) { alert('업로드 실패: ' + err.message); if (window.logErrorToStorage) window.logErrorToStorage('임시 이미지 업로드 큐 에러', err); } 
+    finally { btn.innerHTML = oldText; btn.disabled = false; lucide.createIcons(); }
+}
+
+export async function processDelayedWebPConversion() {
+    const pngFiles = window.TEMP_IMAGES.filter(img => img.key.endsWith('.png'));
+    if (pngFiles.length > 5) {
+        const filesToConvert = pngFiles.slice(5); 
+        for (const fileToConvert of filesToConvert) {
+            try {
+                const res = await fetch(`/${fileToConvert.key}`); if (!res.ok) continue;
+                const blob = await res.blob(); const file = new File([blob], fileToConvert.key.split('/').pop(), { type: blob.type });
+                const webpFile = await window.convertToWebP(file); const webpKey = fileToConvert.key.replace('.png', '.webp');
+                const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsArrayBuffer(webpFile); });
+                await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: { 'X-File-Name': encodeURIComponent(webpKey.split('/').pop()), 'Content-Type': 'image/webp', 'X-Absolute-Path': encodeURIComponent(webpKey) }, body: buffer, cache: 'no-store' });
+                await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: fileToConvert.key }) });
+                const index = window.TEMP_IMAGES.findIndex(img => img.key === fileToConvert.key);
+                if (index !== -1) window.TEMP_IMAGES[index].key = webpKey;
+                await window.moveMetadataInDB(window.TEMP_FOLDER, fileToConvert.key.split('/').pop(), window.TEMP_FOLDER, webpKey.split('/').pop());
+            } catch (error) { console.error("Delayed WebP conversion error", error); }
+        }
+        window.renderTempGallery();
+    }
+}

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ImgGul - 로그인</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/style.css">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: {
+                        gray: {
+                            800: '#171717',
+                            900: '#0a0a0a',
+                        }
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="flex items-center justify-center min-h-screen bg-gray-100 dark:bg-gray-900 transition-colors duration-200">
+    <div class="bg-white dark:bg-gray-800 p-8 rounded-xl shadow-md w-full max-w-sm border border-gray-200 dark:border-gray-700 relative">
+        <button id="theme-toggle-btn" class="absolute top-4 right-4 p-2 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition">
+            <i data-lucide="sun" class="w-5 h-5"></i>
+        </button>
+
+        <h2 class="text-2xl font-bold text-center text-gray-800 dark:text-white mb-6">ImgGul 접근</h2>
+        
+        <p id="error-msg" class="text-red-500 text-sm text-center mb-4" style="display: {{ERROR_STYLE}};">
+            비밀번호가 올바르지 않습니다.
+        </p>
+
+        <form id="login-form" class="space-y-4">
+            <div>
+                <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">관리자 인증 키</label>
+                <input type="password" id="password" name="password" required class="w-full p-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="접속 비밀번호 입력">
+            </div>
+            <button type="submit" class="w-full bg-indigo-600 text-white py-2 rounded-lg font-medium hover:bg-indigo-700 transition dark:bg-indigo-700 dark:hover:bg-indigo-600">
+                관리자 입장
+            </button>
+        </form>
+    </div>
+
+    <script>
+        lucide.createIcons();
+        
+        function initTheme() {
+            const isDark = localStorage.getItem('theme') === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
+            if (isDark) {
+                document.documentElement.classList.add('dark');
+            } else {
+                document.documentElement.classList.remove('dark');
+            }
+            updateThemeIcon();
+        }
+
+        function updateThemeIcon() {
+            const btn = document.getElementById('theme-toggle-btn');
+            if (btn) {
+                const isDark = document.documentElement.classList.contains('dark');
+                // 기존 아이콘을 대체하기 위해 innerHTML 사용
+                btn.innerHTML = `<i data-lucide="${isDark ? 'sun' : 'moon'}" class="w-5 h-5 text-gray-500 dark:text-gray-400"></i>`;
+                lucide.createIcons();
+            }
+        }
+
+        document.getElementById('theme-toggle-btn').addEventListener('click', () => {
+            if (document.documentElement.classList.contains('dark')) {
+                document.documentElement.classList.remove('dark');
+                localStorage.setItem('theme', 'light');
+            } else {
+                document.documentElement.classList.add('dark');
+                localStorage.setItem('theme', 'dark');
+            }
+            updateThemeIcon();
+        });
+
+        initTheme();
+
+        document.getElementById('login-form').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const password = document.getElementById('password').value;
+            const errorMsg = document.getElementById('error-msg');
+
+            try {
+                const res = await fetch('/login', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ password: password })
+                });
+
+                if (res.ok) {
+                    window.location.href = '/';
+                } else {
+                    errorMsg.style.display = 'block';
+                    errorMsg.textContent = '비밀번호가 올바르지 않습니다.';
+                }
+            } catch (err) {
+                errorMsg.style.display = 'block';
+                errorMsg.textContent = '로그인 중 오류가 발생했습니다.';
+            }
+        });
+    </script>
+</body>
+</html>
