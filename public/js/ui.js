@@ -80,38 +80,77 @@ export function updateThemeIcon() {
     }
 }
 
+// [레이아웃 변경 반영] 탭 전환 및 사이드바 가시성 제어 유틸리티 대폭 개편
 export function switchTab(tabName, skipHistory = false) {
     const navExplorer = document.getElementById('nav-explorer');
     const navCraft = document.getElementById('nav-craft');
+    const navProject = document.getElementById('nav-project'); // 신설 프로젝트 탭 활성화 바인딩
+
     const tabExplorer = document.getElementById('main-explorer-content');
     const tabCraft = document.getElementById('main-craft-content');
-    const sideExplorer = document.getElementById('sidebar-explorer-content');
-    const sideCraft = document.getElementById('sidebar-craft-content');
+    const tabProject = document.getElementById('main-project-content'); // 신설 프로젝트 컨텐츠 바인딩
 
-    const activeClass = 'flex-1 py-1.5 text-xs sm:text-sm font-bold rounded-md shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 transition-all flex items-center justify-center';
-    const inactiveClass = 'flex-1 py-1.5 text-xs sm:text-sm font-bold rounded-md text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-all flex items-center justify-center';
+    const sidebar = document.getElementById('sidebar');
+    const hamburgerBtn = document.getElementById('hamburger-btn');
 
+    // 프리미엄 활성/비활성 탭 공통 버튼 테일윈드 토큰 지정
+    const activeClass = 'px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm font-bold rounded-lg shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400 transition-all flex items-center justify-center';
+    const inactiveClass = 'px-2.5 sm:px-4 py-1.5 text-xs sm:text-sm font-bold rounded-lg text-gray-505 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-all flex items-center justify-center';
+
+    // 탭 버튼 선택 스타일 매핑
+    if(navExplorer) navExplorer.className = (tabName === 'explorer') ? activeClass : inactiveClass;
+    if(navCraft) navCraft.className = (tabName === 'craft') ? activeClass : inactiveClass;
+    if(navProject) navProject.className = (tabName === 'project') ? activeClass : inactiveClass;
+
+    // 메인 본문 영역 뷰 토글
+    if (tabExplorer) {
+        if (tabName === 'explorer') { tabExplorer.classList.remove('hidden'); tabExplorer.classList.add('flex'); }
+        else { tabExplorer.classList.add('hidden'); tabExplorer.classList.remove('flex'); }
+    }
+    if (tabCraft) {
+        if (tabName === 'craft') { tabCraft.classList.remove('hidden'); tabCraft.classList.add('flex'); }
+        else { tabCraft.classList.add('hidden'); tabCraft.classList.remove('flex'); }
+    }
+    if (tabProject) {
+        if (tabName === 'project') { tabProject.classList.remove('hidden'); tabProject.classList.add('flex'); }
+        else { tabProject.classList.add('hidden'); tabProject.classList.remove('flex'); }
+    }
+
+    // [요청 반영] 이미지 생성(Craft) 탭에서만 사이드바 및 햄버거 버튼이 보이고, 다른 탭에서는 강제 완전 은닉 처리
+    if (sidebar) {
+        if (tabName === 'craft') {
+            sidebar.classList.remove('hidden');
+            sidebar.classList.add('flex');
+            
+            // 모바일 디바이스인 경우 사이드바 초기 오프셋 설정 적용
+            if (window.innerWidth < 768) {
+                sidebar.classList.add('-translate-x-full');
+            } else {
+                sidebar.classList.remove('-translate-x-full');
+                sidebar.classList.remove('md:-ml-72', 'md:-ml-[380px]', 'md:-ml-[360px]', 'md:-ml-80');
+            }
+        } else {
+            sidebar.classList.add('hidden');
+            sidebar.classList.remove('flex');
+        }
+    }
+
+    if (hamburgerBtn) {
+        if (tabName === 'craft') {
+            hamburgerBtn.classList.remove('hidden');
+        } else {
+            hamburgerBtn.classList.add('hidden');
+        }
+    }
+
+    // 탭 선택에 따른 서브데이터 비동기 로딩 연동 및 상태 푸시
     if (tabName === 'explorer') {
-        if(navExplorer) navExplorer.className = activeClass;
-        if(navCraft) navCraft.className = inactiveClass;
-        if(tabExplorer) { tabExplorer.classList.remove('hidden'); tabExplorer.classList.add('flex'); }
-        if(tabCraft) { tabCraft.classList.add('hidden'); tabCraft.classList.remove('flex'); }
-        if(sideExplorer) { sideExplorer.classList.remove('hidden'); sideExplorer.classList.add('flex'); }
-        if(sideCraft) { sideCraft.classList.add('hidden'); sideCraft.classList.remove('flex'); }
-
         if (document.getElementById('file-grid') && document.getElementById('file-grid').children.length === 0) {
             window.loadPath(window.ROOT_PATH, true);
         }
         if (!skipHistory) history.pushState({ tab: 'explorer', path: window.currentPrefix }, '', '#' + window.currentPrefix);
         
     } else if (tabName === 'craft') {
-        if(navCraft) navCraft.className = activeClass;
-        if(navExplorer) navExplorer.className = inactiveClass;
-        if(tabCraft) { tabCraft.classList.remove('hidden'); tabCraft.classList.add('flex'); }
-        if(tabExplorer) { tabExplorer.classList.add('hidden'); tabExplorer.classList.remove('flex'); }
-        if(sideCraft) { sideCraft.classList.remove('hidden'); sideCraft.classList.add('flex'); }
-        if(sideExplorer) { sideExplorer.classList.add('hidden'); sideExplorer.classList.remove('flex'); }
-        
         window.updateCraftFolderList();
         window.loadTempImages();
         window.calculateAnlas();
@@ -126,6 +165,8 @@ export function switchTab(tabName, skipHistory = false) {
         if (negEl) { negEl.style.height = 'auto'; negEl.style.height = negEl.scrollHeight + 'px'; }
 
         if (!skipHistory) history.pushState({ tab: 'craft' }, '', '#craft');
+    } else if (tabName === 'project') {
+        if (!skipHistory) history.pushState({ tab: 'project' }, '', '#project');
     }
 }
 

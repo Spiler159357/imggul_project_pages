@@ -208,6 +208,7 @@ window.addEventListener('popstate', (e) => {
     if (modalClosed) return; 
 
     if (e.state && e.state.tab === 'craft') { window.switchTab('craft', true); return; } 
+    else if (e.state && e.state.tab === 'project') { window.switchTab('project', true); return; } // [추가] popstate 타겟으로 프로젝트 탭 바인딩 추가
     else if (e.state && e.state.tab === 'explorer') {
         window.switchTab('explorer', true);
         if (e.state.path !== undefined && e.state.path !== window.currentPrefix) window.loadPath(e.state.path, true);
