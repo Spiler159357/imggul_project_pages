@@ -370,7 +370,7 @@
                 
                 <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex flex-row items-center px-3 sm:px-4 bg-white dark:bg-gray-800 flex-shrink-0 w-full overflow-x-auto scrollbar-hide gap-2 flex-nowrap whitespace-nowrap z-10">
                     
-                    <button id="hamburger-btn" type="button" class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition flex-shrink-0 mr-1" title="프롬프트 패널 열기">
+                    <button id="hamburger-btn" type="button" onclick="console.log('[ImgGul][sidebar] hamburger inline click', { hasHandler: typeof window.handleHamburgerClick, hasToggleSidebar: typeof window.toggleSidebar }); if (window.handleHamburgerClick) window.handleHamburgerClick(event);" class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition flex-shrink-0 mr-1" title="프롬프트 패널 열기">
                         <i data-lucide="menu" class="w-5 h-5 sm:w-6 sm:h-6"></i>
                     </button>
 

@@ -4,7 +4,23 @@ function setPromptSidebarOpen(isOpen) {
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebar-overlay');
     const hamburgerBtn = document.getElementById('hamburger-btn');
-    if (!sidebar) return;
+    const promptRaw = document.getElementById('prompt-raw');
+    const promptDetailed = document.getElementById('prompt-detailed-container');
+    if (!sidebar) {
+        console.warn('[ImgGul][sidebar] setPromptSidebarOpen aborted: #sidebar not found', { isOpen });
+        return;
+    }
+
+    console.log('[ImgGul][sidebar] setPromptSidebarOpen before', {
+        isOpen,
+        sidebarClass: sidebar.className,
+        sidebarTransform: sidebar.style.transform,
+        sidebarDataOpen: sidebar.dataset.open,
+        hasOverlay: !!overlay,
+        hasHamburger: !!hamburgerBtn,
+        hasPromptRaw: !!promptRaw,
+        hasPromptDetailed: !!promptDetailed
+    });
 
     sidebar.dataset.open = isOpen ? 'true' : 'false';
     sidebar.style.transform = isOpen ? 'translateX(0)' : 'translateX(-100%)';
@@ -33,30 +49,66 @@ function setPromptSidebarOpen(isOpen) {
             overlay.classList.add('opacity-100');
         }
     }
+
+    console.log('[ImgGul][sidebar] setPromptSidebarOpen after', {
+        sidebarClass: sidebar.className,
+        sidebarTransform: sidebar.style.transform,
+        sidebarDataOpen: sidebar.dataset.open,
+        sidebarAriaHidden: sidebar.getAttribute('aria-hidden'),
+        overlayClass: overlay ? overlay.className : null,
+        hamburgerExpanded: hamburgerBtn ? hamburgerBtn.getAttribute('aria-expanded') : null
+    });
 }
 
 // [버그 해결] 프롬프트 패널은 실제 transform 값을 직접 제어해 Tailwind 클래스 상태와 무관하게 열리도록 합니다.
 export function toggleSidebar(forceClose = false) {
     const sidebar = document.getElementById('sidebar');
-    if (!sidebar) return;
+    if (!sidebar) {
+        console.warn('[ImgGul][sidebar] toggleSidebar aborted: #sidebar not found', { forceClose });
+        return;
+    }
 
     const isOpen = sidebar.dataset.open === 'true' || sidebar.style.transform === 'translateX(0px)' || sidebar.style.transform === 'translateX(0)';
+    console.log('[ImgGul][sidebar] toggleSidebar called', {
+        forceClose,
+        isOpen,
+        nextOpen: !forceClose && !isOpen,
+        sidebarClass: sidebar.className,
+        sidebarTransform: sidebar.style.transform,
+        sidebarDataOpen: sidebar.dataset.open
+    });
     setPromptSidebarOpen(!forceClose && !isOpen);
+}
+
+export function handleHamburgerClick(event) {
+    console.log('[ImgGul][sidebar] handleHamburgerClick called', {
+        hasEvent: !!event,
+        eventType: event ? event.type : null,
+        hasSidebar: !!document.getElementById('sidebar'),
+        hasPromptDetailed: !!document.getElementById('prompt-detailed-container')
+    });
+    if (event) {
+        event.preventDefault();
+        event.stopPropagation();
+    }
+    window.toggleSidebar(false);
 }
 
 export function initSidebarControls() {
     const hamburgerBtn = document.getElementById('hamburger-btn');
+    console.log('[ImgGul][sidebar] initSidebarControls', {
+        hasHamburger: !!hamburgerBtn,
+        hasSidebar: !!document.getElementById('sidebar'),
+        hasPromptRaw: !!document.getElementById('prompt-raw'),
+        hasPromptDetailed: !!document.getElementById('prompt-detailed-container'),
+        alreadyBound: hamburgerBtn ? hamburgerBtn.dataset.sidebarBound === 'true' : null
+    });
     if (!hamburgerBtn || hamburgerBtn.dataset.sidebarBound === 'true') return;
 
     hamburgerBtn.dataset.sidebarBound = 'true';
     hamburgerBtn.setAttribute('aria-controls', 'sidebar');
     hamburgerBtn.setAttribute('aria-expanded', 'false');
     setPromptSidebarOpen(false);
-    hamburgerBtn.addEventListener('click', (event) => {
-        event.preventDefault();
-        event.stopPropagation();
-        window.toggleSidebar(false);
-    });
 }
 
 export function getAliasOnly(path, isFolder) {
