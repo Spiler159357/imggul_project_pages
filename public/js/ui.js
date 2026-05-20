@@ -4,6 +4,7 @@
 export function toggleSidebar(forceClose = false) {
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebar-overlay');
+    const hamburgerBtn = document.getElementById('hamburger-btn');
     if (!sidebar) return;
 
     const isClosed = sidebar.classList.contains('-translate-x-full');
@@ -20,6 +21,7 @@ export function toggleSidebar(forceClose = false) {
                 }
             }, 300);
         }
+        if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', 'false');
     } else {
         // 사이드바 열기
         if (overlay) {
@@ -30,7 +32,22 @@ export function toggleSidebar(forceClose = false) {
             overlay.classList.add('opacity-100');
         }
         sidebar.classList.remove('-translate-x-full');
+        if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', 'true');
     }
+}
+
+export function initSidebarControls() {
+    const hamburgerBtn = document.getElementById('hamburger-btn');
+    if (!hamburgerBtn || hamburgerBtn.dataset.sidebarBound === 'true') return;
+
+    hamburgerBtn.dataset.sidebarBound = 'true';
+    hamburgerBtn.setAttribute('aria-controls', 'sidebar');
+    hamburgerBtn.setAttribute('aria-expanded', 'false');
+    hamburgerBtn.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        window.toggleSidebar(false);
+    });
 }
 
 export function getAliasOnly(path, isFolder) {

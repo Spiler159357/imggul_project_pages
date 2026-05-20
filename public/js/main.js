@@ -11,6 +11,7 @@ import * as Modals from './modals.js';
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals);
 
 // 즉시 실행
+window.initSidebarControls();
 lucide.createIcons();
 window.initDarkMode();
 window.loadCraftSettings();
