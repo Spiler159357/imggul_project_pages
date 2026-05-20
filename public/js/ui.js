@@ -77,6 +77,14 @@ export function updateThemeIcon() {
     }
 }
 
+const NAV_BUTTON_BASE_CLASSES = [
+    'w-[90px]', 'xs:w-[110px]', 'sm:w-[130px]', 'h-8', 'sm:h-9',
+    'text-xs', 'sm:text-sm', 'font-bold', 'rounded-lg', 'transition-colors',
+    'flex', 'items-center', 'justify-center', 'whitespace-nowrap', 'flex-shrink-0'
+];
+const NAV_BUTTON_ACTIVE_CLASSES = ['shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400'];
+const NAV_BUTTON_INACTIVE_CLASSES = ['text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200'];
+
 export function switchTab(tabName, skipHistory = false) {
     const tabs = ['explorer', 'craft', 'project'];
     
@@ -86,20 +94,22 @@ export function switchTab(tabName, skipHistory = false) {
         const content = document.getElementById(`main-${tab}-content`);
         if (!btn || !content) return;
 
+        // Reset the full class list so older flex-based tab classes cannot change button width.
+        btn.className = '';
+        btn.classList.add(...NAV_BUTTON_BASE_CLASSES);
+
         if (tab === tabName) {
             // 버튼 활성화 (배경, 그림자, 텍스트 색상 추가)
-            btn.classList.add('shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400');
+            btn.classList.add(...NAV_BUTTON_ACTIVE_CLASSES);
             // 비활성화 색상 제거
-            btn.classList.remove('text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200');
             
             // 메인 콘텐츠 뷰 노출
             content.classList.remove('hidden');
             content.classList.add('flex');
         } else {
             // 버튼 비활성화 (기본 회색 텍스트 추가)
-            btn.classList.add('text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200');
+            btn.classList.add(...NAV_BUTTON_INACTIVE_CLASSES);
             // 활성화 색상 제거
-            btn.classList.remove('shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400');
             
             // 메인 콘텐츠 뷰 숨김
             content.classList.add('hidden');
