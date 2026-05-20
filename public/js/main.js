@@ -1,7 +1,7 @@
 // 8. main.js: 애플리케이션 진입점 및 모듈 통합 관리
 import './state.js';
 import * as Api from './api.js';
-import * as Ui from './ui.js?v=sidebar-debug-20260520';
+import * as Ui from './ui.js?v=craft-layout-20260521';
 import * as Explorer from './explorer.js';
 import * as Craft from './craft.js';
 import * as TempGallery from './temp_gallery.js';

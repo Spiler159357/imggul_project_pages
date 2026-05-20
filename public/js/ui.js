@@ -2,91 +2,27 @@
 
 function setPromptSidebarOpen(isOpen) {
     const sidebar = document.getElementById('sidebar');
-    const overlay = document.getElementById('sidebar-overlay');
     const hamburgerBtn = document.getElementById('hamburger-btn');
-    const promptRaw = document.getElementById('prompt-raw');
-    const promptDetailed = document.getElementById('prompt-detailed-container');
-    if (!sidebar) {
-        console.warn('[ImgGul][sidebar] setPromptSidebarOpen aborted: #sidebar not found', { isOpen });
-        return;
-    }
-
-    console.log('[ImgGul][sidebar] setPromptSidebarOpen before', {
-        isOpen,
-        sidebarClass: sidebar.className,
-        sidebarTransform: sidebar.style.transform,
-        sidebarDataOpen: sidebar.dataset.open,
-        hasOverlay: !!overlay,
-        hasHamburger: !!hamburgerBtn,
-        hasPromptRaw: !!promptRaw,
-        hasPromptDetailed: !!promptDetailed
-    });
+    if (!sidebar) return;
 
     sidebar.dataset.open = isOpen ? 'true' : 'false';
-    sidebar.style.transform = isOpen ? 'translateX(0)' : 'translateX(-100%)';
     sidebar.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
-    sidebar.classList.toggle('-translate-x-full', !isOpen);
-    sidebar.classList.toggle('translate-x-0', isOpen);
+    sidebar.style.width = isOpen ? '' : '0px';
+    sidebar.style.opacity = isOpen ? '1' : '0';
+    sidebar.style.pointerEvents = isOpen ? 'auto' : 'none';
 
     if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-
-    if (!isOpen) {
-        sidebar.classList.add('-translate-x-full');
-        if (overlay) {
-            overlay.classList.remove('opacity-100');
-            overlay.classList.add('opacity-0');
-            setTimeout(() => { 
-                if (sidebar.dataset.open !== 'true') {
-                    overlay.classList.add('hidden'); 
-                }
-            }, 300);
-        }
-    } else {
-        if (overlay) {
-            overlay.classList.remove('hidden');
-            void overlay.offsetWidth; 
-            overlay.classList.remove('opacity-0');
-            overlay.classList.add('opacity-100');
-        }
-    }
-
-    console.log('[ImgGul][sidebar] setPromptSidebarOpen after', {
-        sidebarClass: sidebar.className,
-        sidebarTransform: sidebar.style.transform,
-        sidebarDataOpen: sidebar.dataset.open,
-        sidebarAriaHidden: sidebar.getAttribute('aria-hidden'),
-        overlayClass: overlay ? overlay.className : null,
-        hamburgerExpanded: hamburgerBtn ? hamburgerBtn.getAttribute('aria-expanded') : null
-    });
 }
 
-// [버그 해결] 프롬프트 패널은 실제 transform 값을 직접 제어해 Tailwind 클래스 상태와 무관하게 열리도록 합니다.
 export function toggleSidebar(forceClose = false) {
     const sidebar = document.getElementById('sidebar');
-    if (!sidebar) {
-        console.warn('[ImgGul][sidebar] toggleSidebar aborted: #sidebar not found', { forceClose });
-        return;
-    }
+    if (!sidebar) return;
 
-    const isOpen = sidebar.dataset.open === 'true' || sidebar.style.transform === 'translateX(0px)' || sidebar.style.transform === 'translateX(0)';
-    console.log('[ImgGul][sidebar] toggleSidebar called', {
-        forceClose,
-        isOpen,
-        nextOpen: !forceClose && !isOpen,
-        sidebarClass: sidebar.className,
-        sidebarTransform: sidebar.style.transform,
-        sidebarDataOpen: sidebar.dataset.open
-    });
+    const isOpen = sidebar.dataset.open === 'true';
     setPromptSidebarOpen(!forceClose && !isOpen);
 }
 
 export function handleHamburgerClick(event) {
-    console.log('[ImgGul][sidebar] handleHamburgerClick called', {
-        hasEvent: !!event,
-        eventType: event ? event.type : null,
-        hasSidebar: !!document.getElementById('sidebar'),
-        hasPromptDetailed: !!document.getElementById('prompt-detailed-container')
-    });
     if (event) {
         event.preventDefault();
         event.stopPropagation();
@@ -96,19 +32,11 @@ export function handleHamburgerClick(event) {
 
 export function initSidebarControls() {
     const hamburgerBtn = document.getElementById('hamburger-btn');
-    console.log('[ImgGul][sidebar] initSidebarControls', {
-        hasHamburger: !!hamburgerBtn,
-        hasSidebar: !!document.getElementById('sidebar'),
-        hasPromptRaw: !!document.getElementById('prompt-raw'),
-        hasPromptDetailed: !!document.getElementById('prompt-detailed-container'),
-        alreadyBound: hamburgerBtn ? hamburgerBtn.dataset.sidebarBound === 'true' : null
-    });
     if (!hamburgerBtn || hamburgerBtn.dataset.sidebarBound === 'true') return;
 
     hamburgerBtn.dataset.sidebarBound = 'true';
     hamburgerBtn.setAttribute('aria-controls', 'sidebar');
     hamburgerBtn.setAttribute('aria-expanded', 'false');
-    setPromptSidebarOpen(false);
 }
 
 export function getAliasOnly(path, isFolder) {
@@ -188,8 +116,9 @@ export function switchTab(tabName, skipHistory = false) {
         }
     });
 
-    // 햄버거 버튼 제어 (craft 탭에서만 보임)
+    // 햄버거 버튼과 프롬프트 패널 제어 (craft 탭에서만 보임)
     const hamburgerBtn = document.getElementById('hamburger-btn');
+    const promptSidebar = document.getElementById('sidebar');
     if (hamburgerBtn) {
         if (tabName === 'craft') {
             hamburgerBtn.classList.remove('hidden');
@@ -198,8 +127,15 @@ export function switchTab(tabName, skipHistory = false) {
         }
     }
 
-    // 다른 탭으로 넘어갈 때 혹시라도 열려있던 프롬프트 사이드바가 있으면 무조건 강제 닫힘 처리
-    window.toggleSidebar(true);
+    if (promptSidebar) {
+        if (tabName === 'craft') {
+            promptSidebar.classList.remove('hidden');
+            setPromptSidebarOpen(true);
+        } else {
+            setPromptSidebarOpen(false);
+            promptSidebar.classList.add('hidden');
+        }
+    }
 
     if (tabName === 'explorer') {
         if (document.getElementById('file-grid') && document.getElementById('file-grid').children.length === 0) {

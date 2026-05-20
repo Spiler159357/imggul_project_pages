@@ -89,17 +89,17 @@
 
     <div class="flex flex-1 overflow-hidden relative">
         
-        <!-- [버그 해결] 사이드바를 여닫을 때 나타나는 어두운 배경(오버레이). 가장 높은 Z-index를 부여했습니다 -->
-        <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-[55] hidden transition-opacity duration-300 opacity-0 backdrop-blur-[2px]" onclick="window.toggleSidebar(true)"></div>
+        <!-- 이미지 생성 탭에서만 사용되는 좌측 프롬프트 패널 자리 표시자 -->
+        <div id="sidebar-overlay" class="hidden"></div>
         
-        <!-- [치명적 버그 해결] 이제 사이드바는 화면 밖(-translate-x-full)에 항상 존재하며, 오직 햄버거 버튼을 눌렀을 때만 부드럽게 튀어나옵니다 (Off-canvas) -->
-        <aside id="sidebar" data-open="false" aria-hidden="true" style="transform: translateX(-100%);" class="fixed inset-y-0 left-0 z-[60] w-80 sm:w-[380px] bg-white dark:bg-gray-800 flex flex-col transform -translate-x-full transition-transform duration-300 shadow-2xl">
+        <!-- 이미지 생성 탭의 좌측 프롬프트 패널. 모달이 아니라 실제 레이아웃 공간을 차지합니다. -->
+        <aside id="sidebar" data-open="false" aria-hidden="true" style="width: 0px;" class="hidden relative z-10 w-80 sm:w-[380px] h-full bg-white dark:bg-gray-800 border-r border-gray-200 dark:border-gray-700 flex flex-col flex-shrink-0 overflow-hidden transition-[width,opacity] duration-300 shadow-none">
             
             <div class="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80 flex-shrink-0">
                 <span class="font-bold text-sm text-gray-700 dark:text-gray-300 flex items-center">
                     <i data-lucide="settings-2" class="w-4 h-4 mr-2 text-indigo-500"></i> 프롬프트 패널
                 </span>
-                <button onclick="window.toggleSidebar(true)" class="p-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 transition">
+                <button onclick="window.toggleSidebar(true)" class="p-1.5 rounded-md hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 transition" title="프롬프트 패널 접기">
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
@@ -327,6 +327,32 @@
                     <div id="nai-anlas-cost" class="text-xs text-gray-600 dark:text-gray-400">계산 중...</div>
                 </div>
             </div>
+
+            <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0 z-10 shadow-[0_-10px_15px_-3px_rgba(0,0,0,0.05)]">
+                <div class="flex gap-2 mb-2">
+                    <div class="flex items-center bg-gray-100 dark:bg-gray-900/50 rounded-xl px-3 flex-shrink-0 border border-gray-200 dark:border-gray-600">
+                        <span class="text-xs font-bold text-gray-500 dark:text-gray-400 mr-1">반복</span>
+                        <input type="number" id="nai-batch-count" value="1" min="1" max="100" class="w-10 bg-transparent text-sm font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none text-center">
+                        <span class="text-xs font-bold text-gray-500 dark:text-gray-400">회</span>
+                    </div>
+                    <button id="nai-generate-btn" onclick="window.generateNaiImage()" class="flex-1 bg-indigo-600 text-white py-3.5 rounded-xl shadow-md hover:bg-indigo-700 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
+                        <i data-lucide="sparkles" class="w-5 h-5"></i> 생성
+                    </button>
+                    <button id="nai-cancel-btn" onclick="window.cancelNaiGeneration()" class="hidden flex-1 bg-red-500 text-white py-3.5 rounded-xl shadow-md hover:bg-red-600 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
+                        <i data-lucide="stop-circle" class="w-5 h-5"></i> 중지 (<span id="nai-batch-status">0/0</span>)
+                    </button>
+                </div>
+
+                <div id="craft-progress-container" class="hidden flex-col items-center w-full mt-2 px-1">
+                    <div class="flex justify-between w-full text-[10px] font-bold text-gray-500 mb-1.5">
+                        <span id="craft-progress-text">준비 중...</span>
+                        <span id="craft-progress-percent">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden shadow-inner">
+                        <div id="craft-progress-bar" class="bg-indigo-600 h-full rounded-full transition-all duration-200 ease-out" style="width: 0%"></div>
+                    </div>
+                </div>
+            </div>
         </aside>
 
         <main class="flex-1 flex flex-col relative bg-white dark:bg-gray-900 overflow-hidden min-h-0 w-full">
@@ -370,7 +396,7 @@
                 
                 <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex flex-row items-center px-3 sm:px-4 bg-white dark:bg-gray-800 flex-shrink-0 w-full overflow-x-auto scrollbar-hide gap-2 flex-nowrap whitespace-nowrap z-10">
                     
-                    <button id="hamburger-btn" type="button" onclick="console.log('[ImgGul][sidebar] hamburger inline click', { hasHandler: typeof window.handleHamburgerClick, hasToggleSidebar: typeof window.toggleSidebar }); if (window.handleHamburgerClick) { window.handleHamburgerClick(event); } else if (window.toggleSidebar) { console.warn('[ImgGul][sidebar] handleHamburgerClick missing; falling back to toggleSidebar'); event.preventDefault(); event.stopPropagation(); window.toggleSidebar(false); }" class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition flex-shrink-0 mr-1" title="프롬프트 패널 열기">
+                    <button id="hamburger-btn" type="button" onclick="if (window.handleHamburgerClick) window.handleHamburgerClick(event); else if (window.toggleSidebar) window.toggleSidebar(false);" class="p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-600 dark:text-gray-400 transition flex-shrink-0 mr-1" title="프롬프트 패널 접기/펼치기">
                         <i data-lucide="menu" class="w-5 h-5 sm:w-6 sm:h-6"></i>
                     </button>
 
@@ -408,7 +434,7 @@
                         <div id="craft-active-empty" class="flex flex-col items-center justify-center text-gray-400 dark:text-gray-500 h-full w-full">
                             <i data-lucide="image" class="w-16 h-16 mb-4 opacity-50"></i>
                             <p class="text-sm font-medium">선택된 이미지가 없습니다.</p>
-                            <p class="text-xs mt-1">상단의 햄버거 버튼을 눌러 이미지를 생성해보세요.</p>
+                            <p class="text-xs mt-1">좌측 프롬프트 패널에서 이미지를 생성해보세요.</p>
                         </div>
 
                         <div id="craft-active-container" class="hidden flex-col w-full h-full relative">
@@ -733,6 +759,6 @@
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=sidebar-debug-20260520"></script>
+    <script type="module" src="/js/main.js?v=craft-layout-20260521"></script>
 </body>
 </html>
