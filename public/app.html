@@ -37,14 +37,14 @@
         </div>
 
         <!-- [버그 해결] 모든 탭에 고정 너비(w-[...])를 주고 최초부터 탐색기 탭이 활성화 색상(shadow-sm bg-white text-indigo-600)을 가지도록 하드코딩했습니다. -->
-        <div class="nav-tab-bar flex bg-gray-100 dark:bg-gray-900/50 rounded-xl p-1 border border-gray-200 dark:border-gray-700 mx-2 flex-shrink-0 overflow-x-auto scrollbar-hide flex-nowrap whitespace-nowrap">
-            <button id="nav-explorer" onclick="window.switchTab('explorer')" class="nav-tab-button shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400">
+        <div class="flex w-[280px] xs:w-[340px] sm:w-[400px] bg-gray-100 dark:bg-gray-900/50 rounded-xl p-1 border border-gray-200 dark:border-gray-700 mx-2 flex-shrink-0 overflow-x-auto scrollbar-hide flex-nowrap whitespace-nowrap">
+            <button id="nav-explorer" onclick="window.switchTab('explorer')" class="w-[90px] xs:w-[110px] sm:w-[130px] h-8 sm:h-9 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400">
                 <i data-lucide="folder-search" class="w-3.5 h-3.5 mr-1.5 flex-shrink-0"></i> <span>탐색기</span>
             </button>
-            <button id="nav-craft" onclick="window.switchTab('craft')" class="nav-tab-button text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+            <button id="nav-craft" onclick="window.switchTab('craft')" class="w-[90px] xs:w-[110px] sm:w-[130px] h-8 sm:h-9 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
                 <i data-lucide="wand-2" class="w-3.5 h-3.5 mr-1.5 flex-shrink-0"></i> <span>이미지 생성</span>
             </button>
-            <button id="nav-project" onclick="window.switchTab('project')" class="nav-tab-button text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+            <button id="nav-project" onclick="window.switchTab('project')" class="w-[90px] xs:w-[110px] sm:w-[130px] h-8 sm:h-9 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
                 <i data-lucide="kanban" class="w-3.5 h-3.5 mr-1.5 flex-shrink-0"></i> <span>프로젝트</span>
             </button>
         </div>
