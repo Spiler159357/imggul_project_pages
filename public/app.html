@@ -93,7 +93,7 @@
         <div id="sidebar-overlay" class="fixed inset-0 bg-black/50 z-[55] hidden transition-opacity duration-300 opacity-0 backdrop-blur-[2px]" onclick="window.toggleSidebar(true)"></div>
         
         <!-- [치명적 버그 해결] 이제 사이드바는 화면 밖(-translate-x-full)에 항상 존재하며, 오직 햄버거 버튼을 눌렀을 때만 부드럽게 튀어나옵니다 (Off-canvas) -->
-        <aside id="sidebar" class="fixed inset-y-0 left-0 z-[60] w-80 sm:w-[380px] bg-white dark:bg-gray-800 flex flex-col transform -translate-x-full transition-transform duration-300 shadow-2xl">
+        <aside id="sidebar" data-open="false" aria-hidden="true" style="transform: translateX(-100%);" class="fixed inset-y-0 left-0 z-[60] w-80 sm:w-[380px] bg-white dark:bg-gray-800 flex flex-col transform -translate-x-full transition-transform duration-300 shadow-2xl">
             
             <div class="flex items-center justify-between p-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/80 flex-shrink-0">
                 <span class="font-bold text-sm text-gray-700 dark:text-gray-300 flex items-center">

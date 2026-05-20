@@ -1,39 +1,47 @@
 // 3. ui.js: 공통 UI 조작 및 유틸리티
 
-// [버그 해결] 햄버거 토글이 화면 밖(off-canvas)에서 부드럽게 튀어나오고 들어갈 수 있도록 확실하게 통제합니다.
-export function toggleSidebar(forceClose = false) {
+function setPromptSidebarOpen(isOpen) {
     const sidebar = document.getElementById('sidebar');
     const overlay = document.getElementById('sidebar-overlay');
     const hamburgerBtn = document.getElementById('hamburger-btn');
     if (!sidebar) return;
 
-    const isClosed = sidebar.classList.contains('-translate-x-full');
-    
-    if (forceClose || !isClosed) {
-        // 사이드바 닫기
+    sidebar.dataset.open = isOpen ? 'true' : 'false';
+    sidebar.style.transform = isOpen ? 'translateX(0)' : 'translateX(-100%)';
+    sidebar.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+    sidebar.classList.toggle('-translate-x-full', !isOpen);
+    sidebar.classList.toggle('translate-x-0', isOpen);
+
+    if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+
+    if (!isOpen) {
         sidebar.classList.add('-translate-x-full');
         if (overlay) {
             overlay.classList.remove('opacity-100');
             overlay.classList.add('opacity-0');
             setTimeout(() => { 
-                if (sidebar.classList.contains('-translate-x-full')) {
+                if (sidebar.dataset.open !== 'true') {
                     overlay.classList.add('hidden'); 
                 }
             }, 300);
         }
-        if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', 'false');
     } else {
-        // 사이드바 열기
         if (overlay) {
             overlay.classList.remove('hidden');
-            // CSS 애니메이션 트리거를 위한 리플로우 강제 유발
             void overlay.offsetWidth; 
             overlay.classList.remove('opacity-0');
             overlay.classList.add('opacity-100');
         }
-        sidebar.classList.remove('-translate-x-full');
-        if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', 'true');
     }
+}
+
+// [버그 해결] 프롬프트 패널은 실제 transform 값을 직접 제어해 Tailwind 클래스 상태와 무관하게 열리도록 합니다.
+export function toggleSidebar(forceClose = false) {
+    const sidebar = document.getElementById('sidebar');
+    if (!sidebar) return;
+
+    const isOpen = sidebar.dataset.open === 'true' || sidebar.style.transform === 'translateX(0px)' || sidebar.style.transform === 'translateX(0)';
+    setPromptSidebarOpen(!forceClose && !isOpen);
 }
 
 export function initSidebarControls() {
@@ -43,6 +51,7 @@ export function initSidebarControls() {
     hamburgerBtn.dataset.sidebarBound = 'true';
     hamburgerBtn.setAttribute('aria-controls', 'sidebar');
     hamburgerBtn.setAttribute('aria-expanded', 'false');
+    setPromptSidebarOpen(false);
     hamburgerBtn.addEventListener('click', (event) => {
         event.preventDefault();
         event.stopPropagation();
