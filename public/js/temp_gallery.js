@@ -98,6 +98,7 @@ export async function clearTempGallery() {
 }
 
 export function toggleCraftHistoryExpanded() {
+    if (window.CRAFT_HISTORY_COLLAPSED) window.setCraftHistoryCollapsed(false);
     window.CRAFT_HISTORY_EXPANDED = !window.CRAFT_HISTORY_EXPANDED;
     const historyPanel = document.getElementById('craft-history-panel'); const historyIcon = document.getElementById('craft-history-icon');
     const tempGrid = document.getElementById('craft-temp-grid'); const overlay = document.getElementById('craft-history-overlay');
@@ -113,6 +114,27 @@ export function toggleCraftHistoryExpanded() {
         historyIcon.parentElement.innerHTML = `<i id="craft-history-icon" data-lucide="expand" class="w-4 h-4"></i>`;
     }
     lucide.createIcons();
+}
+
+export function setCraftHistoryCollapsed(collapsed) {
+    window.CRAFT_HISTORY_COLLAPSED = collapsed;
+    const historyPanel = document.getElementById('craft-history-panel');
+    const toggleIcon = document.getElementById('craft-history-toggle-icon');
+    if (!historyPanel) return;
+
+    historyPanel.style.width = collapsed ? '0px' : '';
+    historyPanel.style.opacity = collapsed ? '0' : '1';
+    historyPanel.style.pointerEvents = collapsed ? 'none' : 'auto';
+    historyPanel.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
+
+    if (toggleIcon) {
+        toggleIcon.setAttribute('data-lucide', collapsed ? 'panel-right-open' : 'panel-right-close');
+    }
+    if (window.lucide) window.lucide.createIcons();
+}
+
+export function toggleCraftHistoryPanel() {
+    window.setCraftHistoryCollapsed(!window.CRAFT_HISTORY_COLLAPSED);
 }
 
 export function renderTempGallery() {

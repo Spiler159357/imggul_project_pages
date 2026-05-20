@@ -416,12 +416,16 @@
                     
                     <div class="flex-1 min-w-[8px]"></div> 
                     
-                    <button id="craft-clear-temp-btn" onclick="window.clearTempGallery()" class="flex-shrink-0 text-red-500 hover:text-white hover:bg-red-500 dark:text-red-400 p-1.5 rounded-md transition bg-red-50 dark:bg-red-900/30 dark:hover:bg-red-600 h-8 sm:h-9 flex items-center justify-center ml-auto px-3" title="임시 보관함 일괄 삭제">
+                    <button id="craft-history-toggle-btn" onclick="window.toggleCraftHistoryPanel()" class="flex-shrink-0 text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 p-1.5 rounded-md transition bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 h-8 sm:h-9 flex items-center justify-center px-2" title="임시 보관함 접기/펼치기">
+                        <i id="craft-history-toggle-icon" data-lucide="panel-right-close" class="w-4 h-4"></i>
+                    </button>
+
+                    <button id="craft-clear-temp-btn" onclick="window.clearTempGallery()" class="flex-shrink-0 text-red-500 hover:text-white hover:bg-red-500 dark:text-red-400 p-1.5 rounded-md transition bg-red-50 dark:bg-red-900/30 dark:hover:bg-red-600 h-8 sm:h-9 flex items-center justify-center ml-1 px-3" title="임시 보관함 일괄 삭제">
                         <i data-lucide="trash-2" class="w-4 h-4 sm:mr-1"></i> <span class="hidden sm:inline text-xs font-bold">임시함 비우기</span>
                     </button>
                 </div>
                 
-                <div class="flex-1 flex flex-row overflow-hidden relative w-full h-full min-h-0">
+                <div id="craft-workspace" class="flex-1 flex flex-row overflow-hidden relative w-full h-full min-h-0">
 
                     <div id="craft-preview-panel" class="flex-1 flex flex-col bg-gray-200 dark:bg-gray-900/80 transition-all overflow-hidden relative min-w-0">
                         

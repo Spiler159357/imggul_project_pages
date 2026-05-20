@@ -14,6 +14,17 @@ function setPromptSidebarOpen(isOpen) {
     if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
 }
 
+function ensurePromptSidebarLayout() {
+    const sidebar = document.getElementById('sidebar');
+    const workspace = document.getElementById('craft-workspace');
+    const previewPanel = document.getElementById('craft-preview-panel');
+    if (!sidebar || !workspace || !previewPanel) return;
+
+    if (sidebar.parentElement !== workspace) {
+        workspace.insertBefore(sidebar, previewPanel);
+    }
+}
+
 export function toggleSidebar(forceClose = false) {
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
@@ -129,6 +140,7 @@ export function switchTab(tabName, skipHistory = false) {
 
     if (promptSidebar) {
         if (tabName === 'craft') {
+            ensurePromptSidebarLayout();
             promptSidebar.classList.remove('hidden');
             setPromptSidebarOpen(true);
         } else {
