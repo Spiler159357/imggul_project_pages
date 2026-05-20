@@ -84,6 +84,12 @@ const NAV_BUTTON_BASE_CLASSES = [
 ];
 const NAV_BUTTON_ACTIVE_CLASSES = ['shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400'];
 const NAV_BUTTON_INACTIVE_CLASSES = ['text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200'];
+const NAV_BUTTON_LEGACY_LAYOUT_CLASSES = ['flex-1', 'py-1.5', 'rounded-md', 'transition-all'];
+
+function normalizeNavButtonLayout(btn) {
+    btn.classList.remove(...NAV_BUTTON_LEGACY_LAYOUT_CLASSES);
+    btn.classList.add(...NAV_BUTTON_BASE_CLASSES);
+}
 
 export function switchTab(tabName, skipHistory = false) {
     const tabs = ['explorer', 'craft', 'project'];
@@ -94,12 +100,11 @@ export function switchTab(tabName, skipHistory = false) {
         const content = document.getElementById(`main-${tab}-content`);
         if (!btn || !content) return;
 
-        // Reset the full class list so older flex-based tab classes cannot change button width.
-        btn.className = '';
-        btn.classList.add(...NAV_BUTTON_BASE_CLASSES);
+        normalizeNavButtonLayout(btn);
 
         if (tab === tabName) {
             // 버튼 활성화 (배경, 그림자, 텍스트 색상 추가)
+            btn.classList.remove(...NAV_BUTTON_INACTIVE_CLASSES);
             btn.classList.add(...NAV_BUTTON_ACTIVE_CLASSES);
             // 비활성화 색상 제거
             
@@ -108,6 +113,7 @@ export function switchTab(tabName, skipHistory = false) {
             content.classList.add('flex');
         } else {
             // 버튼 비활성화 (기본 회색 텍스트 추가)
+            btn.classList.remove(...NAV_BUTTON_ACTIVE_CLASSES);
             btn.classList.add(...NAV_BUTTON_INACTIVE_CLASSES);
             // 활성화 색상 제거
             
