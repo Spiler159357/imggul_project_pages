@@ -102,16 +102,18 @@ export function toggleCraftHistoryExpanded() {
     window.CRAFT_HISTORY_EXPANDED = !window.CRAFT_HISTORY_EXPANDED;
     const historyPanel = document.getElementById('craft-history-panel'); const historyIcon = document.getElementById('craft-history-icon');
     const tempGrid = document.getElementById('craft-temp-grid'); const overlay = document.getElementById('craft-history-overlay');
+    if (!historyPanel || !historyIcon || !tempGrid) return;
+    historyPanel.style.width = '';
     if (window.CRAFT_HISTORY_EXPANDED) {
         historyPanel.classList.remove('w-[90px]', 'sm:w-[140px]', 'md:w-[240px]', 'lg:w-[280px]'); historyPanel.classList.add('w-[85%]', 'sm:w-[360px]', 'md:w-[480px]', 'lg:w-[640px]');
         tempGrid.className = 'grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3 sm:gap-4';
         if (overlay) { overlay.classList.remove('hidden'); overlay.classList.add('flex'); }
-        historyIcon.parentElement.innerHTML = `<i id="craft-history-icon" data-lucide="shrink" class="w-4 h-4"></i>`;
+        historyIcon.setAttribute('data-lucide', 'shrink');
     } else {
         historyPanel.classList.remove('w-[85%]', 'sm:w-[360px]', 'md:w-[480px]', 'lg:w-[640px]'); historyPanel.classList.add('w-[90px]', 'sm:w-[140px]', 'md:w-[240px]', 'lg:w-[280px]');
         tempGrid.className = 'grid grid-cols-1 md:grid-cols-2 gap-2 sm:gap-3';
         if (overlay) { overlay.classList.remove('flex'); overlay.classList.add('hidden'); }
-        historyIcon.parentElement.innerHTML = `<i id="craft-history-icon" data-lucide="expand" class="w-4 h-4"></i>`;
+        historyIcon.setAttribute('data-lucide', 'expand');
     }
     lucide.createIcons();
 }
@@ -120,12 +122,18 @@ export function setCraftHistoryCollapsed(collapsed) {
     window.CRAFT_HISTORY_COLLAPSED = collapsed;
     const historyPanel = document.getElementById('craft-history-panel');
     const toggleIcon = document.getElementById('craft-history-toggle-icon');
+    const title = document.getElementById('craft-history-title');
+    const expandBtn = document.getElementById('craft-history-expand-btn');
+    const body = document.getElementById('craft-history-body');
     if (!historyPanel) return;
 
-    historyPanel.style.width = collapsed ? '0px' : '';
-    historyPanel.style.opacity = collapsed ? '0' : '1';
-    historyPanel.style.pointerEvents = collapsed ? 'none' : 'auto';
+    historyPanel.style.width = collapsed ? '48px' : '';
+    historyPanel.style.opacity = '1';
+    historyPanel.style.pointerEvents = 'auto';
     historyPanel.setAttribute('aria-hidden', collapsed ? 'true' : 'false');
+    if (title) title.classList.toggle('hidden', collapsed);
+    if (expandBtn) expandBtn.classList.toggle('hidden', collapsed);
+    if (body) body.classList.toggle('hidden', collapsed);
 
     if (toggleIcon) {
         toggleIcon.setAttribute('data-lucide', collapsed ? 'panel-right-open' : 'panel-right-close');

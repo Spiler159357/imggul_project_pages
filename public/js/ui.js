@@ -3,6 +3,7 @@
 function setPromptSidebarOpen(isOpen) {
     const sidebar = document.getElementById('sidebar');
     const hamburgerBtn = document.getElementById('hamburger-btn');
+    const workspace = document.getElementById('craft-workspace');
     if (!sidebar) return;
 
     sidebar.dataset.open = isOpen ? 'true' : 'false';
@@ -10,19 +11,12 @@ function setPromptSidebarOpen(isOpen) {
     sidebar.style.width = isOpen ? '' : '0px';
     sidebar.style.opacity = isOpen ? '1' : '0';
     sidebar.style.pointerEvents = isOpen ? 'auto' : 'none';
+    if (workspace) {
+        const sidebarWidth = window.matchMedia && window.matchMedia('(min-width: 640px)').matches ? '380px' : '320px';
+        workspace.style.paddingLeft = isOpen ? sidebarWidth : '0px';
+    }
 
     if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
-}
-
-function ensurePromptSidebarLayout() {
-    const sidebar = document.getElementById('sidebar');
-    const workspace = document.getElementById('craft-workspace');
-    const previewPanel = document.getElementById('craft-preview-panel');
-    if (!sidebar || !workspace || !previewPanel) return;
-
-    if (sidebar.parentElement !== workspace) {
-        workspace.insertBefore(sidebar, previewPanel);
-    }
 }
 
 export function toggleSidebar(forceClose = false) {
@@ -140,7 +134,6 @@ export function switchTab(tabName, skipHistory = false) {
 
     if (promptSidebar) {
         if (tabName === 'craft') {
-            ensurePromptSidebarLayout();
             promptSidebar.classList.remove('hidden');
             setPromptSidebarOpen(true);
         } else {
