@@ -77,19 +77,8 @@ export function updateThemeIcon() {
     }
 }
 
-const NAV_BUTTON_BASE_CLASSES = [
-    'w-[90px]', 'xs:w-[110px]', 'sm:w-[130px]', 'h-8', 'sm:h-9',
-    'text-xs', 'sm:text-sm', 'font-bold', 'rounded-lg', 'transition-colors',
-    'flex', 'items-center', 'justify-center', 'whitespace-nowrap', 'flex-shrink-0'
-];
 const NAV_BUTTON_ACTIVE_CLASSES = ['shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400'];
 const NAV_BUTTON_INACTIVE_CLASSES = ['text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200'];
-const NAV_BUTTON_LEGACY_LAYOUT_CLASSES = ['flex-1', 'py-1.5', 'rounded-md', 'transition-all'];
-
-function normalizeNavButtonLayout(btn) {
-    btn.classList.remove(...NAV_BUTTON_LEGACY_LAYOUT_CLASSES);
-    btn.classList.add(...NAV_BUTTON_BASE_CLASSES);
-}
 
 export function switchTab(tabName, skipHistory = false) {
     const tabs = ['explorer', 'craft', 'project'];
@@ -99,8 +88,6 @@ export function switchTab(tabName, skipHistory = false) {
         const btn = document.getElementById(`nav-${tab}`);
         const content = document.getElementById(`main-${tab}-content`);
         if (!btn || !content) return;
-
-        normalizeNavButtonLayout(btn);
 
         if (tab === tabName) {
             // 버튼 활성화 (배경, 그림자, 텍스트 색상 추가)
