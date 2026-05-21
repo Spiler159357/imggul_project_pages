@@ -1,4 +1,30 @@
 // 2. api.js: 백엔드/스토리지 데이터 교환 로직
+function sanitizeMetadataForStorage(metaDataObj) {
+    if (!metaDataObj || typeof metaDataObj !== 'object') return metaDataObj;
+    const sanitized = Array.isArray(metaDataObj) ? [...metaDataObj] : { ...metaDataObj };
+    delete sanitized.Model;
+    delete sanitized.model;
+    return sanitized;
+}
+
+export async function loadMetadataFromDB(folderPrefix, fileName) {
+    const metaPath = folderPrefix + '_meta.json';
+    try {
+        const res = await fetch(`/${metaPath}?_t=${Date.now()}`);
+        if (!res.ok) return null;
+        const db = await res.json();
+        if (db[fileName]) return sanitizeMetadataForStorage(db[fileName]);
+
+        const baseName = fileName.replace(/\.[^/.]+$/, "");
+        const extFallbacks = ['.png', '.webp', '.jpg', '.jpeg'];
+        for (const ext of extFallbacks) {
+            const fallbackName = baseName + ext;
+            if (fallbackName !== fileName && db[fallbackName]) return sanitizeMetadataForStorage(db[fallbackName]);
+        }
+    } catch(e) {}
+    return null;
+}
+
 export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
     if (!metaDataObj) return;
     const metaPath = folderPrefix + '_meta.json';
@@ -8,7 +34,7 @@ export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
         if (res.ok) db = await res.json();
     } catch(e) {}
     
-    db[fileName] = metaDataObj;
+    db[fileName] = sanitizeMetadataForStorage(metaDataObj);
     
     const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json;charset=utf-8' });
     const buffer = await new Promise((resolve, reject) => {

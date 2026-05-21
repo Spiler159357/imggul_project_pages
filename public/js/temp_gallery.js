@@ -246,9 +246,9 @@ export async function prepareUploadActiveTempImage() {
         let extractedMetadata = null;
         try { const metaRes = await fetch(`/${window.TEMP_FOLDER}_meta.json?_t=${Date.now()}`); if (metaRes.ok) { const db = await metaRes.json(); extractedMetadata = db[imgData.key.split('/').pop()]; } } catch(e) {}
         
+        extractedMetadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, imgData.key.split('/').pop()) || extractedMetadata;
         let finalFile = originalFile;
         if (originalFile.type !== 'image/webp') {
-            if (!extractedMetadata) extractedMetadata = await window.extractMetadata(originalFile);
             finalFile = await window.convertToWebP(originalFile);
         }
         let fileName = `${fileNameInput}.webp`; const finalPath = targetPath + fileName;
