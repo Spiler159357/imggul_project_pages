@@ -54,20 +54,6 @@ export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
         if (res.ok) db = await res.json();
     } catch(e) {}
     const sanitizedMetaData = sanitizeMetadataForStorage(metaDataObj);
-    if (folderPrefix === window.TEMP_FOLDER || folderPrefix === '_temp_craft/') {
-        const snapshot = (value) => {
-            try { return JSON.parse(JSON.stringify(value)); }
-            catch(e) { return value; }
-        };
-        console.log('[TEMP_META_SAVE]', {
-            savedAt: new Date().toISOString(),
-            folderPrefix,
-            fileName,
-            metaPath,
-            rawMetadata: snapshot(metaDataObj),
-            storedMetadata: snapshot(sanitizedMetaData)
-        });
-    }
 
     db[fileName] = sanitizedMetaData;
     

@@ -9,12 +9,6 @@ import * as Modals from './modals.js';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals);
-console.log('[GEN_TRACE:main-loaded]', {
-    loadedAt: new Date().toISOString(),
-    mainScript: '/js/main.js?v=craft-layout-20260521b',
-    craftImport: './craft.js?v=temp-meta-trace-20260521',
-    apiImport: './api.js?v=temp-meta-trace-20260521'
-});
 
 // 즉시 실행
 window.initSidebarControls();
