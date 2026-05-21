@@ -19,6 +19,7 @@ export async function onRequest(context) {
     const path = url.pathname;
     const method = request.method;
     const secret = env.secretKey;
+    const commitVersion = (env.CF_PAGES_COMMIT_SHA || 'ccff5c7').slice(0, 7);
 
     const getCookies = (cookieStr) => {
       const cookies = {};
@@ -548,6 +549,7 @@ export async function onRequest(context) {
     htmlContent = htmlContent.replace('{{IS_ADMIN}}', isAdmin ? 'true' : 'false');
     htmlContent = htmlContent.replace('{{INITIAL_PATH}}', initialPath);
     htmlContent = htmlContent.replace('{{IS_EMPTY}}', isEmpty ? 'true' : 'false');
+    htmlContent = htmlContent.replaceAll('{{APP_VERSION}}', commitVersion);
     
     return new Response(htmlContent, { headers: { "Content-Type": "text/html; charset=UTF-8" } });
 }
