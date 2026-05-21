@@ -429,6 +429,24 @@ export async function processNextQueueItem() {
     }
 
     const task = window.GENERATION_QUEUE[0]; const totalCount = task.total; const currentIdx = task.index;
+    const metaTraceId = `temp-meta-${task.id}-${Date.now()}`;
+    console.log('[TEMP_META_FLOW:start]', {
+        traceId: metaTraceId,
+        startedAt: new Date().toISOString(),
+        queueIndex: currentIdx,
+        queueTotal: totalCount,
+        tempFolder: window.TEMP_FOLDER,
+        taskSnapshot: {
+            model: task.model,
+            width: task.width,
+            height: task.height,
+            seed: task.seed,
+            steps: task.steps,
+            sampler: task.sampler,
+            scale: task.scale,
+            splitPrompts: task.splitPrompts
+        }
+    });
     const batchStatus = document.getElementById('nai-batch-status'); if (batchStatus) batchStatus.innerText = `${currentIdx}/${totalCount}`;
 
     const sideBar = document.getElementById('craft-progress-bar'); const sideText = document.getElementById('craft-progress-text'); const sidePercent = document.getElementById('craft-progress-percent');
@@ -509,18 +527,75 @@ export async function processNextQueueItem() {
         const dateString = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
         const newFileName = `nai_${dateString}_${Date.now().toString().slice(-4)}.png`;
         const generatedFile = new File([fileData], newFileName, { type: "image/png" });
+        console.log('[TEMP_META_FLOW:file-created]', {
+            traceId: metaTraceId,
+            createdAt: new Date().toISOString(),
+            zipEntryName: filename,
+            tempFileName: newFileName,
+            generatedFile: {
+                name: generatedFile.name,
+                type: generatedFile.type,
+                size: generatedFile.size
+            }
+        });
         
         updateProgress('최적화 및 임시 저장소 업로드 중...', 99);
         let extractedMetadata = await window.extractMetadata(generatedFile);
+        console.log('[TEMP_META_FLOW:metadata-extracted]', {
+            traceId: metaTraceId,
+            extractedAt: new Date().toISOString(),
+            tempFileName: newFileName,
+            extractedMetadata
+        });
         if (extractedMetadata && task.splitPrompts && Object.keys(task.splitPrompts).length > 0) { extractedMetadata["Split Prompts"] = task.splitPrompts; delete extractedMetadata["Prompt"]; }
+        console.log('[TEMP_META_FLOW:metadata-normalized]', {
+            traceId: metaTraceId,
+            normalizedAt: new Date().toISOString(),
+            tempFileName: newFileName,
+            metadataForTempStorage: extractedMetadata
+        });
 
         const tempKey = window.TEMP_FOLDER + newFileName;
+        console.log('[TEMP_META_FLOW:image-upload-start]', {
+            traceId: metaTraceId,
+            uploadStartedAt: new Date().toISOString(),
+            tempKey,
+            contentType: 'image/png'
+        });
         const uploadHeaders = { 'X-File-Name': encodeURIComponent(newFileName), 'Content-Type': 'image/png', 'X-Absolute-Path': encodeURIComponent(tempKey) };
         const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(generatedFile); });
         const uploadRes = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: uploadHeaders, body: buffer, cache: 'no-store' });
         if (!uploadRes.ok) throw new Error("서버 임시 저장소 동기화에 실패했습니다.");
+        console.log('[TEMP_META_FLOW:image-upload-complete]', {
+            traceId: metaTraceId,
+            uploadedAt: new Date().toISOString(),
+            tempKey,
+            status: uploadRes.status
+        });
 
-        if (extractedMetadata) await window.saveMetadataToDB(window.TEMP_FOLDER, newFileName, extractedMetadata);
+        if (extractedMetadata) {
+            console.log('[TEMP_META_FLOW:meta-save-start]', {
+                traceId: metaTraceId,
+                saveStartedAt: new Date().toISOString(),
+                folderPrefix: window.TEMP_FOLDER,
+                tempFileName: newFileName,
+                metadataToSave: extractedMetadata
+            });
+            await window.saveMetadataToDB(window.TEMP_FOLDER, newFileName, extractedMetadata);
+            console.log('[TEMP_META_FLOW:meta-save-complete]', {
+                traceId: metaTraceId,
+                savedAt: new Date().toISOString(),
+                folderPrefix: window.TEMP_FOLDER,
+                tempFileName: newFileName
+            });
+        } else {
+            console.warn('[TEMP_META_FLOW:meta-save-skipped]', {
+                traceId: metaTraceId,
+                skippedAt: new Date().toISOString(),
+                tempFileName: newFileName,
+                reason: 'extractMetadata returned null'
+            });
+        }
 
         updateProgress('완료!', 100);
         window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString() });
