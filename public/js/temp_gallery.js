@@ -79,6 +79,14 @@ function getInpaintCanvas() {
     return document.getElementById('inpaint-mask-canvas');
 }
 
+function getInpaintSourceUrl(source) {
+    if (!source) return '';
+    if (source.type === 'file') return source.objectUrl || '';
+    if (source.url) return source.url;
+    if (source.key) return '/' + source.key + '?t=' + Date.now();
+    return '';
+}
+
 function getInpaintCanvasPoint(event) {
     const canvas = getInpaintCanvas();
     const rect = canvas.getBoundingClientRect();
@@ -104,18 +112,31 @@ function drawInpaintLine(from, to) {
     ctx.lineTo(to.x, to.y);
     ctx.stroke();
     ctx.restore();
+    window.INPAINT_MASK_READY = hasInpaintMaskPixels(canvas);
+    updateInpaintSummary();
 }
 
-function setInpaintCanvasSize(width, height) {
+function setInpaintCanvasSize(width, height, keepMask = false) {
     const canvas = getInpaintCanvas();
     if (!canvas) return;
+    let previous = null;
+    if (keepMask && canvas.width && canvas.height && hasInpaintMaskPixels(canvas)) {
+        previous = document.createElement('canvas');
+        previous.width = canvas.width;
+        previous.height = canvas.height;
+        previous.getContext('2d').drawImage(canvas, 0, 0);
+    }
     canvas.width = width;
     canvas.height = height;
-    canvas.getContext('2d').clearRect(0, 0, width, height);
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, width, height);
+    if (previous) ctx.drawImage(previous, 0, 0, width, height);
+    window.INPAINT_MASK_READY = hasInpaintMaskPixels(canvas);
+    updateInpaintSummary();
 }
 
 function hasInpaintMaskPixels(canvas) {
-    if (!canvas) return false;
+    if (!canvas || !canvas.width || !canvas.height) return false;
     const ctx = canvas.getContext('2d');
     const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
     for (let i = 3; i < data.length; i += 4) {
@@ -124,18 +145,11 @@ function hasInpaintMaskPixels(canvas) {
     return false;
 }
 
-function loadImageFromFile(file) {
+function loadImageFromUrl(url) {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        const url = URL.createObjectURL(file);
-        img.onload = () => {
-            URL.revokeObjectURL(url);
-            resolve(img);
-        };
-        img.onerror = () => {
-            URL.revokeObjectURL(url);
-            reject(new Error('Failed to load inpaint image.'));
-        };
+        img.onload = () => resolve(img);
+        img.onerror = () => reject(new Error('인페인트 이미지를 불러오지 못했습니다.'));
         img.src = url;
     });
 }
@@ -144,28 +158,66 @@ function canvasToPngBase64(canvas) {
     return canvas.toDataURL('image/png').split(',')[1];
 }
 
+function updateInpaintSummary() {
+    const source = window.INPAINT_IMAGE_SOURCE;
+    const prompt = document.getElementById('inpaint-image-prompt');
+    const summary = document.getElementById('inpaint-selected-summary');
+    const thumb = document.getElementById('inpaint-selected-thumb');
+    const name = document.getElementById('inpaint-selected-name');
+    const status = document.getElementById('inpaint-mask-status');
+    if (!source) {
+        if (prompt) prompt.classList.remove('hidden');
+        if (summary) { summary.classList.add('hidden'); summary.classList.remove('flex'); }
+        return;
+    }
+    if (prompt) prompt.classList.add('hidden');
+    if (summary) { summary.classList.remove('hidden'); summary.classList.add('flex'); }
+    if (thumb) thumb.src = getInpaintSourceUrl(source);
+    if (name) name.textContent = source.name || source.key || '선택된 이미지';
+    if (status) {
+        if (window.INPAINT_MASK_READY) {
+            status.textContent = '마스크 준비됨';
+            status.className = 'text-[10px] text-emerald-600 dark:text-emerald-400';
+        } else {
+            status.textContent = '마스크가 필요합니다';
+            status.className = 'text-[10px] text-amber-600 dark:text-amber-400';
+        }
+    }
+}
+
+function setInpaintSource(source) {
+    if (window.INPAINT_IMAGE_OBJECT_URL && source.objectUrl !== window.INPAINT_IMAGE_OBJECT_URL) {
+        URL.revokeObjectURL(window.INPAINT_IMAGE_OBJECT_URL);
+    }
+    window.INPAINT_IMAGE_SOURCE = source;
+    window.INPAINT_IMAGE_FILE = source.type === 'file' ? source.file : null;
+    window.INPAINT_IMAGE_OBJECT_URL = source.type === 'file' ? source.objectUrl : null;
+    clearInpaintMask();
+    updateInpaintSummary();
+    openInpaintEditorModal();
+}
+
 export function clearInpaintMask() {
     const canvas = getInpaintCanvas();
     if (!canvas) return;
     canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+    window.INPAINT_MASK_READY = false;
+    updateInpaintSummary();
 }
 
 export function clearInpaintImage() {
     window.INPAINT_IMAGE_FILE = null;
+    window.INPAINT_IMAGE_SOURCE = null;
     const input = document.getElementById('inpaint-image-input');
-    const prompt = document.getElementById('inpaint-image-prompt');
-    const editor = document.getElementById('inpaint-editor');
     const preview = document.getElementById('inpaint-image-preview');
+    const thumb = document.getElementById('inpaint-selected-thumb');
     if (input) input.value = '';
     if (window.INPAINT_IMAGE_OBJECT_URL) URL.revokeObjectURL(window.INPAINT_IMAGE_OBJECT_URL);
     window.INPAINT_IMAGE_OBJECT_URL = null;
     if (preview) preview.src = '';
-    if (prompt) prompt.classList.remove('hidden');
-    if (editor) {
-        editor.classList.add('hidden');
-        editor.classList.remove('flex');
-    }
+    if (thumb) thumb.src = '';
     window.clearInpaintMask();
+    updateInpaintSummary();
 }
 
 export function setInpaintDrawMode(mode) {
@@ -188,7 +240,7 @@ export function setInpaintDrawMode(mode) {
 }
 
 export function handleInpaintPointerDown(event) {
-    if (!window.INPAINT_IMAGE_FILE) return;
+    if (!window.INPAINT_IMAGE_SOURCE) return;
     event.preventDefault();
     const point = getInpaintCanvasPoint(event);
     window.INPAINT_IS_DRAWING = true;
@@ -210,32 +262,176 @@ export function handleInpaintPointerUp(event) {
     event.preventDefault();
     window.INPAINT_IS_DRAWING = false;
     window.INPAINT_LAST_POINT = null;
+    window.INPAINT_MASK_READY = hasInpaintMaskPixels(getInpaintCanvas());
+    updateInpaintSummary();
     getInpaintCanvas()?.releasePointerCapture?.(event.pointerId);
 }
 
 export function handleInpaintImageUpload(file) {
-    if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 사용할 수 있습니다.');
-    window.INPAINT_IMAGE_FILE = file;
+    if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 인페인트 기준 이미지로 사용할 수 있습니다.');
+    const objectUrl = URL.createObjectURL(file);
+    setInpaintSource({ type: 'file', file, objectUrl, name: file.name });
+}
+
+export function openInpaintEditorModal() {
+    const source = window.INPAINT_IMAGE_SOURCE;
+    if (!source) return alert('먼저 인페인트 기준 이미지를 선택해 주세요.');
+    const modal = document.getElementById('inpaint-editor-modal');
     const preview = document.getElementById('inpaint-image-preview');
-    const prompt = document.getElementById('inpaint-image-prompt');
-    const editor = document.getElementById('inpaint-editor');
-    if (window.INPAINT_IMAGE_OBJECT_URL) URL.revokeObjectURL(window.INPAINT_IMAGE_OBJECT_URL);
-    window.INPAINT_IMAGE_OBJECT_URL = URL.createObjectURL(file);
-    preview.onload = () => setInpaintCanvasSize(preview.naturalWidth, preview.naturalHeight);
-    preview.src = window.INPAINT_IMAGE_OBJECT_URL;
-    if (prompt) prompt.classList.add('hidden');
-    if (editor) {
-        editor.classList.remove('hidden');
-        editor.classList.add('flex');
+    if (!modal || !preview) return;
+    preview.onload = () => setInpaintCanvasSize(preview.naturalWidth, preview.naturalHeight, true);
+    preview.src = getInpaintSourceUrl(source);
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    setInpaintDrawMode(window.INPAINT_DRAW_MODE);
+    if (window.lucide) window.lucide.createIcons();
+    history.pushState({ modal: 'inpaint-editor' }, '', '#inpaint-editor');
+}
+
+export function closeInpaintEditorModal(e, skipHistory = false) {
+    if (e && e.target !== e.currentTarget && e.target.id !== 'close-inpaint-editor-btn') return;
+    const modal = document.getElementById('inpaint-editor-modal');
+    if (modal && !modal.classList.contains('hidden')) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        window.INPAINT_IS_DRAWING = false;
+        window.INPAINT_LAST_POINT = null;
+        window.INPAINT_MASK_READY = hasInpaintMaskPixels(getInpaintCanvas());
+        updateInpaintSummary();
+        if (!skipHistory) history.back();
     }
 }
 
-export async function prepareInpaintPayload(width, height) {
-    if (!window.INPAINT_IMAGE_FILE) return null;
-    const maskCanvas = getInpaintCanvas();
-    if (!hasInpaintMaskPixels(maskCanvas)) throw new Error('Inpaint mask is empty.');
+export async function openInpaintLibraryModal(mode = 'main') {
+    window.INPAINT_LIBRARY_MODE = mode === 'temp' ? 'temp' : 'main';
+    window.INPAINT_LIBRARY_BASE_PREFIX = window.INPAINT_LIBRARY_MODE === 'temp' ? window.TEMP_FOLDER : (window.ROOT_PATH || '');
+    const modal = document.getElementById('inpaint-library-modal');
+    const title = document.getElementById('inpaint-library-title');
+    if (!modal) return;
+    if (title) title.textContent = window.INPAINT_LIBRARY_MODE === 'temp' ? '임시 저장소에서 선택' : '메인 저장소에서 선택';
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    history.pushState({ modal: 'inpaint-library' }, '', '#inpaint-library');
+    await loadInpaintLibraryPath(window.INPAINT_LIBRARY_BASE_PREFIX);
+}
 
-    const sourceImage = await loadImageFromFile(window.INPAINT_IMAGE_FILE);
+export function closeInpaintLibraryModal(e, skipHistory = false) {
+    if (e && e.target !== e.currentTarget && e.target.id !== 'close-inpaint-library-btn') return;
+    const modal = document.getElementById('inpaint-library-modal');
+    if (modal && !modal.classList.contains('hidden')) {
+        modal.classList.add('hidden');
+        modal.classList.remove('flex');
+        if (!skipHistory) history.back();
+    }
+}
+
+export async function loadInpaintLibraryPath(prefix) {
+    window.INPAINT_LIBRARY_CURRENT_PREFIX = prefix;
+    const pathDisplay = document.getElementById('inpaint-library-path');
+    const grid = document.getElementById('inpaint-library-grid');
+    const loader = document.getElementById('inpaint-library-loading');
+    const emptyState = document.getElementById('inpaint-library-empty');
+    if (!grid || !loader || !emptyState) return;
+    if (pathDisplay) pathDisplay.textContent = '/' + prefix;
+    grid.innerHTML = '';
+    grid.classList.add('hidden');
+    emptyState.classList.add('hidden');
+    emptyState.classList.remove('flex');
+    loader.classList.remove('hidden');
+    loader.classList.add('flex');
+
+    try {
+        const [listRes, aliasRes] = await Promise.all([
+            fetch(`/api/list?prefix=${encodeURIComponent(prefix)}&_t=${Date.now()}`),
+            fetch(`/api/aliases?prefix=${encodeURIComponent(prefix)}&_t=${Date.now()}`)
+        ]);
+        if (!listRes.ok) throw new Error('이미지 목록을 불러오지 못했습니다.');
+        if (aliasRes.ok) {
+            const aliasData = await aliasRes.json();
+            window.GLOBAL_ALIASES = aliasData.global || {};
+            window.PROJECT_ALIASES = aliasData.project || {};
+        }
+        const data = await listRes.json();
+        const folders = data.folders || [];
+        const files = (data.files || [])
+            .filter(f => !f.key.endsWith('.keep') && !f.key.endsWith('.txt') && !f.key.endsWith('_meta.json'))
+            .filter(f => /\.(jpg|jpeg|png|webp)$/i.test(f.key.split('/').pop()))
+            .sort((a, b) => b.key.split('/').pop().localeCompare(a.key.split('/').pop()));
+
+        if (prefix !== window.INPAINT_LIBRARY_BASE_PREFIX && prefix.length > window.INPAINT_LIBRARY_BASE_PREFIX.length && prefix.startsWith(window.INPAINT_LIBRARY_BASE_PREFIX)) {
+            const parts = prefix.split('/').filter(Boolean);
+            parts.pop();
+            const parentPrefix = parts.length > 0 ? parts.join('/') + '/' : window.INPAINT_LIBRARY_BASE_PREFIX;
+            const div = document.createElement('div');
+            div.className = 'relative w-full aspect-[3/4] bg-gray-200 dark:bg-gray-700 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-gray-300 dark:hover:bg-gray-600 transition border border-gray-300 dark:border-gray-600 shadow-sm';
+            div.onclick = () => loadInpaintLibraryPath(parentPrefix);
+            div.innerHTML = `<i data-lucide="corner-left-up" class="w-8 h-8 text-gray-500 mb-2"></i><span class="text-xs font-bold text-gray-600 dark:text-gray-300">상위 폴더</span>`;
+            grid.appendChild(div);
+        }
+
+        folders.forEach(folderPrefix => {
+            const folderName = folderPrefix.split('/').filter(Boolean).pop();
+            const alias = window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) : '';
+            const div = document.createElement('div');
+            div.className = 'relative w-full aspect-[3/4] bg-yellow-50 dark:bg-yellow-900/20 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-yellow-100 dark:hover:bg-yellow-900/40 transition border border-yellow-200 dark:border-yellow-700/50 shadow-sm p-2';
+            div.onclick = () => loadInpaintLibraryPath(folderPrefix);
+            div.innerHTML = `
+                <i data-lucide="folder" class="w-10 h-10 text-yellow-500 fill-current mb-2"></i>
+                <div class="flex flex-col items-center w-full overflow-hidden px-1">
+                    <span class="text-xs font-bold text-yellow-800 dark:text-yellow-200 truncate w-full text-center">${alias || folderName}</span>
+                    ${alias ? `<span class="text-[9px] text-yellow-600/70 dark:text-yellow-400/70 truncate w-full text-center">(${folderName})</span>` : ''}
+                </div>
+            `;
+            grid.appendChild(div);
+        });
+
+        files.forEach(file => {
+            const fileName = file.key.split('/').pop();
+            const alias = window.getAliasOnly ? window.getAliasOnly(file.key, false) : '';
+            const fileUrl = '/' + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
+            const div = document.createElement('div');
+            div.className = 'relative w-full aspect-[3/4] bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden shadow-sm border border-gray-200 dark:border-gray-700 cursor-pointer hover:border-indigo-500 hover:ring-2 hover:ring-indigo-500/50 transition-all group';
+            div.onclick = () => setInpaintImageFromKey(file.key, file.uploaded);
+            div.innerHTML = `
+                <img src="${fileUrl}" class="absolute inset-0 object-cover w-full h-full transition-opacity duration-200 opacity-80 group-hover:opacity-100" loading="lazy">
+                <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent p-2 flex flex-col items-center">
+                    <span class="text-[10px] text-white truncate w-full text-center font-medium">${alias || fileName}</span>
+                    ${alias ? `<span class="text-[8px] text-gray-300 truncate w-full text-center">(${fileName})</span>` : ''}
+                </div>
+            `;
+            grid.appendChild(div);
+        });
+
+        if (grid.children.length === 0) {
+            emptyState.classList.remove('hidden');
+            emptyState.classList.add('flex');
+        } else {
+            grid.classList.remove('hidden');
+        }
+        if (window.lucide) window.lucide.createIcons();
+    } catch (err) {
+        alert(err.message);
+        emptyState.classList.remove('hidden');
+        emptyState.classList.add('flex');
+    } finally {
+        loader.classList.add('hidden');
+        loader.classList.remove('flex');
+    }
+}
+
+export function setInpaintImageFromKey(key, uploaded) {
+    const fileName = key.split('/').pop();
+    const url = '/' + key + '?t=' + (uploaded ? new Date(uploaded).getTime() : Date.now());
+    closeInpaintLibraryModal(null, true);
+    setInpaintSource({ type: 'key', key, url, name: fileName });
+}
+
+export async function prepareInpaintPayload(width, height) {
+    if (!window.INPAINT_IMAGE_SOURCE) return null;
+    const maskCanvas = getInpaintCanvas();
+    if (!hasInpaintMaskPixels(maskCanvas)) throw new Error('인페인트 마스크가 비어 있습니다. 편집기에서 재생성할 영역을 칠해 주세요.');
+
+    const sourceImage = await loadImageFromUrl(getInpaintSourceUrl(window.INPAINT_IMAGE_SOURCE));
     const imageCanvas = document.createElement('canvas');
     imageCanvas.width = width;
     imageCanvas.height = height;

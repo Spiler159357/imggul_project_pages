@@ -251,45 +251,40 @@
 
                 <div id="setting-inpaint" class="flex flex-col gap-2 bg-indigo-50/50 dark:bg-indigo-900/10 p-3 rounded-lg border border-indigo-100 dark:border-indigo-800/50">
                     <div class="flex justify-between items-center">
-                        <label class="block text-[11px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wide">Inpaint</label>
-                        <button onclick="window.clearInpaintImage()" class="text-[10px] text-gray-400 hover:text-red-500 transition">Clear</button>
+                        <label class="block text-[11px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wide">인페인트</label>
+                        <button type="button" onclick="window.clearInpaintImage()" class="text-[10px] text-gray-400 hover:text-red-500 transition">초기화</button>
                     </div>
-                    <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1 leading-tight">Upload a base image, then paint the white mask over the area NovelAI should regenerate.</p>
+                    <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1 leading-tight">기준 이미지를 넣고 편집기에서 재생성할 영역을 칠하세요.</p>
 
                     <div id="inpaint-image-dropzone" class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-3 text-center cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition relative bg-white dark:bg-gray-800 shadow-sm">
                         <input type="file" id="inpaint-image-input" class="hidden" accept="image/*">
                         <div id="inpaint-image-prompt" class="flex flex-col items-center pointer-events-none py-2">
                             <i data-lucide="scan-line" class="w-5 h-5 text-gray-400 mb-1"></i>
-                            <span class="text-[10px] text-gray-500">Drop or select an inpaint base image</span>
+                            <span class="text-[10px] text-gray-500">이미지를 드롭하거나 클릭해서 선택</span>
                         </div>
                     </div>
 
-                    <div id="inpaint-editor" class="hidden flex-col gap-2 mt-1">
-                        <div class="flex justify-center bg-checkered rounded-lg border border-gray-200 dark:border-gray-700 p-2 overflow-auto">
-                            <div id="inpaint-canvas-wrap" class="relative inline-block max-w-full">
-                                <img id="inpaint-image-preview" src="" class="block max-w-full max-h-64 rounded object-contain shadow-sm select-none">
-                                <canvas id="inpaint-mask-canvas" class="absolute inset-0 w-full h-full rounded cursor-crosshair opacity-60 touch-none"></canvas>
-                            </div>
-                        </div>
+                    <div class="grid grid-cols-2 gap-2">
+                        <button type="button" onclick="window.openInpaintLibraryModal('temp')" class="px-2 py-1.5 text-[10px] font-bold rounded border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-400 transition flex items-center justify-center gap-1">
+                            <i data-lucide="history" class="w-3 h-3"></i> 임시 저장소
+                        </button>
+                        <button type="button" onclick="window.openInpaintLibraryModal('main')" class="px-2 py-1.5 text-[10px] font-bold rounded border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-400 transition flex items-center justify-center gap-1">
+                            <i data-lucide="folder-open" class="w-3 h-3"></i> 메인 저장소
+                        </button>
+                    </div>
 
-                        <div class="grid grid-cols-2 gap-2">
-                            <button type="button" id="inpaint-brush-btn" onclick="window.setInpaintDrawMode('brush')" class="px-2 py-1.5 text-[10px] font-bold rounded border bg-indigo-600 border-indigo-600 text-white transition flex items-center justify-center gap-1">
-                                <i data-lucide="brush" class="w-3 h-3"></i> Brush
-                            </button>
-                            <button type="button" id="inpaint-eraser-btn" onclick="window.setInpaintDrawMode('eraser')" class="px-2 py-1.5 text-[10px] font-bold rounded border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 transition flex items-center justify-center gap-1">
-                                <i data-lucide="eraser" class="w-3 h-3"></i> Eraser
-                            </button>
+                    <div id="inpaint-selected-summary" class="hidden gap-2 items-center rounded-lg border border-indigo-100 dark:border-indigo-800/60 bg-white dark:bg-gray-800 p-2">
+                        <img id="inpaint-selected-thumb" src="" class="w-12 h-12 rounded object-cover bg-gray-100 dark:bg-gray-700 border border-gray-200 dark:border-gray-700">
+                        <div>
+                            <div id="inpaint-selected-name" class="text-[11px] font-bold text-gray-700 dark:text-gray-200 truncate max-w-[160px]">선택된 이미지</div>
+                            <div id="inpaint-mask-status" class="text-[10px] text-amber-600 dark:text-amber-400">마스크가 필요합니다</div>
                         </div>
+                        <button type="button" onclick="window.openInpaintEditorModal()" class="ml-auto px-2 py-1.5 text-[10px] font-bold rounded bg-indigo-600 text-white hover:bg-indigo-700 transition">편집</button>
+                    </div>
 
-                        <div>
-                            <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">Brush Size</span><span id="inpaint-brush-size-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">48</span></div>
-                            <input type="range" id="inpaint-brush-size" min="4" max="160" step="2" value="48" class="w-full accent-indigo-600">
-                        </div>
-                        <div>
-                            <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">Inpainting Strength</span><span id="inpaint-strength-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">1.00</span></div>
-                            <input type="range" id="inpaint-strength" min="0.01" max="1" step="0.01" value="1" class="w-full accent-indigo-600">
-                        </div>
-                        <button type="button" onclick="window.clearInpaintMask()" class="w-full px-2 py-1.5 text-[10px] font-bold rounded border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 hover:border-indigo-300 transition">Clear Mask</button>
+                    <div>
+                        <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">인페인트 강도</span><span id="inpaint-strength-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">1.00</span></div>
+                        <input type="range" id="inpaint-strength" min="0.01" max="1" step="0.01" value="1" class="w-full accent-indigo-600">
                     </div>
                 </div>
 
@@ -845,10 +840,75 @@
         </div>
     </div>
 
+    <div id="inpaint-editor-modal" onclick="window.closeInpaintEditorModal(event)" class="fixed inset-0 bg-black/80 z-[70] hidden items-center justify-center p-3 sm:p-6">
+        <div class="bg-white dark:bg-gray-900 w-full max-w-5xl max-h-[92vh] rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                <div>
+                    <h3 class="text-sm font-bold text-gray-900 dark:text-white">인페인트 영역 편집</h3>
+                    <p class="text-[11px] text-gray-500 dark:text-gray-400">흰색으로 칠한 영역만 NovelAI가 다시 생성합니다.</p>
+                </div>
+                <button id="close-inpaint-editor-btn" type="button" onclick="window.closeInpaintEditorModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+
+            <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_240px]">
+                <div class="min-h-[360px] bg-checkered overflow-auto p-3 flex items-center justify-center">
+                    <div id="inpaint-canvas-wrap" class="relative inline-block max-w-full">
+                        <img id="inpaint-image-preview" src="" class="block max-w-full max-h-[72vh] rounded object-contain shadow-sm select-none">
+                        <canvas id="inpaint-mask-canvas" class="absolute inset-0 w-full h-full rounded cursor-crosshair opacity-60 touch-none"></canvas>
+                    </div>
+                </div>
+
+                <div class="border-t lg:border-t-0 lg:border-l border-gray-200 dark:border-gray-700 p-3 flex flex-col gap-3">
+                    <div class="grid grid-cols-2 gap-2">
+                        <button type="button" id="inpaint-brush-btn" onclick="window.setInpaintDrawMode('brush')" class="px-2 py-2 text-[11px] font-bold rounded border bg-indigo-600 border-indigo-600 text-white transition flex items-center justify-center gap-1">
+                            <i data-lucide="brush" class="w-4 h-4"></i> 브러시
+                        </button>
+                        <button type="button" id="inpaint-eraser-btn" onclick="window.setInpaintDrawMode('eraser')" class="px-2 py-2 text-[11px] font-bold rounded border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 transition flex items-center justify-center gap-1">
+                            <i data-lucide="eraser" class="w-4 h-4"></i> 지우개
+                        </button>
+                    </div>
+
+                    <div>
+                        <div class="flex justify-between mb-1"><span class="text-[10px] font-bold text-gray-500">브러시 크기</span><span id="inpaint-brush-size-val" class="text-[10px] font-mono text-gray-600 dark:text-gray-400">48</span></div>
+                        <input type="range" id="inpaint-brush-size" min="4" max="160" step="2" value="48" class="w-full accent-indigo-600">
+                    </div>
+
+                    <button type="button" onclick="window.clearInpaintMask()" class="w-full px-2 py-2 text-[11px] font-bold rounded border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-300 transition flex items-center justify-center gap-1">
+                        <i data-lucide="rotate-ccw" class="w-4 h-4"></i> 마스크 지우기
+                    </button>
+                    <button type="button" onclick="window.closeInpaintEditorModal()" class="mt-auto w-full px-3 py-2 text-xs font-bold rounded bg-indigo-600 text-white hover:bg-indigo-700 transition">완료</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="inpaint-library-modal" onclick="window.closeInpaintLibraryModal(event)" class="fixed inset-0 bg-black/70 z-[70] hidden items-center justify-center p-3 sm:p-6">
+        <div class="bg-white dark:bg-gray-900 w-full max-w-5xl max-h-[88vh] rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                <div>
+                    <h3 id="inpaint-library-title" class="text-sm font-bold text-gray-900 dark:text-white">인페인트 이미지 선택</h3>
+                    <p id="inpaint-library-path" class="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[70vw]">/</p>
+                </div>
+                <button id="close-inpaint-library-btn" type="button" onclick="window.closeInpaintLibraryModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="flex-1 min-h-0 overflow-auto p-4">
+                <div id="inpaint-library-loading" class="hidden items-center justify-center py-12 text-gray-500 text-sm">
+                    <i data-lucide="loader" class="w-5 h-5 mr-2 animate-spin"></i> 이미지를 불러오는 중...
+                </div>
+                <div id="inpaint-library-empty" class="hidden items-center justify-center py-12 text-gray-500 text-sm">선택할 수 있는 이미지가 없습니다.</div>
+                <div id="inpaint-library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+            </div>
+        </div>
+    </div>
+
     <script>
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=temp-meta-trace-20260521"></script>
+    <script type="module" src="/js/main.js?v=inpaint-modal-20260521"></script>
 </body>
 </html>

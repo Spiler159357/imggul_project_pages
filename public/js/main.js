@@ -1,10 +1,10 @@
 // 8. main.js: 애플리케이션 진입점 및 모듈 통합 관리
-import './state.js?v=craft-layout-20260521b';
+import './state.js?v=inpaint-modal-20260521';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=craft-layout-20260521b';
 import * as Explorer from './explorer.js';
-import * as Craft from './craft.js?v=temp-meta-trace-20260521';
-import * as TempGallery from './temp_gallery.js?v=temp-meta-trace-20260521';
+import * as Craft from './craft.js?v=inpaint-modal-20260521';
+import * as TempGallery from './temp_gallery.js?v=inpaint-modal-20260521';
 import * as Modals from './modals.js';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
@@ -158,9 +158,9 @@ if (preciseDropZone && preciseFileInput) {
 const inpaintDropZone = document.getElementById('inpaint-image-dropzone'); const inpaintFileInput = document.getElementById('inpaint-image-input');
 if (inpaintDropZone && inpaintFileInput) {
     inpaintDropZone.addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') inpaintFileInput.click(); });
-    inpaintDropZone.addEventListener('dragover', (e) => { e.preventDefault(); inpaintDropZone.classList.add('border-indigo-500'); });
-    inpaintDropZone.addEventListener('dragleave', (e) => { e.preventDefault(); inpaintDropZone.classList.remove('border-indigo-500'); });
-    inpaintDropZone.addEventListener('drop', (e) => { e.preventDefault(); inpaintDropZone.classList.remove('border-indigo-500'); if (e.dataTransfer.files.length) window.handleInpaintImageUpload(e.dataTransfer.files[0]); });
+    inpaintDropZone.addEventListener('dragover', (e) => { e.preventDefault(); e.stopPropagation(); inpaintDropZone.classList.add('border-indigo-500'); });
+    inpaintDropZone.addEventListener('dragleave', (e) => { e.preventDefault(); e.stopPropagation(); inpaintDropZone.classList.remove('border-indigo-500'); });
+    inpaintDropZone.addEventListener('drop', (e) => { e.preventDefault(); e.stopPropagation(); inpaintDropZone.classList.remove('border-indigo-500'); if (e.dataTransfer.files.length) window.handleInpaintImageUpload(e.dataTransfer.files[0]); });
     inpaintFileInput.addEventListener('change', (e) => { if (e.target.files.length) window.handleInpaintImageUpload(e.target.files[0]); });
 }
 
@@ -312,12 +312,15 @@ if (memoSubmitBtn) {
 window.addEventListener('popstate', (e) => {
     const previewModal = document.getElementById('preview-modal'); const uploadModal = document.getElementById('gallery-upload-modal');
     const memoModal = document.getElementById('memo-create-modal'); const importModal = document.getElementById('import-modal');
+    const inpaintEditorModal = document.getElementById('inpaint-editor-modal'); const inpaintLibraryModal = document.getElementById('inpaint-library-modal');
     let modalClosed = false;
     
     if (previewModal && !previewModal.classList.contains('hidden')) { window.closeModal(null, true); modalClosed = true; }
     if (uploadModal && !uploadModal.classList.contains('hidden')) { window.closeGalleryUploadModal(null, true); modalClosed = true; }
     if (memoModal && !memoModal.classList.contains('hidden')) { window.closeMemoCreateModal(null, true); modalClosed = true; }
     if (importModal && !importModal.classList.contains('hidden')) { window.closeImportModal(null, true); modalClosed = true; }
+    if (inpaintEditorModal && !inpaintEditorModal.classList.contains('hidden')) { window.closeInpaintEditorModal(null, true); modalClosed = true; }
+    if (inpaintLibraryModal && !inpaintLibraryModal.classList.contains('hidden')) { window.closeInpaintLibraryModal(null, true); modalClosed = true; }
 
     if (modalClosed) return; 
 
