@@ -1,7 +1,9 @@
 // 2. api.js: 백엔드/스토리지 데이터 교환 로직
 function sanitizeMetadataForStorage(metaDataObj) {
     if (!metaDataObj || typeof metaDataObj !== 'object') return metaDataObj;
-    const sanitized = Array.isArray(metaDataObj) ? [...metaDataObj] : { ...metaDataObj };
+    const sanitized = Array.isArray(metaDataObj)
+        ? metaDataObj.map(item => sanitizeMetadataForStorage(item))
+        : Object.fromEntries(Object.entries(metaDataObj).map(([key, value]) => [key, sanitizeMetadataForStorage(value)]));
     delete sanitized.Model;
     delete sanitized.model;
     return sanitized;
@@ -41,11 +43,12 @@ export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
         const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsArrayBuffer(blob);
     });
     
-    await fetch('/api/upload?_t=' + Date.now(), {
+    const uploadRes = await fetch('/api/upload?_t=' + Date.now(), {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-File-Name': '_meta.json', 'X-Absolute-Path': encodeURIComponent(metaPath) },
         body: buffer, cache: 'no-store'
     });
+    if (!uploadRes.ok) throw new Error(`메타데이터 저장 실패 (${uploadRes.status})`);
 }
 
 export async function removeMetadataFromDB(folderPrefix, fileName) {
@@ -54,8 +57,16 @@ export async function removeMetadataFromDB(folderPrefix, fileName) {
         const res = await fetch(`/${metaPath}?_t=${Date.now()}`);
         if (!res.ok) return;
         let db = await res.json();
-        if (db[fileName]) {
-            delete db[fileName];
+        const baseName = fileName.replace(/\.[^/.]+$/, "");
+        const namesToDelete = new Set([fileName, `${baseName}.png`, `${baseName}.webp`, `${baseName}.jpg`, `${baseName}.jpeg`]);
+        let changed = false;
+        namesToDelete.forEach(name => {
+            if (db[name]) {
+                delete db[name];
+                changed = true;
+            }
+        });
+        if (changed) {
             const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json;charset=utf-8' });
             const buffer = await new Promise((resolve, reject) => {
                 const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsArrayBuffer(blob);

@@ -356,12 +356,16 @@ async function uploadActiveTempImageToTarget(targetPath, fileNameInput) {
 
     try {
         const tempFileName = imgData.key.split('/').pop();
+        const extractedMetadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, tempFileName);
+        if (!extractedMetadata) {
+            throw new Error('임시 저장소의 _meta.json에서 이 이미지와 연결된 메타데이터를 찾지 못했습니다. 업로드를 중단합니다.');
+        }
+
         const fetchRes = await fetch(`/${imgData.key}`);
         if(!fetchRes.ok) throw new Error('임시 파일을 불러오지 못했습니다.');
 
         const originalBlob = await fetchRes.blob();
         const originalFile = new File([originalBlob], tempFileName, { type: originalBlob.type });
-        const extractedMetadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, tempFileName);
 
         let finalFile = originalFile;
         if (originalFile.type !== 'image/webp') finalFile = await window.convertToWebP(originalFile);
@@ -373,7 +377,7 @@ async function uploadActiveTempImageToTarget(targetPath, fileNameInput) {
         const res = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers, body: buffer, cache: 'no-store' });
         if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
 
-        if (extractedMetadata) await window.saveMetadataToDB(targetPath, fileName, extractedMetadata);
+        await window.saveMetadataToDB(targetPath, fileName, extractedMetadata);
         await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: imgData.key }) });
         await window.removeMetadataFromDB(window.TEMP_FOLDER, tempFileName);
 
