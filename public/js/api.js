@@ -53,8 +53,23 @@ export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
         const res = await fetch(`/${metaPath}?_t=${Date.now()}`);
         if (res.ok) db = await res.json();
     } catch(e) {}
-    
-    db[fileName] = sanitizeMetadataForStorage(metaDataObj);
+    const sanitizedMetaData = sanitizeMetadataForStorage(metaDataObj);
+    if (folderPrefix === window.TEMP_FOLDER) {
+        const snapshot = (value) => {
+            try { return JSON.parse(JSON.stringify(value)); }
+            catch(e) { return value; }
+        };
+        console.log('[TEMP_META_SAVE]', {
+            savedAt: new Date().toISOString(),
+            folderPrefix,
+            fileName,
+            metaPath,
+            rawMetadata: snapshot(metaDataObj),
+            storedMetadata: snapshot(sanitizedMetaData)
+        });
+    }
+
+    db[fileName] = sanitizedMetaData;
     
     const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json;charset=utf-8' });
     const buffer = await new Promise((resolve, reject) => {
