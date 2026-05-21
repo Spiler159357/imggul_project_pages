@@ -227,47 +227,170 @@ export async function removeActiveTempImage() {
 export async function prepareUploadActiveTempImage() {
     if (window.CRAFT_ACTIVE_INDEX === null) return;
     const index = window.CRAFT_ACTIVE_INDEX; const imgData = window.TEMP_IMAGES[index]; if (!imgData) return;
-    
-    const projSelect = document.getElementById('craft-project-select'); const charSelect = document.getElementById('craft-char-select');
-    const proj = projSelect ? projSelect.value : ''; const char = charSelect ? charSelect.value : '';
-    if (!proj) return alert('상단 툴바에서 저장할 업로드 타겟(프로젝트)을 먼저 선택해주세요.');
-    let targetPath = char ? char : proj; if (targetPath && !targetPath.endsWith('/')) targetPath += '/';
-    
-    let defaultName = 'nai_' + Date.now();
-    let fileNameInput = prompt(`업로드 대상: ${window.getDisplayName(targetPath, true)}\n\n저장될 파일명을 입력하세요 (확장자 생략):`, defaultName);
-    if (fileNameInput === null) return; fileNameInput = fileNameInput.trim() || defaultName;
-    
-    const btn = document.getElementById('craft-action-upload'); const oldText = btn.innerHTML;
-    btn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin mr-1.5"></i> 처리 중...`; btn.disabled = true; lucide.createIcons();
-    
+
+    const selectedProjectEl = document.getElementById('craft-project-select');
+    const selectedProject = selectedProjectEl ? selectedProjectEl.value : '';
+    if (!selectedProject) return alert('상단에서 업로드할 프로젝트를 먼저 선택해주세요.');
+
+    let projectPath = selectedProject;
+    if (projectPath && !projectPath.endsWith('/')) projectPath += '/';
+    window.CRAFT_UPLOAD_ACTIVE_INDEX = index;
+    window.CRAFT_UPLOAD_TARGET_PATH = projectPath;
+
+    const modal = document.getElementById('craft-upload-modal');
+    const preview = document.getElementById('craft-upload-preview');
+    const projectLabel = document.getElementById('craft-upload-project-label');
+    const uploadFileNameInput = document.getElementById('craft-upload-filename');
+    if (!modal || !uploadFileNameInput) return;
+
+    if (preview) preview.src = `/${imgData.key}?t=${new Date(imgData.uploaded).getTime()}`;
+    if (projectLabel) projectLabel.textContent = window.getDisplayName(projectPath, true);
+    uploadFileNameInput.value = 'nai_' + Date.now();
+    modal.classList.remove('hidden');
+    await window.loadCraftUploadTargets(projectPath);
+    if (window.lucide) window.lucide.createIcons();
+}
+
+export function closeCraftUploadModal(e) {
+    if (e && e.target !== e.currentTarget && e.target.id !== 'close-craft-upload-btn') return;
+    const modal = document.getElementById('craft-upload-modal');
+    if (modal) modal.classList.add('hidden');
+    const preview = document.getElementById('craft-upload-preview');
+    if (preview) preview.src = '';
+}
+
+export async function loadCraftUploadTargets(projectPath) {
+    const list = document.getElementById('craft-upload-target-list');
+    const empty = document.getElementById('craft-upload-target-empty');
+    if (!list) return;
+
+    list.innerHTML = '<div class="col-span-full flex items-center justify-center py-8 text-sm text-gray-500 dark:text-gray-400"><i data-lucide="loader" class="w-4 h-4 mr-2 animate-spin"></i> 불러오는 중...</div>';
+    if (empty) empty.classList.add('hidden');
+    if (window.lucide) window.lucide.createIcons();
+
+    const normalizedProjectPath = projectPath.endsWith('/') ? projectPath : projectPath + '/';
+    const targets = [{ path: normalizedProjectPath, label: '프로젝트 루트', subLabel: window.getDisplayName(normalizedProjectPath, true), icon: 'folder' }];
+
     try {
-        const fetchRes = await fetch(`/${imgData.key}`); if(!fetchRes.ok) throw new Error("원본 임시 파일을 불러오지 못했습니다.");
-        const originalBlob = await fetchRes.blob(); const originalFile = new File([originalBlob], imgData.key.split('/').pop(), { type: originalBlob.type });
-        let extractedMetadata = null;
-        try { const metaRes = await fetch(`/${window.TEMP_FOLDER}_meta.json?_t=${Date.now()}`); if (metaRes.ok) { const db = await metaRes.json(); extractedMetadata = db[imgData.key.split('/').pop()]; } } catch(e) {}
-        
-        extractedMetadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, imgData.key.split('/').pop()) || extractedMetadata;
-        let finalFile = originalFile;
-        if (originalFile.type !== 'image/webp') {
-            finalFile = await window.convertToWebP(originalFile);
+        const res = await fetch(`/api/list?prefix=${encodeURIComponent(normalizedProjectPath)}&_t=${Date.now()}`);
+        if (res.ok) {
+            const data = await res.json();
+            (data.folders || []).forEach(folderPrefix => {
+                const parts = folderPrefix.split('/').filter(Boolean);
+                const folderName = parts[parts.length - 1] || folderPrefix;
+                const alias = window.getAliasOnly(folderPrefix, true);
+                targets.push({ path: folderPrefix, label: alias || folderName, subLabel: alias ? folderName : folderPrefix, icon: 'folder' });
+            });
         }
-        let fileName = `${fileNameInput}.webp`; const finalPath = targetPath + fileName;
+    } catch (e) {
+        if (window.logErrorToStorage) window.logErrorToStorage('업로드 위치 목록 로드 실패', e);
+    }
+
+    list.innerHTML = '';
+    targets.forEach(target => {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.dataset.path = target.path.endsWith('/') ? target.path : target.path + '/';
+        btn.className = 'craft-upload-target flex items-center text-left gap-2 p-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-indigo-400 dark:hover:border-indigo-500 transition min-w-0';
+        btn.onclick = () => window.selectCraftUploadTarget(btn.dataset.path);
+
+        const icon = document.createElement('i');
+        icon.setAttribute('data-lucide', target.icon);
+        icon.className = 'w-4 h-4 text-indigo-500 flex-shrink-0';
+
+        const text = document.createElement('span');
+        text.className = 'min-w-0';
+
+        const label = document.createElement('span');
+        label.className = 'block text-sm font-semibold text-gray-800 dark:text-gray-100 truncate';
+        label.textContent = target.label;
+
+        const subLabel = document.createElement('span');
+        subLabel.className = 'block text-[11px] text-gray-500 dark:text-gray-400 truncate';
+        subLabel.textContent = target.subLabel;
+
+        text.appendChild(label);
+        text.appendChild(subLabel);
+        btn.appendChild(icon);
+        btn.appendChild(text);
+        list.appendChild(btn);
+    });
+
+    if (empty) empty.classList.toggle('hidden', targets.length > 0);
+    window.selectCraftUploadTarget(window.CRAFT_UPLOAD_TARGET_PATH || normalizedProjectPath);
+    if (window.lucide) window.lucide.createIcons();
+}
+
+export function selectCraftUploadTarget(targetPath) {
+    window.CRAFT_UPLOAD_TARGET_PATH = targetPath.endsWith('/') ? targetPath : targetPath + '/';
+    const selectedPath = document.getElementById('craft-upload-selected-path');
+    if (selectedPath) selectedPath.textContent = '/' + window.CRAFT_UPLOAD_TARGET_PATH;
+    document.querySelectorAll('.craft-upload-target').forEach(btn => {
+        const active = btn.dataset.path === window.CRAFT_UPLOAD_TARGET_PATH;
+        btn.classList.toggle('border-indigo-500', active);
+        btn.classList.toggle('ring-2', active);
+        btn.classList.toggle('ring-indigo-500/40', active);
+        btn.classList.toggle('bg-indigo-50', active);
+        btn.classList.toggle('dark:bg-indigo-900/20', active);
+    });
+}
+
+export async function submitCraftUploadModal() {
+    const input = document.getElementById('craft-upload-filename');
+    let fileNameInput = input ? input.value.trim() : '';
+    fileNameInput = fileNameInput.replace(/\.[^/.]+$/, '') || ('nai_' + Date.now());
+    if (!window.CRAFT_UPLOAD_TARGET_PATH) return alert('업로드 위치를 선택해주세요.');
+    await uploadActiveTempImageToTarget(window.CRAFT_UPLOAD_TARGET_PATH, fileNameInput);
+}
+
+async function uploadActiveTempImageToTarget(targetPath, fileNameInput) {
+    if (window.CRAFT_UPLOAD_ACTIVE_INDEX === null || window.CRAFT_UPLOAD_ACTIVE_INDEX === undefined) return;
+    const index = window.CRAFT_UPLOAD_ACTIVE_INDEX; const imgData = window.TEMP_IMAGES[index]; if (!imgData) return;
+    if (targetPath && !targetPath.endsWith('/')) targetPath += '/';
+
+    const btn = document.getElementById('craft-action-upload'); const oldText = btn ? btn.innerHTML : '';
+    const submitBtn = document.getElementById('craft-upload-submit-btn'); const oldSubmitText = submitBtn ? submitBtn.innerHTML : '';
+    if (btn) { btn.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin mr-1.5"></i> 처리 중...'; btn.disabled = true; }
+    if (submitBtn) { submitBtn.innerHTML = '<i data-lucide="loader" class="w-4 h-4 inline mr-1.5 animate-spin"></i> 업로드 중...'; submitBtn.disabled = true; }
+    if (window.lucide) window.lucide.createIcons();
+
+    try {
+        const tempFileName = imgData.key.split('/').pop();
+        const fetchRes = await fetch(`/${imgData.key}`);
+        if(!fetchRes.ok) throw new Error('임시 파일을 불러오지 못했습니다.');
+
+        const originalBlob = await fetchRes.blob();
+        const originalFile = new File([originalBlob], tempFileName, { type: originalBlob.type });
+        const extractedMetadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, tempFileName);
+
+        let finalFile = originalFile;
+        if (originalFile.type !== 'image/webp') finalFile = await window.convertToWebP(originalFile);
+
+        const fileName = `${fileNameInput}.webp`;
+        const finalPath = targetPath + fileName;
         const headers = { 'X-File-Name': encodeURIComponent(fileName), 'Content-Type': finalFile.type || 'application/octet-stream', 'X-Absolute-Path': encodeURIComponent(finalPath) };
-        const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(finalFile); });
+        const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error('FileReader 오류')); r.readAsArrayBuffer(finalFile); });
         const res = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers, body: buffer, cache: 'no-store' });
         if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
-        
+
         if (extractedMetadata) await window.saveMetadataToDB(targetPath, fileName, extractedMetadata);
         await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: imgData.key }) });
-        await window.removeMetadataFromDB(window.TEMP_FOLDER, imgData.key.split('/').pop());
+        await window.removeMetadataFromDB(window.TEMP_FOLDER, tempFileName);
 
-        alert(`성공적으로 프로젝트에 업로드 되었습니다!`);
+        alert('성공적으로 업로드했습니다.');
         window.TEMP_IMAGES.splice(index, 1);
         if (window.CRAFT_ACTIVE_INDEX >= window.TEMP_IMAGES.length) window.CRAFT_ACTIVE_INDEX = window.TEMP_IMAGES.length - 1;
         if (window.CRAFT_ACTIVE_INDEX < 0) window.CRAFT_ACTIVE_INDEX = null;
+        window.closeCraftUploadModal();
         window.renderTempGallery();
-    } catch (err) { alert('업로드 실패: ' + err.message); if (window.logErrorToStorage) window.logErrorToStorage('임시 이미지 업로드 큐 에러', err); } 
-    finally { btn.innerHTML = oldText; btn.disabled = false; lucide.createIcons(); }
+    } catch (err) {
+        alert('업로드 실패: ' + err.message);
+        if (window.logErrorToStorage) window.logErrorToStorage('임시 이미지 업로드 오류', err);
+    } finally {
+        if (btn) { btn.innerHTML = oldText; btn.disabled = false; }
+        if (submitBtn) { submitBtn.innerHTML = oldSubmitText; submitBtn.disabled = false; }
+        if (window.lucide) window.lucide.createIcons();
+    }
 }
 
 export async function processDelayedWebPConversion() {

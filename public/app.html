@@ -410,7 +410,7 @@
                         <option value="">프로젝트 선택</option>
                     </select>
                     
-                    <select id="craft-char-select" class="flex-shrink-0 w-32 sm:w-44 p-1.5 text-xs sm:text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50 dark:bg-gray-700 dark:text-white font-medium h-8 sm:h-9" disabled>
+                    <select id="craft-char-select" class="hidden flex-shrink-0 w-32 sm:w-44 p-1.5 text-xs sm:text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50 dark:bg-gray-700 dark:text-white font-medium h-8 sm:h-9" disabled>
                         <option value="">캐릭터 선택</option>
                     </select>
                     
@@ -548,6 +548,48 @@
 
                 <button id="gallery-upload-submit-btn" class="w-full mt-6 bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition dark:bg-indigo-700 dark:hover:bg-indigo-600" disabled>
                     업로드 하기
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <div id="craft-upload-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeCraftUploadModal(event)">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-200" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
+                <h3 class="text-lg font-bold text-gray-900 dark:text-white flex items-center">
+                    <i data-lucide="upload-cloud" class="w-5 h-5 mr-2 text-indigo-500"></i> 생성 이미지 업로드
+                </h3>
+                <button id="close-craft-upload-btn" onclick="window.closeCraftUploadModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
+            </div>
+            <div class="p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
+                <div class="flex gap-4 mb-5">
+                    <div class="w-24 h-32 sm:w-28 sm:h-36 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 flex-shrink-0">
+                        <img id="craft-upload-preview" src="" class="w-full h-full object-cover" alt="">
+                    </div>
+                    <div class="min-w-0 flex-1">
+                        <p class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">선택한 프로젝트</p>
+                        <p id="craft-upload-project-label" class="text-sm font-bold text-gray-800 dark:text-white truncate"></p>
+                        <label for="craft-upload-filename" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mt-4 mb-1">저장 파일명</label>
+                        <input type="text" id="craft-upload-filename" class="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="예: nai_001">
+                        <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">확장자는 자동으로 .webp가 붙습니다.</p>
+                    </div>
+                </div>
+
+                <div class="mb-4">
+                    <div class="flex items-center justify-between mb-2 gap-3">
+                        <p class="text-xs font-medium text-gray-500 dark:text-gray-400 flex-shrink-0">업로드 위치</p>
+                        <p id="craft-upload-selected-path" class="text-[11px] font-mono text-indigo-600 dark:text-indigo-400 truncate"></p>
+                    </div>
+                    <div id="craft-upload-target-list" class="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1"></div>
+                    <div id="craft-upload-target-empty" class="hidden text-sm text-gray-500 dark:text-gray-400 py-8 text-center border border-dashed border-gray-300 dark:border-gray-600 rounded-lg">
+                        선택 가능한 업로드 위치가 없습니다.
+                    </div>
+                </div>
+
+                <button id="craft-upload-submit-btn" onclick="window.submitCraftUploadModal()" class="w-full bg-indigo-600 text-white py-2.5 rounded-lg font-medium hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition dark:bg-indigo-700 dark:hover:bg-indigo-600">
+                    업로드하기
                 </button>
             </div>
         </div>
