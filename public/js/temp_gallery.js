@@ -75,6 +75,198 @@ export function handlePreciseImageUpload(file) {
  * 주요 변수: res, data, files, toDelete, TEMP_IMAGES - API 응답과 임시 이미지 상태.
  * 반환값: 명시 반환 없음.
  */
+function getInpaintCanvas() {
+    return document.getElementById('inpaint-mask-canvas');
+}
+
+function getInpaintCanvasPoint(event) {
+    const canvas = getInpaintCanvas();
+    const rect = canvas.getBoundingClientRect();
+    return {
+        x: ((event.clientX - rect.left) / rect.width) * canvas.width,
+        y: ((event.clientY - rect.top) / rect.height) * canvas.height
+    };
+}
+
+function drawInpaintLine(from, to) {
+    const canvas = getInpaintCanvas();
+    if (!canvas || !from || !to) return;
+    const ctx = canvas.getContext('2d');
+    const brushSize = parseInt(document.getElementById('inpaint-brush-size')?.value) || 48;
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.lineWidth = brushSize;
+    ctx.globalCompositeOperation = window.INPAINT_DRAW_MODE === 'eraser' ? 'destination-out' : 'source-over';
+    ctx.strokeStyle = 'rgba(255,255,255,1)';
+    ctx.beginPath();
+    ctx.moveTo(from.x, from.y);
+    ctx.lineTo(to.x, to.y);
+    ctx.stroke();
+    ctx.restore();
+}
+
+function setInpaintCanvasSize(width, height) {
+    const canvas = getInpaintCanvas();
+    if (!canvas) return;
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext('2d').clearRect(0, 0, width, height);
+}
+
+function hasInpaintMaskPixels(canvas) {
+    if (!canvas) return false;
+    const ctx = canvas.getContext('2d');
+    const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+    for (let i = 3; i < data.length; i += 4) {
+        if (data[i] > 0) return true;
+    }
+    return false;
+}
+
+function loadImageFromFile(file) {
+    return new Promise((resolve, reject) => {
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+            URL.revokeObjectURL(url);
+            resolve(img);
+        };
+        img.onerror = () => {
+            URL.revokeObjectURL(url);
+            reject(new Error('Failed to load inpaint image.'));
+        };
+        img.src = url;
+    });
+}
+
+function canvasToPngBase64(canvas) {
+    return canvas.toDataURL('image/png').split(',')[1];
+}
+
+export function clearInpaintMask() {
+    const canvas = getInpaintCanvas();
+    if (!canvas) return;
+    canvas.getContext('2d').clearRect(0, 0, canvas.width, canvas.height);
+}
+
+export function clearInpaintImage() {
+    window.INPAINT_IMAGE_FILE = null;
+    const input = document.getElementById('inpaint-image-input');
+    const prompt = document.getElementById('inpaint-image-prompt');
+    const editor = document.getElementById('inpaint-editor');
+    const preview = document.getElementById('inpaint-image-preview');
+    if (input) input.value = '';
+    if (window.INPAINT_IMAGE_OBJECT_URL) URL.revokeObjectURL(window.INPAINT_IMAGE_OBJECT_URL);
+    window.INPAINT_IMAGE_OBJECT_URL = null;
+    if (preview) preview.src = '';
+    if (prompt) prompt.classList.remove('hidden');
+    if (editor) {
+        editor.classList.add('hidden');
+        editor.classList.remove('flex');
+    }
+    window.clearInpaintMask();
+}
+
+export function setInpaintDrawMode(mode) {
+    window.INPAINT_DRAW_MODE = mode === 'eraser' ? 'eraser' : 'brush';
+    const brushBtn = document.getElementById('inpaint-brush-btn');
+    const eraserBtn = document.getElementById('inpaint-eraser-btn');
+    const active = ['bg-indigo-600', 'border-indigo-600', 'text-white'];
+    const inactive = ['bg-white', 'dark:bg-gray-800', 'border-gray-200', 'dark:border-gray-700', 'text-gray-500', 'dark:text-gray-400'];
+    if (brushBtn && eraserBtn) {
+        brushBtn.classList.remove(...active, ...inactive);
+        eraserBtn.classList.remove(...active, ...inactive);
+        if (window.INPAINT_DRAW_MODE === 'brush') {
+            brushBtn.classList.add(...active);
+            eraserBtn.classList.add(...inactive);
+        } else {
+            eraserBtn.classList.add(...active);
+            brushBtn.classList.add(...inactive);
+        }
+    }
+}
+
+export function handleInpaintPointerDown(event) {
+    if (!window.INPAINT_IMAGE_FILE) return;
+    event.preventDefault();
+    const point = getInpaintCanvasPoint(event);
+    window.INPAINT_IS_DRAWING = true;
+    window.INPAINT_LAST_POINT = point;
+    drawInpaintLine(point, point);
+    getInpaintCanvas()?.setPointerCapture?.(event.pointerId);
+}
+
+export function handleInpaintPointerMove(event) {
+    if (!window.INPAINT_IS_DRAWING) return;
+    event.preventDefault();
+    const point = getInpaintCanvasPoint(event);
+    drawInpaintLine(window.INPAINT_LAST_POINT, point);
+    window.INPAINT_LAST_POINT = point;
+}
+
+export function handleInpaintPointerUp(event) {
+    if (!window.INPAINT_IS_DRAWING) return;
+    event.preventDefault();
+    window.INPAINT_IS_DRAWING = false;
+    window.INPAINT_LAST_POINT = null;
+    getInpaintCanvas()?.releasePointerCapture?.(event.pointerId);
+}
+
+export function handleInpaintImageUpload(file) {
+    if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 사용할 수 있습니다.');
+    window.INPAINT_IMAGE_FILE = file;
+    const preview = document.getElementById('inpaint-image-preview');
+    const prompt = document.getElementById('inpaint-image-prompt');
+    const editor = document.getElementById('inpaint-editor');
+    if (window.INPAINT_IMAGE_OBJECT_URL) URL.revokeObjectURL(window.INPAINT_IMAGE_OBJECT_URL);
+    window.INPAINT_IMAGE_OBJECT_URL = URL.createObjectURL(file);
+    preview.onload = () => setInpaintCanvasSize(preview.naturalWidth, preview.naturalHeight);
+    preview.src = window.INPAINT_IMAGE_OBJECT_URL;
+    if (prompt) prompt.classList.add('hidden');
+    if (editor) {
+        editor.classList.remove('hidden');
+        editor.classList.add('flex');
+    }
+}
+
+export async function prepareInpaintPayload(width, height) {
+    if (!window.INPAINT_IMAGE_FILE) return null;
+    const maskCanvas = getInpaintCanvas();
+    if (!hasInpaintMaskPixels(maskCanvas)) throw new Error('Inpaint mask is empty.');
+
+    const sourceImage = await loadImageFromFile(window.INPAINT_IMAGE_FILE);
+    const imageCanvas = document.createElement('canvas');
+    imageCanvas.width = width;
+    imageCanvas.height = height;
+    imageCanvas.getContext('2d').drawImage(sourceImage, 0, 0, width, height);
+
+    const scaledMask = document.createElement('canvas');
+    scaledMask.width = width;
+    scaledMask.height = height;
+    const maskCtx = scaledMask.getContext('2d');
+    maskCtx.fillStyle = '#000';
+    maskCtx.fillRect(0, 0, width, height);
+    maskCtx.drawImage(maskCanvas, 0, 0, width, height);
+
+    const imageData = maskCtx.getImageData(0, 0, width, height);
+    for (let i = 0; i < imageData.data.length; i += 4) {
+        const masked = imageData.data[i] > 0 || imageData.data[i + 1] > 0 || imageData.data[i + 2] > 0;
+        imageData.data[i] = masked ? 255 : 0;
+        imageData.data[i + 1] = masked ? 255 : 0;
+        imageData.data[i + 2] = masked ? 255 : 0;
+        imageData.data[i + 3] = 255;
+    }
+    maskCtx.putImageData(imageData, 0, 0);
+
+    const strength = parseFloat(document.getElementById('inpaint-strength')?.value) || 1;
+    return {
+        image: canvasToPngBase64(imageCanvas),
+        mask: canvasToPngBase64(scaledMask),
+        strength: Math.min(1, Math.max(0.01, strength))
+    };
+}
+
 export async function loadTempImages() {
     try {
         const res = await fetch(`/api/list?prefix=${encodeURIComponent(window.TEMP_FOLDER)}&_t=${Date.now()}`);

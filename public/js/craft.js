@@ -181,6 +181,10 @@ export function loadCraftSettings() {
             if(settings.sm !== undefined && document.getElementById('nai-sm')) document.getElementById('nai-sm').checked = settings.sm;
             if(settings.sm_dyn !== undefined && document.getElementById('nai-sm-dyn')) document.getElementById('nai-sm-dyn').checked = settings.sm_dyn;
             if(settings.seed !== undefined && document.getElementById('nai-seed')) document.getElementById('nai-seed').value = settings.seed || '';
+            if(settings.inpaintStrength !== undefined && document.getElementById('inpaint-strength')) {
+                document.getElementById('inpaint-strength').value = settings.inpaintStrength;
+                if (document.getElementById('inpaint-strength-val')) document.getElementById('inpaint-strength-val').innerText = parseFloat(settings.inpaintStrength).toFixed(2);
+            }
             window.updateModelSpecificUI();
         }
     } catch(e) {}
@@ -207,7 +211,8 @@ export function saveCraftSettings() {
         sampler: document.getElementById('nai-sampler')?.value || 'k_euler_ancestral',
         sm: document.getElementById('nai-sm')?.checked || false,
         sm_dyn: document.getElementById('nai-sm-dyn')?.checked || false,
-        seed: document.getElementById('nai-seed')?.value || ''
+        seed: document.getElementById('nai-seed')?.value || '',
+        inpaintStrength: document.getElementById('inpaint-strength')?.value || '1'
     };
     localStorage.setItem('naiCraftSettings', JSON.stringify(settings));
 }
@@ -388,10 +393,11 @@ export async function generateNaiImage() {
         });
     };
 
-    let preloadedVibeBase64 = null; let preloadedDirectorBase64 = null;
+    let preloadedVibeBase64 = null; let preloadedDirectorBase64 = null; let inpaintPayload = null;
     try {
         if (model.includes('nai-diffusion-3') || model.includes('nai-diffusion-4')) { if (window.VIBE_IMAGE_FILE) preloadedVibeBase64 = await processVibeImage(window.VIBE_IMAGE_FILE); }
         if (model.includes('nai-diffusion-4-5') && window.PRECISE_IMAGE_FILE) { preloadedDirectorBase64 = await processDirectorImage(window.PRECISE_IMAGE_FILE); }
+        if (window.INPAINT_IMAGE_FILE && window.prepareInpaintPayload) inpaintPayload = await window.prepareInpaintPayload(width, height);
     } catch (err) { alert('이미지 전처리 실패: ' + err.message); window.updateQueueUI(false); return; }
 
     let charCaptionsArray = []; let negCharCaptionsArray = [];
@@ -411,7 +417,7 @@ export async function generateNaiImage() {
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < batchCount; i++) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
-        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType });
+        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType });
     }
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }
@@ -457,10 +463,29 @@ export async function processNextQueueItem() {
     const progressTimer = setInterval(() => { progress += increment; if (progress > 95) progress = 95; updateProgress('추론 진행 중...', progress); }, updateInterval);
 
     try {
+        const toInpaintModel = (model) => {
+            if (model.endsWith('-inpainting')) return model;
+            if (model === 'nai-diffusion-4-curated-preview') return 'nai-diffusion-4-curated-inpainting';
+            return `${model}-inpainting`;
+        };
+
         const requestBody = {
-            input: task.prompt, model: task.model, action: "generate",
+            input: task.prompt, model: task.inpaintPayload ? toInpaintModel(task.model) : task.model, action: task.inpaintPayload ? "infill" : "generate",
             parameters: { params_version: 3, width: task.width, height: task.height, steps: task.steps, sampler: task.sampler, scale: task.scale, cfg_rescale: 0.0, seed: task.seed, noise_schedule: "native", legacy_v3_extend: false, skip_cfg_above_sigma: 58.0 }
         };
+
+        if (task.inpaintPayload) {
+            requestBody.parameters.image = task.inpaintPayload.image;
+            requestBody.parameters.mask = task.inpaintPayload.mask;
+            requestBody.parameters.add_original_image = true;
+            requestBody.parameters.extra_noise_seed = task.seed;
+            requestBody.parameters.inpaintImg2ImgStrength = task.inpaintPayload.strength;
+            if (task.inpaintPayload.strength < 1) requestBody.parameters.img2img = { strength: task.inpaintPayload.strength, color_correct: true };
+            if (!task.model.includes('nai-diffusion-4')) {
+                requestBody.parameters.strength = task.inpaintPayload.strength;
+                requestBody.parameters.noise = 0;
+            }
+        }
 
         if (task.model.includes('nai-diffusion-4')) {
             requestBody.parameters.v4_prompt = { caption: { base_caption: task.prompt, char_captions: task.charCaptionsArray || [] }, use_coords: ((task.charCaptionsArray || []).length > 0), use_order: true };

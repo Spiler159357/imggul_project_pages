@@ -155,6 +155,24 @@ if (preciseDropZone && preciseFileInput) {
     preciseFileInput.addEventListener('change', (e) => { if (e.target.files.length) window.handlePreciseImageUpload(e.target.files[0]); });
 }
 
+const inpaintDropZone = document.getElementById('inpaint-image-dropzone'); const inpaintFileInput = document.getElementById('inpaint-image-input');
+if (inpaintDropZone && inpaintFileInput) {
+    inpaintDropZone.addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') inpaintFileInput.click(); });
+    inpaintDropZone.addEventListener('dragover', (e) => { e.preventDefault(); inpaintDropZone.classList.add('border-indigo-500'); });
+    inpaintDropZone.addEventListener('dragleave', (e) => { e.preventDefault(); inpaintDropZone.classList.remove('border-indigo-500'); });
+    inpaintDropZone.addEventListener('drop', (e) => { e.preventDefault(); inpaintDropZone.classList.remove('border-indigo-500'); if (e.dataTransfer.files.length) window.handleInpaintImageUpload(e.dataTransfer.files[0]); });
+    inpaintFileInput.addEventListener('change', (e) => { if (e.target.files.length) window.handleInpaintImageUpload(e.target.files[0]); });
+}
+
+const inpaintMaskCanvas = document.getElementById('inpaint-mask-canvas');
+if (inpaintMaskCanvas) {
+    inpaintMaskCanvas.addEventListener('pointerdown', window.handleInpaintPointerDown);
+    inpaintMaskCanvas.addEventListener('pointermove', window.handleInpaintPointerMove);
+    inpaintMaskCanvas.addEventListener('pointerup', window.handleInpaintPointerUp);
+    inpaintMaskCanvas.addEventListener('pointercancel', window.handleInpaintPointerUp);
+    inpaintMaskCanvas.addEventListener('pointerleave', window.handleInpaintPointerUp);
+}
+
 /**
  * 역할: 참조 이미지 슬라이더 값 변경 시 옆의 표시 숫자를 갱신한다.
  * 매개변수: id - 반복 중인 slider id, e - input 이벤트 객체.
@@ -163,6 +181,12 @@ if (preciseDropZone && preciseFileInput) {
  */
 ['vibe-strength', 'vibe-info', 'precise-strength', 'precise-fidelity'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', (e) => { document.getElementById(`${id}-val`).innerText = parseFloat(e.target.value).toFixed(1); });
+});
+
+document.getElementById('inpaint-brush-size')?.addEventListener('input', (e) => { document.getElementById('inpaint-brush-size-val').innerText = parseInt(e.target.value).toString(); });
+document.getElementById('inpaint-strength')?.addEventListener('input', (e) => {
+    document.getElementById('inpaint-strength-val').innerText = parseFloat(e.target.value).toFixed(2);
+    window.saveCraftSettings();
 });
 
 /**

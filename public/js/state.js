@@ -9,6 +9,11 @@ window.TEMP_IMAGES = [];
 
 window.VIBE_IMAGE_FILE = null;
 window.PRECISE_IMAGE_FILE = null;
+window.INPAINT_IMAGE_FILE = null;
+window.INPAINT_IMAGE_OBJECT_URL = null;
+window.INPAINT_DRAW_MODE = 'brush';
+window.INPAINT_IS_DRAWING = false;
+window.INPAINT_LAST_POINT = null;
 window.EXTRA_CHAR_COUNT = 0;
 
 window.GENERATION_QUEUE = [];
