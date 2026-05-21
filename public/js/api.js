@@ -1,4 +1,10 @@
 // 2. api.js: 백엔드/스토리지 데이터 교환 로직
+/**
+ * 역할: 저장 전 메타데이터 객체에서 불필요한 모델 필드를 재귀적으로 제거한다.
+ * 매개변수: metaDataObj - 배열, 객체, 원시값 형태의 메타데이터.
+ * 주요 변수: sanitized - 재귀 정리 후 복사된 메타데이터.
+ * 반환값: Model/model 필드가 제거된 값 또는 원본 원시값.
+ */
 function sanitizeMetadataForStorage(metaDataObj) {
     if (!metaDataObj || typeof metaDataObj !== 'object') return metaDataObj;
     const sanitized = Array.isArray(metaDataObj)
@@ -9,6 +15,12 @@ function sanitizeMetadataForStorage(metaDataObj) {
     return sanitized;
 }
 
+/**
+ * 역할: 폴더 단위 _meta.json에서 특정 파일의 메타데이터를 읽고 확장자 대체 이름까지 탐색한다.
+ * 매개변수: folderPrefix - 대상 폴더 prefix, fileName - 조회할 파일명.
+ * 주요 변수: metaPath, db, baseName, extFallbacks - 조회 경로와 대체 확장자 후보.
+ * 반환값: 정리된 메타데이터 객체, 없거나 실패하면 null.
+ */
 export async function loadMetadataFromDB(folderPrefix, fileName) {
     const metaPath = folderPrefix + '_meta.json';
     try {
@@ -27,6 +39,12 @@ export async function loadMetadataFromDB(folderPrefix, fileName) {
     return null;
 }
 
+/**
+ * 역할: 특정 파일의 메타데이터를 폴더 _meta.json에 병합 저장한다.
+ * 매개변수: folderPrefix - 저장 폴더 prefix, fileName - 저장 키, metaDataObj - 저장할 메타데이터.
+ * 주요 변수: metaPath, db, blob, buffer, uploadRes - 기존 DB와 업로드 요청 데이터.
+ * 반환값: 명시 반환 없음. 업로드 실패 시 Error를 throw한다.
+ */
 export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
     if (!metaDataObj) return;
     const metaPath = folderPrefix + '_meta.json';
@@ -51,6 +69,12 @@ export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
     if (!uploadRes.ok) throw new Error(`메타데이터 저장 실패 (${uploadRes.status})`);
 }
 
+/**
+ * 역할: 폴더 _meta.json에서 특정 파일과 같은 basename의 이미지 메타데이터를 제거한다.
+ * 매개변수: folderPrefix - 대상 폴더 prefix, fileName - 제거 기준 파일명.
+ * 주요 변수: metaPath, db, namesToDelete, changed - 삭제 후보와 변경 여부.
+ * 반환값: 명시 반환 없음. 실패는 내부에서 무시한다.
+ */
 export async function removeMetadataFromDB(folderPrefix, fileName) {
     const metaPath = folderPrefix + '_meta.json';
     try {
@@ -80,6 +104,12 @@ export async function removeMetadataFromDB(folderPrefix, fileName) {
     } catch(e) {}
 }
 
+/**
+ * 역할: 여러 파일명의 메타데이터를 한 번에 _meta.json에서 제거한다.
+ * 매개변수: folderPrefix - 대상 폴더 prefix, fileNamesArray - 제거할 파일명 배열.
+ * 주요 변수: metaPath, db, changed, buffer - 메타데이터 저장소와 갱신 데이터.
+ * 반환값: 명시 반환 없음. 실패는 내부에서 무시한다.
+ */
 export async function removeMultipleMetadataFromDB(folderPrefix, fileNamesArray) {
     const metaPath = folderPrefix + '_meta.json';
     try {
@@ -104,6 +134,12 @@ export async function removeMultipleMetadataFromDB(folderPrefix, fileNamesArray)
     } catch(e) {}
 }
 
+/**
+ * 역할: 파일 이동 시 기존 _meta.json의 메타데이터를 새 위치의 _meta.json으로 옮긴다.
+ * 매개변수: oldPrefix, oldName - 원본 위치/파일명, newPrefix, newName - 새 위치/파일명.
+ * 주요 변수: metaDataObj, oldMetaPath, db, buffer - 이동할 메타데이터와 원본 DB 갱신 데이터.
+ * 반환값: 명시 반환 없음. 이동할 메타데이터가 있으면 saveMetadataToDB를 호출한다.
+ */
 export async function moveMetadataInDB(oldPrefix, oldName, newPrefix, newName) {
     let metaDataObj = null;
     const oldMetaPath = oldPrefix + '_meta.json';
@@ -129,6 +165,12 @@ export async function moveMetadataInDB(oldPrefix, oldName, newPrefix, newName) {
     if (metaDataObj) { await window.saveMetadataToDB(newPrefix, newName, metaDataObj); }
 }
 
+/**
+ * 역할: 업로드/생성 이미지 파일에서 PNG 텍스트 청크 또는 바이너리 문자열의 프롬프트 메타데이터를 추출한다.
+ * 매개변수: file - 브라우저 File 객체.
+ * 주요 변수: buffer, view, metadataStr, metadataObj - 원본 바이트와 추출 결과.
+ * 반환값: 구조화된 메타데이터 객체, 원문 메타데이터 객체, 또는 null.
+ */
 export async function extractMetadata(file) {
     try {
         const buffer = await file.arrayBuffer();
@@ -136,6 +178,12 @@ export async function extractMetadata(file) {
         let metadataStr = "";
         let metadataObj = null;
 
+        /**
+         * 역할: NovelAI JSON 문자열을 UI에서 쓰는 표준 메타데이터 필드로 변환한다.
+         * 매개변수: jsonStr - NovelAI 메타데이터 JSON 문자열.
+         * 주요 변수: data, negativePrompt, extraCharacters, cleanData - 파싱 결과와 정규화 필드.
+         * 반환값: 변환된 메타데이터 객체, 형식이 맞지 않으면 null.
+         */
         const formatNaiJson = (jsonStr) => {
             try {
                 const data = JSON.parse(jsonStr);
@@ -235,6 +283,12 @@ export async function extractMetadata(file) {
     }
 }
 
+/**
+ * 역할: 일반 이미지 파일을 정해진 해상도 규칙에 맞춰 WebP File로 변환한다.
+ * 매개변수: file - 변환할 브라우저 File 객체.
+ * 주요 변수: img, objectUrl, canvas, ctx, width, height - 이미지 로드와 캔버스 변환 자원.
+ * 반환값: WebP File을 resolve하는 Promise. GIF/SVG 등 제외 대상은 원본 file을 반환한다.
+ */
 export async function convertToWebP(file) {
     if (!file) throw new Error("파일이 없습니다.");
     if (!file.type.startsWith('image/')) return file;
@@ -289,6 +343,12 @@ export async function convertToWebP(file) {
     });
 }
 
+/**
+ * 역할: 지정한 R2 key로 파일을 업로드하고 갤러리를 새로고침한다.
+ * 매개변수: key - 업로드 대상 경로, file - 업로드 파일, isFolder - 폴더 생성용 호출 여부.
+ * 주요 변수: finalHeaders, buffer, res - 업로드 헤더와 전송 데이터.
+ * 반환값: 명시 반환 없음. 오류는 alert로 사용자에게 알린다.
+ */
 export async function uploadFileWithKey(key, file, isFolder = false) {
     try {
         let finalHeaders = {

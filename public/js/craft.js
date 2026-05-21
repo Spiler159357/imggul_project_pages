@@ -1,4 +1,10 @@
 // 5. craft.js: 이미지 생성 큐, 설정 로직
+/**
+ * 역할: localStorage에 남아 있는 생성 큐를 복원하고 중단된 생성 작업을 재개한다.
+ * 매개변수: 없음.
+ * 주요 변수: savedQueue, GENERATION_QUEUE, IS_GENERATING - 저장된 작업 큐와 진행 상태.
+ * 반환값: 명시 반환 없음.
+ */
 export async function initGenerationQueue() {
     try {
         const savedQueue = localStorage.getItem('imggul_gen_queue');
@@ -13,8 +19,20 @@ export async function initGenerationQueue() {
     } catch (e) { localStorage.removeItem('imggul_gen_queue'); }
 }
 
+/**
+ * 역할: 현재 생성 큐를 localStorage에 직렬화해 저장한다.
+ * 매개변수: 없음.
+ * 주요 변수: GENERATION_QUEUE - 저장할 작업 배열.
+ * 반환값: 명시 반환 없음.
+ */
 export function saveQueueToStorage() { localStorage.setItem('imggul_gen_queue', JSON.stringify(window.GENERATION_QUEUE)); }
 
+/**
+ * 역할: 진행 중인 NovelAI 생성 큐를 비우고 취소 상태를 UI에 반영한다.
+ * 매개변수: 없음.
+ * 주요 변수: IS_GENERATING, CANCEL_GENERATION, floatText, sideText - 취소 상태와 표시 대상.
+ * 반환값: 명시 반환 없음.
+ */
 export function cancelNaiGeneration() {
     if (window.IS_GENERATING) {
         window.CANCEL_GENERATION = true; window.GENERATION_QUEUE = []; window.saveQueueToStorage();
@@ -23,6 +41,12 @@ export function cancelNaiGeneration() {
     }
 }
 
+/**
+ * 역할: 생성/취소 버튼과 진행률 오버레이의 표시 상태를 전환한다.
+ * 매개변수: show - 진행 UI를 보여줄지 여부.
+ * 주요 변수: genBtn, cancelBtn, sideContainer, floatOverlay - 갱신할 DOM 요소.
+ * 반환값: 명시 반환 없음.
+ */
 export function updateQueueUI(show) {
     const genBtn = document.getElementById('nai-generate-btn'); const cancelBtn = document.getElementById('nai-cancel-btn');
     const sideContainer = document.getElementById('craft-progress-container'); const floatOverlay = document.getElementById('craft-progress-overlay');
@@ -38,6 +62,12 @@ export function updateQueueUI(show) {
     lucide.createIcons();
 }
 
+/**
+ * 역할: 선택된 해상도, 스텝, 모델 옵션 기준으로 예상 Anlas 비용을 계산해 표시한다.
+ * 매개변수: 없음.
+ * 주요 변수: width, height, steps, pixels, model, baseCost, extraCost, totalCost - 비용 산출값.
+ * 반환값: 명시 반환 없음.
+ */
 export function calculateAnlas() {
     const resRadio = document.querySelector('input[name="nai-res"]:checked');
     const stepsInput = document.getElementById('nai-steps');
@@ -61,6 +91,12 @@ export function calculateAnlas() {
     else anlasDisplay.innerHTML = `<span class="text-orange-500 font-bold">${totalCost} Anlas</span> 소모 예상`;
 }
 
+/**
+ * 역할: 선택 모델에 따라 v3/v4/v4.5 전용 설정 영역을 표시하고 비용을 다시 계산한다.
+ * 매개변수: 없음.
+ * 주요 변수: model, v3, v4, v45 - 현재 모델명과 설정 영역 DOM.
+ * 반환값: 명시 반환 없음.
+ */
 export function updateModelSpecificUI() {
     const model = document.getElementById('nai-model')?.value || '';
     const v3 = document.getElementById('setting-v3'); const v4 = document.getElementById('setting-v4'); const v45 = document.getElementById('setting-v45');
@@ -81,6 +117,12 @@ export function updateModelSpecificUI() {
     window.calculateAnlas();
 }
 
+/**
+ * 역할: 상세/간단 프롬프트 입력값을 모두 비우고 설정을 저장한다.
+ * 매개변수: 없음.
+ * 주요 변수: PROMPT_IDS, rawEl - 초기화할 프롬프트 입력 요소.
+ * 반환값: 명시 반환 없음.
+ */
 export function clearPrompts() {
     window.PROMPT_IDS.forEach(id => {
         const el = document.getElementById(id);
@@ -91,6 +133,12 @@ export function clearPrompts() {
     window.saveCraftSettings();
 }
 
+/**
+ * 역할: 간단 프롬프트 입력과 상세 프롬프트 입력 UI를 전환한다.
+ * 매개변수: 없음.
+ * 주요 변수: isSimple, rawEl, detailedEl - 토글 상태와 표시 대상 컨테이너.
+ * 반환값: 명시 반환 없음.
+ */
 export function togglePromptMode() {
     const isSimple = document.getElementById('prompt-toggle-simple')?.checked;
     const rawEl = document.getElementById('prompt-raw');
@@ -105,6 +153,12 @@ export function togglePromptMode() {
     window.saveCraftSettings();
 }
 
+/**
+ * 역할: localStorage에 저장된 생성 설정을 UI 입력값으로 복원한다.
+ * 매개변수: 없음.
+ * 주요 변수: saved, settings, toggle, PROMPT_IDS - 저장 데이터와 복원 대상 입력.
+ * 반환값: 명시 반환 없음.
+ */
 export function loadCraftSettings() {
     try {
         const saved = localStorage.getItem('naiCraftSettings');
@@ -132,6 +186,12 @@ export function loadCraftSettings() {
     } catch(e) {}
 }
 
+/**
+ * 역할: 현재 생성 설정과 프롬프트 입력값을 localStorage에 저장한다.
+ * 매개변수: 없음.
+ * 주요 변수: promptsObj, settings - 저장할 프롬프트 맵과 설정 객체.
+ * 반환값: 명시 반환 없음.
+ */
 export function saveCraftSettings() {
     let promptsObj = {};
     window.PROMPT_IDS.forEach(id => { promptsObj[id] = document.getElementById(id)?.value || ''; });
@@ -152,6 +212,12 @@ export function saveCraftSettings() {
     localStorage.setItem('naiCraftSettings', JSON.stringify(settings));
 }
 
+/**
+ * 역할: 루트 폴더 목록을 불러와 생성 결과 업로드용 프로젝트 select 옵션을 갱신한다.
+ * 매개변수: 없음.
+ * 주요 변수: projSelect, prevProj, rootData, filteredFolders, optionsHtml - 프로젝트 옵션 구성값.
+ * 반환값: 명시 반환 없음.
+ */
 export async function updateCraftFolderList() {
     const projSelect = document.getElementById('craft-project-select');
     if (!projSelect) return;
@@ -170,6 +236,12 @@ export async function updateCraftFolderList() {
     } catch (e) { projSelect.innerHTML = '<option value="">목록 로드 실패</option>'; }
 }
 
+/**
+ * 역할: 선택된 프로젝트의 하위 캐릭터 폴더를 불러와 캐릭터 select를 갱신한다.
+ * 매개변수: 없음.
+ * 주요 변수: projSelect, charSelect, proj, aliasData, data, optionsHtml - 선택 프로젝트와 옵션 데이터.
+ * 반환값: 명시 반환 없음.
+ */
 export async function onCraftProjectChange() {
     const projSelect = document.getElementById('craft-project-select'); const charSelect = document.getElementById('craft-char-select');
     if (!projSelect || !charSelect) return;
@@ -194,6 +266,12 @@ export async function onCraftProjectChange() {
     } catch (e) { charSelect.innerHTML = '<option value="">로드 실패</option>'; }
 }
 
+/**
+ * 역할: 다중 캐릭터 프롬프트 입력 박스를 새로 추가한다.
+ * 매개변수: 없음.
+ * 주요 변수: EXTRA_CHAR_COUNT, id, container, div - 추가 개수와 생성 DOM.
+ * 반환값: 명시 반환 없음. 최대 개수 초과 시 alert 후 종료한다.
+ */
 export function addExtraCharacter() {
     if (window.EXTRA_CHAR_COUNT >= 6) return alert('최대 6명까지만 추가할 수 있습니다.');
     window.EXTRA_CHAR_COUNT++;
@@ -205,11 +283,23 @@ export function addExtraCharacter() {
     container.appendChild(div); lucide.createIcons();
 }
 
+/**
+ * 역할: 지정 id의 추가 캐릭터 입력 박스를 제거하고 카운트를 줄인다.
+ * 매개변수: id - 제거할 char-box 식별자.
+ * 주요 변수: el, EXTRA_CHAR_COUNT - 제거 대상 DOM과 현재 개수.
+ * 반환값: 명시 반환 없음.
+ */
 export function removeExtraCharacter(id) {
     const el = document.getElementById(`char-box-${id}`);
     if (el) { el.remove(); window.EXTRA_CHAR_COUNT--; }
 }
 
+/**
+ * 역할: UI 입력값을 NovelAI 생성 작업 배열로 변환해 큐에 적재하고 처리를 시작한다.
+ * 매개변수: 없음.
+ * 주요 변수: batchCount, splitPrompts, combinedPrompt, negativeText, width, height, model, charCaptionsArray - 생성 요청 구성값.
+ * 반환값: 명시 반환 없음. 이미 생성 중이면 바로 종료한다.
+ */
 export async function generateNaiImage() {
     if (window.IS_GENERATING) return;
     window.saveCraftSettings();
@@ -255,6 +345,12 @@ export async function generateNaiImage() {
 
     let currentBaseSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : parseInt(baseSeedInput);
 
+    /**
+     * 역할: Vibe 참조 이미지를 최대 1024px, 64px 배수 크기로 리사이즈해 base64 JPEG로 만든다.
+     * 매개변수: file - 참조 이미지 File 객체.
+     * 주요 변수: img, w, h, max, canvas - 리사이즈 계산과 캔버스 변환 대상.
+     * 반환값: base64 JPEG 문자열을 resolve하는 Promise.
+     */
     const processVibeImage = async (file) => {
         return new Promise((resolve, reject) => {
             const img = new Image();
@@ -270,6 +366,12 @@ export async function generateNaiImage() {
         });
     };
 
+    /**
+     * 역할: Director/Precise 참조 이미지를 모델 기준 해상도 캔버스에 맞춰 base64 JPEG로 만든다.
+     * 매개변수: file - 참조 이미지 File 객체.
+     * 주요 변수: img, targetW, targetH, ratio, drawW, drawH, offsetX, offsetY - 배치 계산값.
+     * 반환값: base64 JPEG 문자열을 resolve하는 Promise.
+     */
     const processDirectorImage = async (file) => {
         return new Promise((resolve, reject) => {
             const img = new Image();
@@ -314,6 +416,12 @@ export async function generateNaiImage() {
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }
 
+/**
+ * 역할: 생성 큐의 첫 작업을 NovelAI API로 처리하고 결과 파일/메타데이터를 임시 보관함에 저장한다.
+ * 매개변수: 없음.
+ * 주요 변수: task, requestBody, progressTimer, zip, generatedFile, tempKey, extractedMetadata - 작업 실행과 저장 데이터.
+ * 반환값: 명시 반환 없음. 큐가 남아 있으면 다음 작업을 재귀적으로 처리한다.
+ */
 export async function processNextQueueItem() {
     if (window.CANCEL_GENERATION || window.GENERATION_QUEUE.length === 0) {
         window.IS_GENERATING = false; window.CANCEL_GENERATION = false; window.GENERATION_QUEUE = [];
@@ -329,6 +437,12 @@ export async function processNextQueueItem() {
     let progress = 0; let expectedMs = task.steps * 200; if(expectedMs < 4000) expectedMs = 4000;
     const updateInterval = 100; const increment = 100 / (expectedMs / updateInterval);
     
+    /**
+     * 역할: 현재 배치 인덱스를 포함한 진행 메시지와 퍼센트를 사이드/플로팅 UI에 반영한다.
+     * 매개변수: txt - 표시할 상태 문구, prog - 진행률 숫자 또는 null.
+     * 주요 변수: fullMsg, pct, sideBar, floatBar - 렌더링할 메시지와 진행 바.
+     * 반환값: 명시 반환 없음.
+     */
     const updateProgress = (txt, prog) => {
         const fullMsg = `[${currentIdx}/${totalCount}] ${txt}`;
         if (sideText) sideText.innerText = fullMsg; if (floatText) floatText.innerText = fullMsg;
@@ -384,7 +498,14 @@ export async function processNextQueueItem() {
         if (!filename) throw new Error("결과 압축 파일이 비어 있습니다.");
         const fileData = await zip.files[filename].async("blob");
         
-        const d = new Date(); const pad = (n) => n.toString().padStart(2, '0');
+        const d = new Date();
+        /**
+         * 역할: 생성 파일명에 들어갈 날짜/시간 숫자를 두 자리 문자열로 맞춘다.
+         * 매개변수: n - 변환할 숫자.
+         * 주요 변수: n - padStart 대상 숫자.
+         * 반환값: 두 자리 숫자 문자열.
+         */
+        const pad = (n) => n.toString().padStart(2, '0');
         const dateString = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
         const newFileName = `nai_${dateString}_${Date.now().toString().slice(-4)}.png`;
         const generatedFile = new File([fileData], newFileName, { type: "image/png" });

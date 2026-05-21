@@ -1,10 +1,22 @@
 // functions/[[path]].js
 // Cloudflare Pages Functions - Catch-all 라우터 및 API 서버리스 핸들러
 
+/**
+ * 역할: R2 object key가 텍스트 메모 파일인지 판별한다.
+ * 매개변수: key - 검사할 파일 경로 문자열.
+ * 주요 변수: key - 소문자로 변환해 확장자를 확인한다.
+ * 반환값: .txt로 끝나면 true, 아니면 false.
+ */
 function isTextFile(key) {
     return key.toLowerCase().endsWith('.txt');
 }
 
+/**
+ * 역할: R2 object key를 폴더 prefix와 파일명으로 분리한다.
+ * 매개변수: key - 분리할 전체 경로 문자열.
+ * 주요 변수: parts, fileName, prefix - 경로 조각과 마지막 파일명.
+ * 반환값: { prefix, fileName } 형태의 객체.
+ */
 function splitPath(key) {
     const parts = key.split('/');
     const fileName = parts.pop();
@@ -13,6 +25,12 @@ function splitPath(key) {
 }
 
 // Pages Functions의 Entry Point (모든 Method 요청을 처리하는 Catch-all 핸들러)
+/**
+ * 역할: Cloudflare Pages catch-all 요청을 라우팅하고 인증, API, 정적/R2 파일 응답을 처리한다.
+ * 매개변수: context - request, env, Pages 런타임 바인딩을 포함한 요청 컨텍스트.
+ * 주요 변수: request, env, url, path, method, secret, isAdmin - 요청 라우팅과 권한 판단에 쓰는 값.
+ * 반환값: 각 라우트에 맞는 Response 객체.
+ */
 export async function onRequest(context) {
     const { request, env } = context;
     const url = new URL(request.url);
@@ -21,6 +39,12 @@ export async function onRequest(context) {
     const secret = env.secretKey;
     const commitVersion = (env.CF_PAGES_COMMIT_SHA || 'ccff5c7').slice(0, 7);
 
+    /**
+     * 역할: Cookie 헤더 문자열을 key-value 객체로 변환한다.
+     * 매개변수: cookieStr - request Cookie 헤더 원문.
+     * 주요 변수: cookies, parts - 쿠키 누적 객체와 name/value 분리 결과.
+     * 반환값: 쿠키 이름을 key로 가지는 객체.
+     */
     const getCookies = (cookieStr) => {
       const cookies = {};
       if (cookieStr) {

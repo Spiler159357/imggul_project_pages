@@ -1,5 +1,11 @@
 // 3. ui.js: 공통 UI 조작 및 유틸리티
 
+/**
+ * 역할: Craft 프롬프트 사이드바의 열림/닫힘 상태와 접근성 속성을 동기화한다.
+ * 매개변수: isOpen - 사이드바를 열지 여부.
+ * 주요 변수: sidebar, hamburgerBtn, workspace, sidebarWidth - UI 대상과 여백 계산값.
+ * 반환값: 명시 반환 없음.
+ */
 function setPromptSidebarOpen(isOpen) {
     const sidebar = document.getElementById('sidebar');
     const hamburgerBtn = document.getElementById('hamburger-btn');
@@ -19,6 +25,12 @@ function setPromptSidebarOpen(isOpen) {
     if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
 }
 
+/**
+ * 역할: 현재 사이드바 상태를 기준으로 열거나 강제로 닫는다.
+ * 매개변수: forceClose - true면 현재 상태와 무관하게 닫는다.
+ * 주요 변수: sidebar, isOpen - 현재 DOM 상태와 열림 여부.
+ * 반환값: 명시 반환 없음.
+ */
 export function toggleSidebar(forceClose = false) {
     const sidebar = document.getElementById('sidebar');
     if (!sidebar) return;
@@ -27,6 +39,12 @@ export function toggleSidebar(forceClose = false) {
     setPromptSidebarOpen(!forceClose && !isOpen);
 }
 
+/**
+ * 역할: 햄버거 버튼 클릭 이벤트를 처리해 사이드바 토글만 수행되도록 한다.
+ * 매개변수: event - 클릭 이벤트 객체.
+ * 주요 변수: event - 기본 동작과 버블링 차단에 사용한다.
+ * 반환값: 명시 반환 없음.
+ */
 export function handleHamburgerClick(event) {
     if (event) {
         event.preventDefault();
@@ -35,6 +53,12 @@ export function handleHamburgerClick(event) {
     window.toggleSidebar(false);
 }
 
+/**
+ * 역할: 사이드바 토글 버튼에 초기 접근성 속성과 중복 바인딩 방지 플래그를 설정한다.
+ * 매개변수: 없음.
+ * 주요 변수: hamburgerBtn - 초기화 대상 버튼.
+ * 반환값: 명시 반환 없음.
+ */
 export function initSidebarControls() {
     const hamburgerBtn = document.getElementById('hamburger-btn');
     if (!hamburgerBtn || hamburgerBtn.dataset.sidebarBound === 'true') return;
@@ -44,6 +68,12 @@ export function initSidebarControls() {
     hamburgerBtn.setAttribute('aria-expanded', 'false');
 }
 
+/**
+ * 역할: 경로에 연결된 별칭 문자열만 찾아 반환한다.
+ * 매개변수: path - 파일/폴더 경로, isFolder - 폴더 여부.
+ * 주요 변수: GLOBAL_ALIASES, PROJECT_ALIASES, parts, targetName - 별칭 조회 대상.
+ * 반환값: 별칭 문자열 또는 null.
+ */
 export function getAliasOnly(path, isFolder) {
     if (window.GLOBAL_ALIASES && window.GLOBAL_ALIASES[path]) return window.GLOBAL_ALIASES[path];
     const parts = path.split('/').filter(Boolean);
@@ -54,6 +84,12 @@ export function getAliasOnly(path, isFolder) {
     return null;
 }
 
+/**
+ * 역할: 별칭이 있으면 별칭을, 없으면 경로 마지막 조각이나 Root를 표시 이름으로 만든다.
+ * 매개변수: path - 파일/폴더 경로, isFolder - 폴더 여부.
+ * 주요 변수: alias, parts - 표시명 결정에 쓰는 별칭과 경로 조각.
+ * 반환값: UI에 표시할 이름 문자열.
+ */
 export function getDisplayName(path, isFolder) {
     const alias = window.getAliasOnly(path, isFolder);
     if (alias) return alias;
@@ -61,6 +97,12 @@ export function getDisplayName(path, isFolder) {
     return parts.length > 0 ? parts[parts.length - 1] : 'Root';
 }
 
+/**
+ * 역할: 저장된 테마 또는 시스템 설정을 기준으로 초기 다크 모드 클래스를 적용한다.
+ * 매개변수: 없음.
+ * 주요 변수: isDark - 적용할 다크 모드 여부.
+ * 반환값: 명시 반환 없음.
+ */
 export function initDarkMode() {
     const isDark = localStorage.getItem('theme') === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches);
     if (isDark) document.documentElement.classList.add('dark');
@@ -68,6 +110,12 @@ export function initDarkMode() {
     window.updateThemeIcon();
 }
 
+/**
+ * 역할: 현재 테마를 light/dark로 전환하고 localStorage에 저장한다.
+ * 매개변수: 없음.
+ * 주요 변수: documentElement, localStorage - 테마 클래스와 저장소.
+ * 반환값: 명시 반환 없음.
+ */
 export function toggleDarkMode() {
     if (document.documentElement.classList.contains('dark')) {
         document.documentElement.classList.remove('dark');
@@ -79,6 +127,12 @@ export function toggleDarkMode() {
     window.updateThemeIcon();
 }
 
+/**
+ * 역할: 현재 테마에 맞춰 테마 토글 버튼의 lucide 아이콘을 갱신한다.
+ * 매개변수: 없음.
+ * 주요 변수: btn, isDark - 아이콘 렌더링 대상과 테마 상태.
+ * 반환값: 명시 반환 없음.
+ */
 export function updateThemeIcon() {
     const btn = document.getElementById('theme-toggle-btn');
     if (btn) {
@@ -91,6 +145,12 @@ export function updateThemeIcon() {
 const NAV_BUTTON_ACTIVE_CLASSES = ['shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400'];
 const NAV_BUTTON_INACTIVE_CLASSES = ['text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200'];
 
+/**
+ * 역할: 메인 탭 화면을 전환하고 탭별 초기 로딩, 히스토리, 사이드바 상태를 갱신한다.
+ * 매개변수: tabName - explorer/craft/project 중 대상 탭, skipHistory - history push 생략 여부.
+ * 주요 변수: tabs, hamburgerBtn, promptSidebar - 탭 버튼/콘텐츠와 사이드바 제어 대상.
+ * 반환값: 명시 반환 없음.
+ */
 export function switchTab(tabName, skipHistory = false) {
     const tabs = ['explorer', 'craft', 'project'];
     
@@ -170,11 +230,23 @@ export function switchTab(tabName, skipHistory = false) {
     if (window.lucide) window.lucide.createIcons();
 }
 
+/**
+ * 역할: 발생한 오류 정보를 텍스트 파일로 만들어 서버 업로드 API에 저장한다.
+ * 매개변수: errContext - 오류 상황 설명, error - Error 객체 또는 문자열.
+ * 주요 변수: stack, logContent, dateString, fileName, buffer - 로그 내용과 업로드 데이터.
+ * 반환값: 명시 반환 없음. 저장 실패는 콘솔에만 기록한다.
+ */
 export async function logErrorToStorage(errContext, error) {
     try {
         const stack = error && error.stack ? error.stack : (error && error.message ? error.message : String(error));
         const logContent = `[${new Date().toISOString()}]\nContext: ${errContext}\n\nStacktrace:\n${stack}\n`;
         const d = new Date();
+        /**
+         * 역할: 날짜/시간 숫자를 두 자리 문자열로 맞춘다.
+         * 매개변수: n - 변환할 숫자.
+         * 주요 변수: n - 문자열 변환 후 padStart 대상.
+         * 반환값: 두 자리 숫자 문자열.
+         */
         const pad = (n) => n.toString().padStart(2, '0');
         const dateString = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
         const fileName = `logs/error_${dateString}_${Date.now().toString().slice(-4)}.txt`;

@@ -1,4 +1,10 @@
 // 6. temp_gallery.js: 임시 보관함 및 변환 유예 관리
+/**
+ * 역할: Vibe 참조 이미지를 초기화하고 관련 미리보기/슬라이더 UI를 숨긴다.
+ * 매개변수: 없음.
+ * 주요 변수: VIBE_IMAGE_FILE, vibe-image-input, vibe-sliders - 초기화할 상태와 DOM.
+ * 반환값: 명시 반환 없음.
+ */
 export function clearVibeImage() {
     window.VIBE_IMAGE_FILE = null;
     document.getElementById('vibe-image-input').value = '';
@@ -9,6 +15,12 @@ export function clearVibeImage() {
     window.calculateAnlas();
 }
 
+/**
+ * 역할: 업로드된 Vibe 참조 이미지를 상태에 저장하고 미리보기를 표시한다.
+ * 매개변수: file - 사용자가 선택한 이미지 File 객체.
+ * 주요 변수: VIBE_IMAGE_FILE, preview - 저장할 파일과 object URL 표시 대상.
+ * 반환값: 명시 반환 없음. 이미지가 아니면 alert 후 종료한다.
+ */
 export function handleVibeImageUpload(file) {
     if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 가능합니다.');
     window.VIBE_IMAGE_FILE = file;
@@ -22,6 +34,12 @@ export function handleVibeImageUpload(file) {
     window.calculateAnlas();
 }
 
+/**
+ * 역할: Precise/Director 참조 이미지를 초기화하고 관련 미리보기/슬라이더 UI를 숨긴다.
+ * 매개변수: 없음.
+ * 주요 변수: PRECISE_IMAGE_FILE, precise-image-input, precise-sliders - 초기화할 상태와 DOM.
+ * 반환값: 명시 반환 없음.
+ */
 export function clearPreciseImage() {
     window.PRECISE_IMAGE_FILE = null;
     document.getElementById('precise-image-input').value = '';
@@ -32,6 +50,12 @@ export function clearPreciseImage() {
     window.calculateAnlas();
 }
 
+/**
+ * 역할: 업로드된 Precise/Director 참조 이미지를 상태에 저장하고 미리보기를 표시한다.
+ * 매개변수: file - 사용자가 선택한 이미지 File 객체.
+ * 주요 변수: PRECISE_IMAGE_FILE, preview - 저장할 파일과 object URL 표시 대상.
+ * 반환값: 명시 반환 없음. 이미지가 아니면 alert 후 종료한다.
+ */
 export function handlePreciseImageUpload(file) {
     if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 가능합니다.');
     window.PRECISE_IMAGE_FILE = file;
@@ -45,6 +69,12 @@ export function handlePreciseImageUpload(file) {
     window.calculateAnlas();
 }
 
+/**
+ * 역할: 임시 생성 보관함 목록을 서버에서 불러오고 100개 초과 파일을 백그라운드 정리한다.
+ * 매개변수: 없음.
+ * 주요 변수: res, data, files, toDelete, TEMP_IMAGES - API 응답과 임시 이미지 상태.
+ * 반환값: 명시 반환 없음.
+ */
 export async function loadTempImages() {
     try {
         const res = await fetch(`/api/list?prefix=${encodeURIComponent(window.TEMP_FOLDER)}&_t=${Date.now()}`);
@@ -76,6 +106,12 @@ export async function loadTempImages() {
     } catch(e) { if (window.logErrorToStorage) window.logErrorToStorage("임시 저장소 로드 실패", e); }
 }
 
+/**
+ * 역할: 임시 보관함의 모든 이미지와 메타데이터를 삭제하고 UI 상태를 초기화한다.
+ * 매개변수: 없음.
+ * 주요 변수: btn, oldHtml, keysToDelete, blob, buffer - 삭제 대상과 버튼 상태.
+ * 반환값: 명시 반환 없음.
+ */
 export async function clearTempGallery() {
     if (window.TEMP_IMAGES.length === 0) return alert('임시 보관함이 이미 비어있습니다.');
     if (!confirm(`임시 보관함에 있는 ${window.TEMP_IMAGES.length}개의 이미지를 모두 영구 삭제하시겠습니까?\n(이 작업은 복구할 수 없습니다)`)) return;
@@ -97,6 +133,12 @@ export async function clearTempGallery() {
     finally { btn.innerHTML = oldHtml; btn.disabled = false; lucide.createIcons(); }
 }
 
+/**
+ * 역할: Craft 히스토리 패널을 확장/축소 상태로 전환한다.
+ * 매개변수: 없음.
+ * 주요 변수: CRAFT_HISTORY_EXPANDED, historyPanel, tempGrid, overlay - 패널 상태와 레이아웃 대상.
+ * 반환값: 명시 반환 없음.
+ */
 export function toggleCraftHistoryExpanded() {
     if (window.CRAFT_HISTORY_COLLAPSED) window.setCraftHistoryCollapsed(false);
     window.CRAFT_HISTORY_EXPANDED = !window.CRAFT_HISTORY_EXPANDED;
@@ -118,6 +160,12 @@ export function toggleCraftHistoryExpanded() {
     lucide.createIcons();
 }
 
+/**
+ * 역할: Craft 히스토리 패널을 좁은 접힘 상태 또는 기본 상태로 설정한다.
+ * 매개변수: collapsed - 접힘 상태 여부.
+ * 주요 변수: historyPanel, toggleIcon, title, expandBtn, body - 표시를 바꿀 DOM 요소.
+ * 반환값: 명시 반환 없음.
+ */
 export function setCraftHistoryCollapsed(collapsed) {
     window.CRAFT_HISTORY_COLLAPSED = collapsed;
     const historyPanel = document.getElementById('craft-history-panel');
@@ -141,10 +189,22 @@ export function setCraftHistoryCollapsed(collapsed) {
     if (window.lucide) window.lucide.createIcons();
 }
 
+/**
+ * 역할: 현재 접힘 상태의 반대로 Craft 히스토리 패널을 전환한다.
+ * 매개변수: 없음.
+ * 주요 변수: CRAFT_HISTORY_COLLAPSED - 현재 패널 접힘 상태.
+ * 반환값: 명시 반환 없음.
+ */
 export function toggleCraftHistoryPanel() {
     window.setCraftHistoryCollapsed(!window.CRAFT_HISTORY_COLLAPSED);
 }
 
+/**
+ * 역할: 임시 이미지 목록, 활성 이미지 미리보기, 액션 버튼 상태를 렌더링한다.
+ * 매개변수: 없음.
+ * 주요 변수: grid, countSpan, activeData, deleteBtn, uploadBtn, importBtn - 렌더링 대상과 활성 상태.
+ * 반환값: 명시 반환 없음.
+ */
 export function renderTempGallery() {
     const grid = document.getElementById('craft-temp-grid'); const countSpan = document.getElementById('craft-history-count');
     const activeEmpty = document.getElementById('craft-active-empty'); const activeContainer = document.getElementById('craft-active-container');
@@ -188,6 +248,12 @@ export function renderTempGallery() {
     lucide.createIcons();
 }
 
+/**
+ * 역할: 현재 선택된 임시 이미지를 다운로드하고 WebP는 PNG로 변환해 내려받는다.
+ * 매개변수: 없음.
+ * 주요 변수: imgData, downloadUrl, downloadName, blob, canvas, pngBlob - 다운로드/변환 데이터.
+ * 반환값: 명시 반환 없음.
+ */
 export async function downloadActiveTempImage() {
     if (window.CRAFT_ACTIVE_INDEX === null) return;
     const imgData = window.TEMP_IMAGES[window.CRAFT_ACTIVE_INDEX];
@@ -212,6 +278,12 @@ export async function downloadActiveTempImage() {
     if (downloadUrl.startsWith('blob:')) setTimeout(() => URL.revokeObjectURL(downloadUrl), 1000);
 }
 
+/**
+ * 역할: 현재 선택된 임시 이미지를 서버와 로컬 목록에서 제거한다.
+ * 매개변수: 없음.
+ * 주요 변수: imgData, CRAFT_ACTIVE_INDEX, TEMP_IMAGES - 삭제 대상과 활성 인덱스.
+ * 반환값: 명시 반환 없음.
+ */
 export async function removeActiveTempImage() {
     if (window.CRAFT_ACTIVE_INDEX === null) return;
     if (!confirm('임시 보관소에서 이 이미지를 영구 삭제하시겠습니까?')) return;
@@ -224,6 +296,12 @@ export async function removeActiveTempImage() {
     window.renderTempGallery();
 }
 
+/**
+ * 역할: 현재 선택된 임시 이미지를 프로젝트 폴더로 업로드하기 위한 모달을 준비한다.
+ * 매개변수: 없음.
+ * 주요 변수: index, imgData, selectedProject, projectPath, modal, uploadFileNameInput - 업로드 대상 설정값.
+ * 반환값: 명시 반환 없음.
+ */
 export async function prepareUploadActiveTempImage() {
     if (window.CRAFT_ACTIVE_INDEX === null) return;
     const index = window.CRAFT_ACTIVE_INDEX; const imgData = window.TEMP_IMAGES[index]; if (!imgData) return;
@@ -251,6 +329,12 @@ export async function prepareUploadActiveTempImage() {
     if (window.lucide) window.lucide.createIcons();
 }
 
+/**
+ * 역할: Craft 업로드 모달을 닫고 미리보기 이미지를 초기화한다.
+ * 매개변수: e - 닫기 이벤트 객체.
+ * 주요 변수: modal, preview - 닫을 모달과 초기화할 이미지.
+ * 반환값: 명시 반환 없음.
+ */
 export function closeCraftUploadModal(e) {
     if (e && e.target !== e.currentTarget && e.target.id !== 'close-craft-upload-btn') return;
     const modal = document.getElementById('craft-upload-modal');
@@ -259,6 +343,12 @@ export function closeCraftUploadModal(e) {
     if (preview) preview.src = '';
 }
 
+/**
+ * 역할: 프로젝트 루트와 하위 폴더를 업로드 대상 버튼 목록으로 렌더링한다.
+ * 매개변수: projectPath - 기준 프로젝트 경로.
+ * 주요 변수: list, empty, normalizedProjectPath, targets, data - 대상 목록과 렌더링 데이터.
+ * 반환값: 명시 반환 없음.
+ */
 export async function loadCraftUploadTargets(projectPath) {
     const list = document.getElementById('craft-upload-target-list');
     const empty = document.getElementById('craft-upload-target-empty');
@@ -321,6 +411,12 @@ export async function loadCraftUploadTargets(projectPath) {
     if (window.lucide) window.lucide.createIcons();
 }
 
+/**
+ * 역할: 업로드 대상 경로를 선택하고 대상 버튼의 활성 스타일을 갱신한다.
+ * 매개변수: targetPath - 선택할 업로드 폴더 경로.
+ * 주요 변수: CRAFT_UPLOAD_TARGET_PATH, selectedPath, active - 선택 상태와 표시 대상.
+ * 반환값: 명시 반환 없음.
+ */
 export function selectCraftUploadTarget(targetPath) {
     window.CRAFT_UPLOAD_TARGET_PATH = targetPath.endsWith('/') ? targetPath : targetPath + '/';
     const selectedPath = document.getElementById('craft-upload-selected-path');
@@ -335,6 +431,12 @@ export function selectCraftUploadTarget(targetPath) {
     });
 }
 
+/**
+ * 역할: 업로드 모달 입력값을 검증하고 선택 임시 이미지를 대상 폴더로 업로드한다.
+ * 매개변수: 없음.
+ * 주요 변수: input, fileNameInput, CRAFT_UPLOAD_TARGET_PATH - 파일명과 대상 경로.
+ * 반환값: 명시 반환 없음.
+ */
 export async function submitCraftUploadModal() {
     const input = document.getElementById('craft-upload-filename');
     let fileNameInput = input ? input.value.trim() : '';
@@ -343,6 +445,12 @@ export async function submitCraftUploadModal() {
     await uploadActiveTempImageToTarget(window.CRAFT_UPLOAD_TARGET_PATH, fileNameInput);
 }
 
+/**
+ * 역할: 선택된 임시 이미지를 WebP로 변환해 목표 폴더에 저장하고 기존 임시 파일/메타데이터를 정리한다.
+ * 매개변수: targetPath - 업로드 대상 폴더, fileNameInput - 확장자 없는 새 파일명.
+ * 주요 변수: imgData, extractedMetadata, originalFile, finalFile, finalPath, buffer - 이동할 파일과 메타데이터.
+ * 반환값: 명시 반환 없음.
+ */
 async function uploadActiveTempImageToTarget(targetPath, fileNameInput) {
     if (window.CRAFT_UPLOAD_ACTIVE_INDEX === null || window.CRAFT_UPLOAD_ACTIVE_INDEX === undefined) return;
     const index = window.CRAFT_UPLOAD_ACTIVE_INDEX; const imgData = window.TEMP_IMAGES[index]; if (!imgData) return;
@@ -397,6 +505,12 @@ async function uploadActiveTempImageToTarget(targetPath, fileNameInput) {
     }
 }
 
+/**
+ * 역할: 임시 보관함에 PNG가 많이 쌓이면 오래된 항목을 WebP로 지연 변환한다.
+ * 매개변수: 없음.
+ * 주요 변수: pngFiles, filesToConvert, webpFile, webpKey, index - 변환 대상과 결과 경로.
+ * 반환값: 명시 반환 없음.
+ */
 export async function processDelayedWebPConversion() {
     const pngFiles = window.TEMP_IMAGES.filter(img => img.key.endsWith('.png'));
     if (pngFiles.length > 5) {

@@ -27,6 +27,12 @@ if (window.IS_ADMIN) {
 }
 
 // [버그 해결] 찰나의 시간차가 없도록, DOMContentLoaded 가 끝나자마자 강제 탭 초기화를 진행합니다.
+/**
+ * 역할: DOM 로드가 끝난 뒤 기본 탭을 explorer로 초기화하는 이벤트 콜백이다.
+ * 매개변수: 없음.
+ * 주요 변수: switchTab - 초기 탭 표시 함수.
+ * 반환값: 명시 반환 없음.
+ */
 document.addEventListener('DOMContentLoaded', () => {
     window.switchTab('explorer', true);
 });
@@ -47,6 +53,12 @@ if (window.loadAliases) {
 // 이벤트 리스너 등록
 // ----------------------------------------------------
 
+/**
+ * 역할: Craft 탭에서 방향키로 임시 이미지 선택 인덱스를 이동하는 키보드 이벤트 콜백이다.
+ * 매개변수: e - keydown 이벤트 객체.
+ * 주요 변수: craftTab, currentIndex, grid, cols, newIndex, handled - 키 이동 계산값.
+ * 반환값: 명시 반환 없음.
+ */
 document.addEventListener('keydown', (e) => {
     const craftTab = document.getElementById('main-craft-content');
     if (!craftTab || craftTab.classList.contains('hidden')) return;
@@ -83,6 +95,12 @@ document.addEventListener('keydown', (e) => {
     }
 });
 
+/**
+ * 역할: 프롬프트 textarea마다 자동 높이 조절과 Enter 생성 단축 동작을 등록한다.
+ * 매개변수: textarea - 반복 중인 textarea DOM 요소.
+ * 주요 변수: textarea, saveCraftSettings, generateNaiImage - 입력 저장과 생성 실행 함수.
+ * 반환값: 명시 반환 없음.
+ */
 document.querySelectorAll('.prompt-input, #nai-negative').forEach(textarea => {
     textarea.addEventListener('input', function() {
         this.style.height = 'auto'; this.style.height = (this.scrollHeight) + 'px';
@@ -95,6 +113,12 @@ document.querySelectorAll('.prompt-input, #nai-negative').forEach(textarea => {
 
 document.getElementById('prompt-toggle-simple')?.addEventListener('change', window.togglePromptMode);
 
+/**
+ * 역할: 생성 설정 input 목록에 설정 저장 이벤트를 일괄 등록한다.
+ * 매개변수: id - 반복 중인 input 요소 id.
+ * 주요 변수: id, saveCraftSettings - 이벤트 대상과 저장 함수.
+ * 반환값: 명시 반환 없음.
+ */
 ['nai-model', 'nai-steps', 'nai-scale', 'nai-sampler', 'nai-seed'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', window.saveCraftSettings);
 });
@@ -103,6 +127,12 @@ document.getElementById('nai-model')?.addEventListener('change', window.updateMo
 
 const vibeDropZone = document.getElementById('vibe-image-dropzone'); const vibeFileInput = document.getElementById('vibe-image-input');
 if (vibeDropZone && vibeFileInput) {
+    /**
+     * 역할: Vibe 이미지 드롭존의 클릭/드래그/파일 변경 이벤트에서 참조 이미지를 선택한다.
+     * 매개변수: e - 각 DOM 이벤트 객체.
+     * 주요 변수: vibeDropZone, vibeFileInput, handleVibeImageUpload - 입력 요소와 처리 함수.
+     * 반환값: 명시 반환 없음.
+     */
     vibeDropZone.addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') vibeFileInput.click(); });
     vibeDropZone.addEventListener('dragover', (e) => { e.preventDefault(); vibeDropZone.classList.add('border-indigo-500'); });
     vibeDropZone.addEventListener('dragleave', (e) => { e.preventDefault(); vibeDropZone.classList.remove('border-indigo-500'); });
@@ -112,6 +142,12 @@ if (vibeDropZone && vibeFileInput) {
 
 const preciseDropZone = document.getElementById('precise-image-dropzone'); const preciseFileInput = document.getElementById('precise-image-input');
 if (preciseDropZone && preciseFileInput) {
+    /**
+     * 역할: Precise 이미지 드롭존의 클릭/드래그/파일 변경 이벤트에서 참조 이미지를 선택한다.
+     * 매개변수: e - 각 DOM 이벤트 객체.
+     * 주요 변수: preciseDropZone, preciseFileInput, handlePreciseImageUpload - 입력 요소와 처리 함수.
+     * 반환값: 명시 반환 없음.
+     */
     preciseDropZone.addEventListener('click', (e) => { if (e.target.tagName !== 'BUTTON') preciseFileInput.click(); });
     preciseDropZone.addEventListener('dragover', (e) => { e.preventDefault(); preciseDropZone.classList.add('border-indigo-500'); });
     preciseDropZone.addEventListener('dragleave', (e) => { e.preventDefault(); preciseDropZone.classList.remove('border-indigo-500'); });
@@ -119,14 +155,38 @@ if (preciseDropZone && preciseFileInput) {
     preciseFileInput.addEventListener('change', (e) => { if (e.target.files.length) window.handlePreciseImageUpload(e.target.files[0]); });
 }
 
+/**
+ * 역할: 참조 이미지 슬라이더 값 변경 시 옆의 표시 숫자를 갱신한다.
+ * 매개변수: id - 반복 중인 slider id, e - input 이벤트 객체.
+ * 주요 변수: id, target.value - 표시할 슬라이더 값.
+ * 반환값: 명시 반환 없음.
+ */
 ['vibe-strength', 'vibe-info', 'precise-strength', 'precise-fidelity'].forEach(id => {
     document.getElementById(id)?.addEventListener('input', (e) => { document.getElementById(`${id}-val`).innerText = parseFloat(e.target.value).toFixed(1); });
 });
 
+/**
+ * 역할: 체크박스형 생성 옵션 변경 시 현재 설정을 저장한다.
+ * 매개변수: id - 반복 중인 checkbox id.
+ * 주요 변수: id, saveCraftSettings - 이벤트 대상과 저장 함수.
+ * 반환값: 명시 반환 없음.
+ */
 ['nai-sm', 'nai-sm-dyn'].forEach(id => { document.getElementById(id)?.addEventListener('change', window.saveCraftSettings); });
+/**
+ * 역할: 해상도 radio 변경 시 현재 설정을 저장한다.
+ * 매개변수: radio - 반복 중인 해상도 radio 요소.
+ * 주요 변수: radio, saveCraftSettings - 이벤트 대상과 저장 함수.
+ * 반환값: 명시 반환 없음.
+ */
 document.querySelectorAll('input[name="nai-res"]')?.forEach(radio => { radio.addEventListener('change', window.saveCraftSettings); });
 
 document.getElementById('nai-steps')?.addEventListener('input', window.calculateAnlas);
+/**
+ * 역할: 해상도 radio 변경 시 예상 Anlas 비용을 다시 계산한다.
+ * 매개변수: radio - 반복 중인 해상도 radio 요소.
+ * 주요 변수: radio, calculateAnlas - 이벤트 대상과 비용 계산 함수.
+ * 반환값: 명시 반환 없음.
+ */
 document.querySelectorAll('input[name="nai-res"]')?.forEach(radio => { radio.addEventListener('change', window.calculateAnlas); });
 
 const dropZone = document.getElementById('gallery-drop-zone'); const fileInput = document.getElementById('gallery-file-input');
@@ -134,6 +194,12 @@ const removeBtn = document.getElementById('gallery-remove-btn'); const submitBtn
 const fileNameInput = document.getElementById('gallery-upload-filename');
 
 if (dropZone) {
+    /**
+     * 역할: 갤러리 업로드 드롭존의 클릭/드래그/드롭 이벤트에서 업로드 파일 미리보기를 준비한다.
+     * 매개변수: e - 각 DOM 이벤트 객체.
+     * 주요 변수: dropZone, fileInput, removeBtn, showGalleryPreview - 입력 요소와 미리보기 함수.
+     * 반환값: 명시 반환 없음.
+     */
     dropZone.addEventListener('click', (e) => { if (e.target !== removeBtn) fileInput.click(); });
     dropZone.addEventListener('dragover', (e) => { e.preventDefault(); dropZone.classList.add('drag-active'); });
     dropZone.addEventListener('dragleave', (e) => { e.preventDefault(); dropZone.classList.remove('drag-active'); });
@@ -145,6 +211,12 @@ if (fileInput) fileInput.addEventListener('change', (e) => { if (e.target.files.
 if (fileNameInput) fileNameInput.addEventListener('input', window.updateGalleryPreviewText);
 
 if (submitBtn) {
+    /**
+     * 역할: 갤러리 업로드 버튼 클릭 시 파일 변환, 메타데이터 추출, 서버 업로드를 수행한다.
+     * 매개변수: 없음.
+     * 주요 변수: finalFile, extractedMetadata, fileName, finalPath, headers, buffer, res - 업로드 처리 데이터.
+     * 반환값: 명시 반환 없음.
+     */
     submitBtn.addEventListener('click', async () => {
         if (!window.galleryFileToUpload) return;
         submitBtn.disabled = true;
@@ -180,6 +252,12 @@ if (submitBtn) {
 
 const memoSubmitBtn = document.getElementById('memo-create-submit-btn');
 if (memoSubmitBtn) {
+    /**
+     * 역할: 메모 작성 버튼 클릭 시 텍스트 내용을 .txt 파일로 업로드한다.
+     * 매개변수: 없음.
+     * 주요 변수: content, fname, blob, fileName, finalPath, headers, buffer, res - 메모 저장 데이터.
+     * 반환값: 명시 반환 없음.
+     */
     memoSubmitBtn.addEventListener('click', async () => {
         const content = document.getElementById('memo-create-content').value; const fname = document.getElementById('memo-create-filename').value.trim();
         if (!content) return alert('내용을 입력해주세요.');
@@ -201,6 +279,12 @@ if (memoSubmitBtn) {
     });
 }
 
+/**
+ * 역할: 브라우저 뒤로가기/앞으로가기에서 모달 닫기와 탭/경로 복원을 처리한다.
+ * 매개변수: e - popstate 이벤트 객체.
+ * 주요 변수: previewModal, uploadModal, memoModal, importModal, modalClosed, e.state - 복원 대상 상태.
+ * 반환값: 명시 반환 없음.
+ */
 window.addEventListener('popstate', (e) => {
     const previewModal = document.getElementById('preview-modal'); const uploadModal = document.getElementById('gallery-upload-modal');
     const memoModal = document.getElementById('memo-create-modal'); const importModal = document.getElementById('import-modal');

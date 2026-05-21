@@ -1,4 +1,10 @@
 // 4. explorer.js: 탐색기 화면 전용 로직
+/**
+ * 역할: 지정한 폴더 prefix의 목록과 별칭을 불러와 갤러리/사이드바를 렌더링한다.
+ * 매개변수: prefix - 로드할 폴더 경로, skipHistory - 브라우저 history push 생략 여부.
+ * 주요 변수: galleryContent, grid, loader, cached, listRes, aliasRes - 스크롤 저장, 캐시, API 응답.
+ * 반환값: 명시 반환 없음. 캐시가 유효하면 API 호출 없이 종료한다.
+ */
 export async function loadPath(prefix, skipHistory = false) {
     const galleryContent = document.getElementById('gallery-content');
     if (window.currentPrefix !== undefined && window.FOLDER_DATA_CACHE[window.currentPrefix] && galleryContent) {
@@ -52,6 +58,12 @@ export async function loadPath(prefix, skipHistory = false) {
     }
 }
 
+/**
+ * 역할: 폴더와 파일 목록을 카드 형태로 파일 그리드에 렌더링한다.
+ * 매개변수: folders - 폴더 prefix 배열, files - 파일 메타데이터 배열.
+ * 주요 변수: grid, folderPrefix, fileName, alias, isText, isImage, fileUrl - 렌더링 대상과 표시 정보.
+ * 반환값: 명시 반환 없음.
+ */
 export function renderFiles(folders, files) {
     const grid = document.getElementById('file-grid');
     if(!grid) return;
@@ -99,6 +111,12 @@ export function renderFiles(folders, files) {
     lucide.createIcons();
 }
 
+/**
+ * 역할: 현재 폴더의 하위 폴더/파일을 사이드바 목록으로 렌더링한다.
+ * 매개변수: folders - 폴더 prefix 배열, files - 파일 메타데이터 배열.
+ * 주요 변수: list, parentPrefix, folderName, alias, fileUrl, icon - 사이드바 항목 구성값.
+ * 반환값: 명시 반환 없음.
+ */
 export function renderSidebarFoldersAndFiles(folders, files) {
     const list = document.getElementById('sidebar-folder-list');
     if (!list) return;
@@ -140,6 +158,12 @@ export function renderSidebarFoldersAndFiles(folders, files) {
     lucide.createIcons();
 }
 
+/**
+ * 역할: 현재 prefix를 기준으로 상단 breadcrumb 버튼들을 갱신한다.
+ * 매개변수: prefix - 현재 폴더 경로.
+ * 주요 변수: container, relativePath, rootLabel, parts, accum - breadcrumb 경로 계산값.
+ * 반환값: 명시 반환 없음.
+ */
 export function updateBreadcrumbs(prefix) {
     const container = document.getElementById('breadcrumbs');
     if(!container) return;
@@ -169,11 +193,23 @@ export function updateBreadcrumbs(prefix) {
     lucide.createIcons();
 }
 
+/**
+ * 역할: 현재 폴더 캐시를 비우고 갤러리를 다시 로드한다.
+ * 매개변수: 없음.
+ * 주요 변수: FOLDER_DATA_CACHE, currentPrefix - 삭제할 캐시와 재로드 대상 경로.
+ * 반환값: 명시 반환 없음.
+ */
 export function refreshGallery() { 
     if (window.FOLDER_DATA_CACHE && window.FOLDER_DATA_CACHE[window.currentPrefix]) delete window.FOLDER_DATA_CACHE[window.currentPrefix];
     window.loadPath(window.currentPrefix, true); 
 }
 
+/**
+ * 역할: 사용자 입력으로 새 폴더용 .keep 파일을 업로드해 폴더를 생성한다.
+ * 매개변수: 없음.
+ * 주요 변수: folderName, fullPath, file - 생성할 폴더 이름과 업로드할 placeholder 파일.
+ * 반환값: 명시 반환 없음.
+ */
 export function createNewFolder() {
     const folderName = prompt("생성할 폴더명을 입력하세요:");
     if (!folderName) return;
@@ -182,6 +218,12 @@ export function createNewFolder() {
     window.uploadFileWithKey(fullPath, file, true);
 }
 
+/**
+ * 역할: 확인 후 지정 폴더와 내부 파일들을 서버 관리 API로 삭제한다.
+ * 매개변수: folderPrefix - 삭제할 폴더 prefix.
+ * 주요 변수: res - delete_folder API 응답.
+ * 반환값: 명시 반환 없음. 성공 시 갤러리를 새로고침한다.
+ */
 export async function deleteFolder(folderPrefix) {
     if (!confirm(`'${folderPrefix}' 폴더와 그 안의 모든 파일을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
     try {
@@ -191,6 +233,12 @@ export async function deleteFolder(folderPrefix) {
     } catch (err) { alert(err.message); }
 }
 
+/**
+ * 역할: 현재 미리보기 중인 파일을 삭제하고 연결 메타데이터를 제거한다.
+ * 매개변수: 없음.
+ * 주요 변수: currentFileKey, parts, fileName, prefix, res - 삭제 대상과 API 응답.
+ * 반환값: 명시 반환 없음. 성공 시 모달을 닫고 갤러리를 새로고침한다.
+ */
 export async function deleteCurrentFile() {
     if (!confirm('정말 삭제하시겠습니까? 복구할 수 없습니다.')) return;
     try {

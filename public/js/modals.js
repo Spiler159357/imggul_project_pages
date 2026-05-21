@@ -1,5 +1,11 @@
 // 팝업 창(업로드, 메모, 파일 미리보기, Import 탐색기) 제어
 
+/**
+ * 역할: 미리보기 모달의 현재 이미지를 다운로드하고 WebP는 PNG로 변환해 제공한다.
+ * 매개변수: 없음.
+ * 주요 변수: currentFileKey, downloadUrl, downloadName, btn, blob, canvas - 다운로드 대상과 변환 자원.
+ * 반환값: 명시 반환 없음.
+ */
 window.downloadModalImage = async function() {
     if (!window.currentFileKey) return;
 
@@ -66,6 +72,12 @@ window.downloadModalImage = async function() {
     }
 };
 
+/**
+ * 역할: 선택 이미지의 저장된 메타데이터를 읽어 Craft 입력 폼과 생성 설정에 반영한다.
+ * 매개변수: fileKey - 메타데이터를 가져올 이미지 경로.
+ * 주요 변수: fileName, prefix, metaPath, meta, optStyle, optSettings - 조회 경로와 적용 옵션.
+ * 반환값: 명시 반환 없음.
+ */
 window.importMetadata = async function(fileKey) {
     const parts = fileKey.split('/');
     const fileName = parts.pop();
@@ -191,6 +203,12 @@ window.importMetadata = async function(fileKey) {
     }
 };
 
+/**
+ * 역할: 현재 선택된 임시 이미지의 메타데이터 가져오기를 importMetadata로 위임한다.
+ * 매개변수: 없음.
+ * 주요 변수: CRAFT_ACTIVE_INDEX, imgData - 선택된 임시 이미지 정보.
+ * 반환값: 명시 반환 없음.
+ */
 window.importTempImageMetadata = function() {
     if (window.CRAFT_ACTIVE_INDEX === null) return;
     const imgData = window.TEMP_IMAGES[window.CRAFT_ACTIVE_INDEX];
@@ -200,6 +218,12 @@ window.importTempImageMetadata = function() {
     window.importMetadata(imgData.key);
 };
 
+/**
+ * 역할: 업로드 예정 파일명 입력값과 변환 확장자를 반영해 미리보기 파일명을 갱신한다.
+ * 매개변수: 없음.
+ * 주요 변수: galleryFileToUpload, finalName, ext, customName, previewName - 표시 파일명 구성값.
+ * 반환값: 명시 반환 없음.
+ */
 window.updateGalleryPreviewText = function() {
     if (!window.galleryFileToUpload) return;
     let finalName = window.galleryFileToUpload.name;
@@ -212,6 +236,12 @@ window.updateGalleryPreviewText = function() {
     if(previewName) previewName.textContent = customName ? `${customName}.${ext}` : finalName;
 };
 
+/**
+ * 역할: 갤러리 업로드 파일을 선택 상태에 저장하고 이미지 미리보기를 표시한다.
+ * 매개변수: file - 사용자가 선택한 이미지 File 객체.
+ * 주요 변수: galleryFileToUpload, preview, prompt, container, submitBtn - 업로드 상태와 UI 요소.
+ * 반환값: 명시 반환 없음. 이미지가 아니면 alert 후 종료한다.
+ */
 window.showGalleryPreview = function(file) {
     if (!file.type.startsWith('image/')) return alert('이미지만 가능합니다.');
     window.galleryFileToUpload = file;
@@ -225,6 +255,12 @@ window.showGalleryPreview = function(file) {
     window.updateGalleryPreviewText();
 };
 
+/**
+ * 역할: 갤러리 업로드 파일 선택, 미리보기, 버튼 상태를 초기화한다.
+ * 매개변수: 없음.
+ * 주요 변수: galleryFileToUpload, fileInput, prompt, container, submitBtn, preview - 초기화 대상.
+ * 반환값: 명시 반환 없음.
+ */
 window.clearGalleryUploadInputs = function() {
     window.galleryFileToUpload = null;
     const fileInput = document.getElementById('gallery-file-input'); const prompt = document.getElementById('gallery-upload-prompt'); const container = document.getElementById('gallery-preview-container'); const submitBtn = document.getElementById('gallery-upload-submit-btn'); const preview = document.getElementById('gallery-image-preview');
@@ -235,12 +271,24 @@ window.clearGalleryUploadInputs = function() {
     if (preview && preview.src && preview.src.startsWith('blob:')) { URL.revokeObjectURL(preview.src); preview.src = ''; }
 };
 
+/**
+ * 역할: 갤러리 업로드 입력 전체를 초기 상태로 되돌린다.
+ * 매개변수: 없음.
+ * 주요 변수: fileNameInput - 추가로 비울 사용자 지정 파일명 입력.
+ * 반환값: 명시 반환 없음.
+ */
 window.resetGalleryUpload = function() {
     window.clearGalleryUploadInputs();
     const fileNameInput = document.getElementById('gallery-upload-filename');
     if (fileNameInput) fileNameInput.value = '';
 };
 
+/**
+ * 역할: 현재 폴더 경로를 표시하며 갤러리 업로드 모달을 연다.
+ * 매개변수: 없음.
+ * 주요 변수: modal, pathDisplay, currentPrefix - 열 모달과 표시할 업로드 경로.
+ * 반환값: 명시 반환 없음.
+ */
 window.openGalleryUploadModal = function() {
     const modal = document.getElementById('gallery-upload-modal'); const pathDisplay = document.getElementById('gallery-upload-path');
     if(!modal) return;
@@ -249,12 +297,24 @@ window.openGalleryUploadModal = function() {
     history.pushState({ modal: 'upload' }, '', '#upload');
 };
 
+/**
+ * 역할: 갤러리 업로드 모달을 닫고 입력을 초기화한다.
+ * 매개변수: e - 닫기 이벤트 객체, skipHistory - history.back 생략 여부.
+ * 주요 변수: modal - 닫을 업로드 모달.
+ * 반환값: 명시 반환 없음.
+ */
 window.closeGalleryUploadModal = function(e, skipHistory = false) {
     if (e && e.target !== e.currentTarget && e.target.id !== 'close-gallery-btn') return;
     const modal = document.getElementById('gallery-upload-modal');
     if (modal && !modal.classList.contains('hidden')) { modal.classList.add('hidden'); window.resetGalleryUpload(); if (!skipHistory) history.back(); }
 };
 
+/**
+ * 역할: 새 텍스트 메모 작성 모달을 초기화하고 연다.
+ * 매개변수: 없음.
+ * 주요 변수: modal, prefixEl, currentPrefix - 모달과 현재 저장 경로 표시값.
+ * 반환값: 명시 반환 없음.
+ */
 window.openMemoCreateModal = function() {
     const modal = document.getElementById('memo-create-modal'); if(!modal) return;
     document.getElementById('memo-create-filename').value = ''; document.getElementById('memo-create-content').value = '';
@@ -262,12 +322,24 @@ window.openMemoCreateModal = function() {
     modal.classList.remove('hidden'); history.pushState({ modal: 'memo' }, '', '#memo');
 };
 
+/**
+ * 역할: 메모 작성 모달을 닫고 필요하면 브라우저 history를 되돌린다.
+ * 매개변수: e - 닫기 이벤트 객체, skipHistory - history.back 생략 여부.
+ * 주요 변수: modal - 닫을 메모 모달.
+ * 반환값: 명시 반환 없음.
+ */
 window.closeMemoCreateModal = function(e, skipHistory = false) {
     if (e && e.target !== e.currentTarget && e.target.id !== 'close-memo-btn') return;
     const modal = document.getElementById('memo-create-modal');
     if (modal && !modal.classList.contains('hidden')) { modal.classList.add('hidden'); if (!skipHistory) history.back(); }
 };
 
+/**
+ * 역할: 파일 종류에 맞춰 미리보기 모달을 열고 이미지/텍스트/기타 파일 UI를 구성한다.
+ * 매개변수: key - 파일 경로, url - 파일 URL, isImage - 이미지 여부, isText - 텍스트 여부, isPublic - 공개 여부, skipHistory - history push 생략 여부.
+ * 주요 변수: currentFileKey, fileName, alias, imgEl, textEl, publicCheck - 모달 상태와 표시 대상.
+ * 반환값: 명시 반환 없음.
+ */
 window.openModal = async function(key, url, isImage, isText, isPublic, skipHistory = false) {
     window.currentFileKey = key;
     const fileName = key.split('/').pop(); const alias = window.getAliasOnly(key, false);
@@ -304,6 +376,12 @@ window.openModal = async function(key, url, isImage, isText, isPublic, skipHisto
     if (!skipHistory) history.pushState({ modal: 'preview', key: key }, '', '#' + key);
 };
 
+/**
+ * 역할: 현재 파일의 공개/비공개 상태를 서버에 저장하고 갤러리를 갱신한다.
+ * 매개변수: isPublic - 새 공개 상태.
+ * 주요 변수: currentFileKey, res, chk - 변경 대상과 실패 시 복구할 체크박스.
+ * 반환값: 명시 반환 없음.
+ */
 window.toggleFilePublic = async function(isPublic) {
     try {
         const res = await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'toggle_public', key: window.currentFileKey, isPublic: isPublic }) });
@@ -312,6 +390,12 @@ window.toggleFilePublic = async function(isPublic) {
     } catch(err) { alert('설정 토글 에러: ' + err.message); const chk = document.getElementById('modal-public-check'); if(chk) chk.checked = !isPublic; }
 };
 
+/**
+ * 역할: 미리보기 모달을 닫고 이미지/텍스트/교체 입력 상태를 초기화한다.
+ * 매개변수: e - 닫기 이벤트 객체, skipHistory - history.back 생략 여부.
+ * 주요 변수: modal, imgEl, textEl, replaceInput, currentFileKey - 초기화 대상.
+ * 반환값: 명시 반환 없음.
+ */
 window.closeModal = function(e, skipHistory = false) {
     if (e && e.target !== e.currentTarget && e.target.id !== 'close-btn') return;
     const modal = document.getElementById('preview-modal');
@@ -325,15 +409,33 @@ window.closeModal = function(e, skipHistory = false) {
     }
 };
 
+/**
+ * 역할: 모달의 파일 URL을 클립보드에 복사하고 버튼 문구를 잠시 변경한다.
+ * 매개변수: 없음.
+ * 주요 변수: input, btn, originalText - 복사 대상과 버튼 상태.
+ * 반환값: 명시 반환 없음.
+ */
 window.copyModalUrl = function() {
     const input = document.getElementById('modal-url'); input.select(); document.execCommand('copy');
     const btn = document.getElementById('modal-copy-btn'); const originalText = btn.innerText; btn.innerText = '완료!'; setTimeout(() => { btn.innerText = originalText; }, 1000);
 };
 
+/**
+ * 역할: 텍스트 미리보기/편집기의 내용을 클립보드에 복사한다.
+ * 매개변수: 없음.
+ * 주요 변수: textEl - 복사할 텍스트 영역.
+ * 반환값: 명시 반환 없음.
+ */
 window.copyTextContent = function() {
     const textEl = document.getElementById('modal-text-editor'); textEl.select(); document.execCommand('copy'); alert('내용이 복사되었습니다.');
 };
 
+/**
+ * 역할: 현재 파일을 사용자가 선택한 새 파일로 교체하고 이미지 메타데이터를 갱신한다.
+ * 매개변수: input - 교체 파일을 담은 file input 요소.
+ * 주요 변수: file, btn, extractedMetadata, headers, buffer, res, newSrc - 교체 파일과 업로드 상태.
+ * 반환값: 명시 반환 없음.
+ */
 window.handleReplaceFile = async function(input) {
     let file = input.files[0]; if (!file) return;
     if (!confirm(`현재 파일(${window.currentFileKey})을 선택한 파일로 교체하시겠습니까?`)) { input.value = ''; return; }
@@ -365,6 +467,12 @@ window.handleReplaceFile = async function(input) {
     finally { if (btn) { btn.innerHTML = originalText; btn.disabled = false; } input.value = ''; }
 };
 
+/**
+ * 역할: 텍스트 모달에서 편집한 내용을 현재 파일 경로로 다시 저장한다.
+ * 매개변수: 없음.
+ * 주요 변수: content, blob, fileName, headers, buffer, res - 저장할 텍스트와 업로드 데이터.
+ * 반환값: 명시 반환 없음.
+ */
 window.saveEditedText = async function() {
     if (!confirm('변경된 내용을 저장하시겠습니까?')) return;
     const content = document.getElementById('modal-text-editor').value; const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
@@ -378,6 +486,12 @@ window.saveEditedText = async function() {
     } catch (err) { alert(err.message); }
 };
 
+/**
+ * 역할: Craft 프로젝트/캐릭터 선택값을 기준으로 메타데이터 가져오기 모달을 연다.
+ * 매개변수: 없음.
+ * 주요 변수: projSelect, charSelect, proj, char, IMPORT_BASE_PREFIX, targetPath - 탐색 시작 경로.
+ * 반환값: 명시 반환 없음.
+ */
 window.openImportModal = async function() {
     const projSelect = document.getElementById('craft-project-select'); const charSelect = document.getElementById('craft-char-select');
     const proj = projSelect ? projSelect.value : ''; const char = charSelect ? charSelect.value : '';
@@ -391,12 +505,24 @@ window.openImportModal = async function() {
     await window.loadImportPath(targetPath);
 };
 
+/**
+ * 역할: 메타데이터 가져오기 모달을 닫고 필요하면 브라우저 history를 되돌린다.
+ * 매개변수: e - 닫기 이벤트 객체, skipHistory - history.back 생략 여부.
+ * 주요 변수: modal - 닫을 가져오기 모달.
+ * 반환값: 명시 반환 없음.
+ */
 window.closeImportModal = function(e, skipHistory = false) {
     if (e && e.target !== e.currentTarget && e.target.id !== 'close-import-btn') return;
     const modal = document.getElementById('import-modal');
     if (modal && !modal.classList.contains('hidden')) { modal.classList.add('hidden'); if (!skipHistory) history.back(); }
 };
 
+/**
+ * 역할: 메타데이터 가져오기 모달에서 지정 prefix의 폴더/이미지 목록을 렌더링한다.
+ * 매개변수: prefix - 탐색할 폴더 경로.
+ * 주요 변수: IMPORT_CURRENT_PREFIX, pathDisplay, grid, listRes, aliasRes, files, folders - 탐색 상태와 렌더링 데이터.
+ * 반환값: 명시 반환 없음.
+ */
 window.loadImportPath = async function(prefix) {
     window.IMPORT_CURRENT_PREFIX = prefix;
     const pathDisplay = document.getElementById('import-modal-path'); const grid = document.getElementById('import-grid');
