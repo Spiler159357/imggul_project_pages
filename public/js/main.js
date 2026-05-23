@@ -183,7 +183,6 @@ if (inpaintMaskCanvas) {
     document.getElementById(id)?.addEventListener('input', (e) => { document.getElementById(`${id}-val`).innerText = parseFloat(e.target.value).toFixed(1); });
 });
 
-document.getElementById('inpaint-brush-size')?.addEventListener('input', (e) => { document.getElementById('inpaint-brush-size-val').innerText = parseInt(e.target.value).toString(); });
 document.getElementById('inpaint-strength')?.addEventListener('input', (e) => {
     document.getElementById('inpaint-strength-val').innerText = parseFloat(e.target.value).toFixed(2);
     window.saveCraftSettings();
