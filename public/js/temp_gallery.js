@@ -97,11 +97,11 @@ function getInpaintCanvasPoint(event) {
 }
 
 function getInpaintBrushSize() {
-    return parseInt(document.getElementById('inpaint-brush-size')?.value) || 48;
+    return 32;
 }
 
 function getInpaintGridSize() {
-    return Math.max(6, Math.round(getInpaintBrushSize() / 4));
+    return 8;
 }
 
 function drawInpaintBlock(point) {
