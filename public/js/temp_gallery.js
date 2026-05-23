@@ -96,22 +96,46 @@ function getInpaintCanvasPoint(event) {
     };
 }
 
+function getInpaintBrushSize() {
+    return parseInt(document.getElementById('inpaint-brush-size')?.value) || 48;
+}
+
+function getInpaintGridSize() {
+    return Math.max(6, Math.round(getInpaintBrushSize() / 4));
+}
+
+function drawInpaintBlock(point) {
+    const canvas = getInpaintCanvas();
+    if (!canvas || !point) return;
+    const ctx = canvas.getContext('2d');
+    const brushSize = getInpaintBrushSize();
+    const gridSize = getInpaintGridSize();
+    const left = Math.floor((point.x - brushSize / 2) / gridSize) * gridSize;
+    const top = Math.floor((point.y - brushSize / 2) / gridSize) * gridSize;
+    const right = Math.ceil((point.x + brushSize / 2) / gridSize) * gridSize;
+    const bottom = Math.ceil((point.y + brushSize / 2) / gridSize) * gridSize;
+
+    ctx.save();
+    ctx.imageSmoothingEnabled = false;
+    ctx.globalCompositeOperation = window.INPAINT_DRAW_MODE === 'eraser' ? 'destination-out' : 'source-over';
+    ctx.fillStyle = 'rgba(255,255,255,1)';
+    ctx.fillRect(left, top, right - left, bottom - top);
+    ctx.restore();
+}
+
 function drawInpaintLine(from, to) {
     const canvas = getInpaintCanvas();
     if (!canvas || !from || !to) return;
-    const ctx = canvas.getContext('2d');
-    const brushSize = parseInt(document.getElementById('inpaint-brush-size')?.value) || 48;
-    ctx.save();
-    ctx.lineCap = 'round';
-    ctx.lineJoin = 'round';
-    ctx.lineWidth = brushSize;
-    ctx.globalCompositeOperation = window.INPAINT_DRAW_MODE === 'eraser' ? 'destination-out' : 'source-over';
-    ctx.strokeStyle = 'rgba(255,255,255,1)';
-    ctx.beginPath();
-    ctx.moveTo(from.x, from.y);
-    ctx.lineTo(to.x, to.y);
-    ctx.stroke();
-    ctx.restore();
+    const gridSize = getInpaintGridSize();
+    const distance = Math.hypot(to.x - from.x, to.y - from.y);
+    const steps = Math.max(1, Math.ceil(distance / Math.max(1, gridSize / 2)));
+    for (let i = 0; i <= steps; i++) {
+        const ratio = i / steps;
+        drawInpaintBlock({
+            x: from.x + (to.x - from.x) * ratio,
+            y: from.y + (to.y - from.y) * ratio
+        });
+    }
     window.INPAINT_MASK_READY = hasInpaintMaskPixels(canvas);
     updateInpaintSummary();
 }
@@ -441,6 +465,7 @@ export async function prepareInpaintPayload(width, height) {
     scaledMask.width = width;
     scaledMask.height = height;
     const maskCtx = scaledMask.getContext('2d');
+    maskCtx.imageSmoothingEnabled = false;
     maskCtx.fillStyle = '#000';
     maskCtx.fillRect(0, 0, width, height);
     maskCtx.drawImage(maskCanvas, 0, 0, width, height);
