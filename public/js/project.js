@@ -24,6 +24,8 @@ const PROJECT_SECTIONS = [
     }
 ];
 
+const CHARACTER_IMAGE_EXTENSIONS = new Set(['webp', 'png', 'jpg', 'jpeg']);
+
 function getProjectRoot() {
     return document.getElementById('main-project-content');
 }
@@ -174,6 +176,90 @@ function isInvalidProjectFolderName(value) {
 
 function getSituationMetaKey(project) {
     return `${project.prefix}_situations_meta.json`;
+}
+
+function getCharacterMetaKey(character) {
+    return `${character.prefix}_character_meta.json`;
+}
+
+function getCharacterById(project, characterId) {
+    const decodedId = decodeURIComponent(characterId || '');
+    return getProjectItems(project, 'characters').find(character =>
+        character.id === decodedId ||
+        character.prefix === decodedId ||
+        character.folderName === decodedId
+    );
+}
+
+function getFileNameFromKey(key) {
+    return String(key || '').split('/').pop() || '';
+}
+
+function getFileBaseName(fileName) {
+    return String(fileName || '').replace(/\.[^/.]+$/, '').toLowerCase();
+}
+
+function getFileExtension(fileName) {
+    return String(fileName || '').split('.').pop().toLowerCase();
+}
+
+function isImageFile(file) {
+    return CHARACTER_IMAGE_EXTENSIONS.has(getFileExtension(getFileNameFromKey(file?.key)));
+}
+
+async function loadCharacterFiles(character, force = false) {
+    if (!character?.prefix) return [];
+    if (!force && character.filesLoaded) return Array.isArray(character.files) ? character.files : [];
+
+    const res = await fetch(`/api/list?prefix=${encodeURIComponent(character.prefix)}&_t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('캐릭터 이미지 목록을 불러오지 못했습니다.');
+
+    const data = await res.json();
+    character.files = (data.files || [])
+        .filter(file => isImageFile(file))
+        .sort((a, b) => getFileNameFromKey(a.key).localeCompare(getFileNameFromKey(b.key), undefined, { numeric: true }));
+    character.filesLoaded = true;
+    return character.files;
+}
+
+async function loadCharacterMeta(character, force = false) {
+    if (!character?.prefix) return {};
+    if (!force && character.metaLoaded) return character.meta || {};
+
+    const res = await fetch(`${getAssetUrl(getCharacterMetaKey(character))}?_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.status === 404) {
+        character.meta = {};
+        character.metaLoaded = true;
+        return character.meta;
+    }
+    if (!res.ok) throw new Error('캐릭터 프롬프트를 불러오지 못했습니다.');
+
+    character.meta = await res.json();
+    character.metaLoaded = true;
+    return character.meta;
+}
+
+async function saveCharacterMeta(character, meta) {
+    const metaKey = getCharacterMetaKey(character);
+    const content = JSON.stringify(meta || {}, null, 2);
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'X-File-Name': encodeURIComponent('_character_meta.json'),
+            'X-Absolute-Path': encodeURIComponent(metaKey)
+        },
+        body: new Blob([content], { type: 'application/json; charset=utf-8' }),
+        cache: 'no-store'
+    });
+
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '캐릭터 프롬프트 저장에 실패했습니다.');
+    }
+
+    character.meta = meta || {};
+    character.metaLoaded = true;
 }
 
 export async function loadProjects(force = false) {
@@ -725,6 +811,350 @@ function renderPromptSection(section) {
     `);
 }
 
+function getSituationImageCandidates(situation, index) {
+    const values = [
+        String(index),
+        String(index + 1),
+        situation?.id,
+        situation?.folderName,
+        situation?.name,
+        situation?.alias
+    ];
+
+    return values
+        .filter(Boolean)
+        .map(value => String(value).trim().toLowerCase())
+        .filter(Boolean);
+}
+
+function findSituationImage(files, situation, index) {
+    const candidates = new Set(getSituationImageCandidates(situation, index));
+    return files.find(file => candidates.has(getFileBaseName(getFileNameFromKey(file.key)))) || null;
+}
+
+function getSituationRows(character, situations, files) {
+    return situations.map((situation, index) => {
+        const image = findSituationImage(files, situation, index);
+        return {
+            index,
+            situation,
+            image,
+            imageUrl: image ? `${getAssetUrl(image.key)}?t=${image.uploaded ? new Date(image.uploaded).getTime() : Date.now()}` : '',
+            label: getItemLabel(situation, `상황 ${index + 1}`),
+            characterName: character?.name || character?.folderName || '캐릭터'
+        };
+    });
+}
+
+function getCharacterProgress(rows) {
+    const total = rows.length;
+    const complete = rows.filter(row => row.image).length;
+    const missing = Math.max(total - complete, 0);
+    const percent = total ? Math.round((complete / total) * 100) : 0;
+    return { total, complete, missing, percent };
+}
+
+function renderCharacterStatusBadge(isComplete) {
+    return isComplete
+        ? '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">완료</span>'
+        : '<span class="px-2 py-0.5 rounded-full text-[11px] font-bold bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300">미생성</span>';
+}
+
+function renderCharacterImageRows(project, character, rows) {
+    if (!rows.length) {
+        return renderEmptyState('등록된 상황이 없습니다. 상황을 먼저 추가하면 이미지 공정률을 계산할 수 있습니다.');
+    }
+
+    return `
+        <div class="space-y-2">
+            ${rows.map(row => {
+                const clickAction = row.image
+                    ? `window.openModal('${escapeJsString(row.image.key)}', '${escapeJsString(row.imageUrl)}', true, false, ${row.image.isPublic ? 'true' : 'false'})`
+                    : `window.prepareCharacterGeneration('${escapeJsString(project.id)}', '${escapeJsString(character.id)}', ${row.index})`;
+                return `
+                    <button type="button" onclick="${clickAction}" class="w-full text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2.5 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 items-center">
+                        <span class="aspect-square rounded-md overflow-hidden bg-gray-100 dark:bg-gray-900/60 flex items-center justify-center">
+                            ${row.image ? `
+                                <img src="${escapeHtml(row.imageUrl)}" alt="${escapeHtml(row.label)}" class="w-full h-full object-cover" loading="lazy">
+                            ` : `
+                                <i data-lucide="image-plus" class="w-6 h-6 text-gray-300 dark:text-gray-600"></i>
+                            `}
+                        </span>
+                        <span class="min-w-0">
+                            <span class="flex items-center justify-between gap-2">
+                                <span class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(row.label)}</span>
+                                ${renderCharacterStatusBadge(!!row.image)}
+                            </span>
+                            <span class="block mt-1 text-[11px] text-gray-500 dark:text-gray-400 truncate">이름: ${escapeHtml(row.characterName)}</span>
+                            <span class="block mt-1 text-[10px] text-gray-400 dark:text-gray-500 truncate">${row.image ? escapeHtml(getFileNameFromKey(row.image.key)) : '클릭하면 생성 화면에 프롬프트를 준비합니다.'}</span>
+                        </span>
+                    </button>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderCharacterDetailShell(project, character, state = {}) {
+    const situations = getProjectItems(project, 'situations');
+    const files = Array.isArray(character.files) ? character.files : [];
+    const meta = character.meta || {};
+    const rows = getSituationRows(character, situations, files);
+    const progress = getCharacterProgress(rows);
+    const coverImage = rows.find(row => row.image)?.imageUrl || getAssetUrl(character.coverImage);
+    const prompt = meta.prompt || '';
+
+    renderProjectShell(`
+        <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
+            <div class="flex items-center gap-2 min-w-0">
+                <button type="button" onclick="window.openProjectSection('character', false)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="캐릭터 목록" aria-label="캐릭터 목록">
+                    <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                </button>
+                <div class="min-w-0">
+                    <h1 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(character.name || character.folderName)}</h1>
+                    <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${escapeHtml(project.name)} / 캐릭터 상세</p>
+                </div>
+            </div>
+            <button type="button" onclick="window.openCharacterFolder('${escapeJsString(character.prefix)}')" class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                <i data-lucide="folder-open" class="w-4 h-4"></i>
+                폴더 열기
+            </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 sm:p-6">
+            ${state.loading ? renderEmptyState('캐릭터 상세 정보를 불러오는 중입니다.') : ''}
+            ${state.error ? renderEmptyState(state.error) : ''}
+            ${!state.loading && !state.error ? `
+                <section class="grid grid-cols-1 xl:grid-cols-[minmax(320px,0.95fr)_minmax(420px,1.35fr)] gap-4 sm:gap-6 max-w-7xl mx-auto min-h-full">
+                    <div class="min-h-0 flex flex-col gap-4">
+                        <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                            <div class="grid grid-cols-[6rem_minmax(0,1fr)] gap-4 items-center">
+                                <div class="aspect-square rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-900/60 relative">
+                                    <img src="${escapeHtml(coverImage)}" alt="${escapeHtml(character.name)}" class="absolute inset-0 w-full h-full object-cover" onerror="this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden');">
+                                    <div class="hidden absolute inset-0 flex items-center justify-center text-gray-300 dark:text-gray-600">
+                                        <i data-lucide="image-off" class="w-8 h-8"></i>
+                                    </div>
+                                </div>
+                                <div class="min-w-0">
+                                    <h2 class="text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(character.name || character.folderName)}</h2>
+                                    ${character.alias ? `<p class="mt-1 text-xs text-gray-500 dark:text-gray-400 truncate">${escapeHtml(character.folderName)}</p>` : ''}
+                                    <div class="mt-3 flex flex-wrap gap-2 text-[11px] font-bold">
+                                        <span class="px-2 py-1 rounded bg-gray-100 dark:bg-gray-900/60 text-gray-600 dark:text-gray-300">상황 ${progress.total}</span>
+                                        <span class="px-2 py-1 rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">완료 ${progress.complete}</span>
+                                        <span class="px-2 py-1 rounded bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">미생성 ${progress.missing}</span>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="bg-gray-50 dark:bg-gray-900/30 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex-1 min-h-[360px]">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-sm font-bold text-gray-900 dark:text-white">상황별 이미지</h3>
+                                <span class="text-[11px] font-bold text-gray-500 dark:text-gray-400">${progress.complete}/${progress.total}</span>
+                            </div>
+                            <div class="max-h-[58vh] overflow-y-auto pr-1">
+                                ${renderCharacterImageRows(project, character, rows)}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="min-h-0 flex flex-col gap-4">
+                        <form id="character-prompt-form" onsubmit="window.saveCharacterPrompt(event)" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex flex-col min-h-[360px]">
+                            <div class="flex items-center justify-between gap-3 mb-3">
+                                <h3 class="text-sm font-bold text-gray-900 dark:text-white">캐릭터 프롬프트</h3>
+                                <button id="character-prompt-save-btn" type="submit" class="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
+                                    <i data-lucide="save" class="w-4 h-4"></i>
+                                    저장
+                                </button>
+                            </div>
+                            <textarea id="character-prompt-input" class="flex-1 min-h-[260px] resize-none p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="캐릭터의 외형, 분위기, 반복해서 유지해야 하는 특징을 입력하세요.">${escapeHtml(prompt)}</textarea>
+                            <p id="character-prompt-save-status" class="mt-2 min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                        </form>
+
+                        <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <h3 class="text-sm font-bold text-gray-900 dark:text-white">이미지 공정률</h3>
+                                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">${progress.total}개 상황 중 ${progress.complete}개 완료</p>
+                                </div>
+                                <span class="text-2xl font-bold text-indigo-600 dark:text-indigo-400">${progress.percent}%</span>
+                            </div>
+                            <div class="mt-4 h-2.5 rounded-full bg-gray-100 dark:bg-gray-900 overflow-hidden">
+                                <div class="h-full bg-indigo-600 dark:bg-indigo-500 rounded-full transition-all" style="width: ${progress.percent}%"></div>
+                            </div>
+                            <div class="mt-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
+                                <div class="rounded-lg bg-emerald-50 dark:bg-emerald-900/20 p-3">
+                                    <p class="text-[11px] font-bold text-emerald-700 dark:text-emerald-300">완료</p>
+                                    <p class="mt-1 text-lg font-bold text-emerald-800 dark:text-emerald-200">${progress.complete}</p>
+                                </div>
+                                <div class="rounded-lg bg-amber-50 dark:bg-amber-900/20 p-3">
+                                    <p class="text-[11px] font-bold text-amber-700 dark:text-amber-300">미생성</p>
+                                    <p class="mt-1 text-lg font-bold text-amber-800 dark:text-amber-200">${progress.missing}</p>
+                                </div>
+                                <div class="rounded-lg bg-gray-50 dark:bg-gray-900/50 p-3">
+                                    <p class="text-[11px] font-bold text-gray-600 dark:text-gray-300">전체</p>
+                                    <p class="mt-1 text-lg font-bold text-gray-800 dark:text-gray-100">${progress.total}</p>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex flex-col sm:flex-row gap-2">
+                                <button type="button" onclick="window.prepareCharacterGeneration('${escapeJsString(project.id)}', '${escapeJsString(character.id)}')" class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
+                                    <i data-lucide="wand-2" class="w-4 h-4"></i>
+                                    누락 이미지 생성 준비
+                                </button>
+                                <button type="button" onclick="window.openProjectSection('situation', false)" class="flex-1 flex items-center justify-center gap-1.5 px-3 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 text-xs font-bold hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                                    <i data-lucide="map" class="w-4 h-4"></i>
+                                    상황 관리
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            ` : ''}
+        </div>
+    `);
+}
+
+export async function openCharacterDetail(projectId = window.PROJECT_ACTIVE_PROJECT_ID, characterId = '', skipHistory = false) {
+    if (!Array.isArray(window.PROJECTS)) {
+        await loadProjects().catch(() => []);
+    }
+
+    const project = getProjectById(projectId);
+    if (!project) {
+        renderProjectManage(skipHistory);
+        return;
+    }
+
+    await Promise.all([
+        loadProjectCharacters(project).catch(() => []),
+        loadProjectSituations(project).catch(() => [])
+    ]);
+
+    const character = getCharacterById(project, characterId);
+    if (!character) {
+        await openProjectSection('character', skipHistory);
+        return;
+    }
+
+    window.PROJECT_VIEW = 'character-detail';
+    window.PROJECT_ACTIVE_PROJECT_ID = project.id;
+    window.PROJECT_ACTIVE_SECTION = 'character';
+    window.PROJECT_ACTIVE_CHARACTER_ID = character.id;
+
+    renderCharacterDetailShell(project, character, { loading: !character.filesLoaded || !character.metaLoaded });
+
+    try {
+        await Promise.all([
+            loadCharacterFiles(character),
+            loadCharacterMeta(character)
+        ]);
+        if (window.PROJECT_VIEW === 'character-detail' && window.PROJECT_ACTIVE_CHARACTER_ID === character.id) {
+            renderCharacterDetailShell(project, character);
+        }
+    } catch (err) {
+        if (window.PROJECT_VIEW === 'character-detail' && window.PROJECT_ACTIVE_CHARACTER_ID === character.id) {
+            renderCharacterDetailShell(project, character, { error: err.message });
+        }
+    }
+
+    if (!skipHistory) {
+        setProjectRoute(
+            { projectView: 'character-detail', projectId: project.id, characterId: character.id },
+            `#project/${project.id}/character/${encodeURIComponent(character.folderName)}`
+        );
+    }
+}
+
+export async function saveCharacterPrompt(event) {
+    if (event) event.preventDefault();
+
+    const project = getActiveProject();
+    const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
+    const input = document.getElementById('character-prompt-input');
+    const button = document.getElementById('character-prompt-save-btn');
+    const status = document.getElementById('character-prompt-save-status');
+    if (!project || !character || !input) return;
+
+    const previousButtonHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin"></i> 저장 중';
+        refreshProjectIcons();
+    }
+    if (status) status.textContent = '';
+
+    try {
+        const meta = await loadCharacterMeta(character).catch(() => ({}));
+        await saveCharacterMeta(character, {
+            ...meta,
+            prompt: input.value.trim(),
+            updatedAt: Date.now()
+        });
+        if (status) status.textContent = '저장되었습니다.';
+    } catch (err) {
+        if (status) status.textContent = err.message || '저장에 실패했습니다.';
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = previousButtonHtml;
+            refreshProjectIcons();
+        }
+    }
+}
+
+export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTIVE_PROJECT_ID, characterId = window.PROJECT_ACTIVE_CHARACTER_ID, situationIndex = null) {
+    if (!Array.isArray(window.PROJECTS)) await loadProjects().catch(() => []);
+
+    const project = getProjectById(projectId);
+    if (!project) return;
+    await Promise.all([
+        loadProjectCharacters(project).catch(() => []),
+        loadProjectSituations(project).catch(() => [])
+    ]);
+
+    const character = getCharacterById(project, characterId);
+    if (!character) return;
+
+    const meta = await loadCharacterMeta(character).catch(() => ({}));
+    const situations = getProjectItems(project, 'situations');
+    const selectedSituation = Number.isInteger(situationIndex) ? situations[situationIndex] : null;
+    const situationText = selectedSituation ? getItemLabel(selectedSituation, `상황 ${situationIndex + 1}`) : '';
+    const promptParts = [meta.prompt, situationText].filter(Boolean);
+
+    window.switchTab('craft');
+
+    const simpleToggle = document.getElementById('prompt-toggle-simple');
+    if (simpleToggle) {
+        simpleToggle.checked = true;
+        if (window.togglePromptMode) window.togglePromptMode();
+    }
+
+    const rawPrompt = document.getElementById('prompt-raw');
+    if (rawPrompt) {
+        rawPrompt.value = promptParts.join(', ');
+        rawPrompt.style.height = 'auto';
+        rawPrompt.style.height = rawPrompt.scrollHeight + 'px';
+    }
+
+    if (window.saveCraftSettings) window.saveCraftSettings();
+
+    if (window.updateCraftFolderList) await window.updateCraftFolderList();
+    const projectSelect = document.getElementById('craft-project-select');
+    if (projectSelect) {
+        projectSelect.value = project.prefix;
+        if (window.onCraftProjectChange) await window.onCraftProjectChange();
+    }
+
+    const characterSelect = document.getElementById('craft-char-select');
+    if (characterSelect) characterSelect.value = character.prefix;
+}
+
+export function openCharacterFolder(prefix) {
+    if (!prefix || !window.loadPath) return;
+    window.switchTab('explorer');
+    window.loadPath(prefix);
+}
+
 function renderProjectItemCreateModal() {
     return `
         <div id="project-item-create-modal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm items-center justify-center p-4" onclick="window.closeProjectItemCreateModal(event)">
@@ -901,7 +1331,7 @@ function renderCharacterSection(section, state = {}) {
                 ${!state.loading && !state.error && characters.length ? `
                     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                         ${characters.map(character => `
-                            <div class="aspect-[4/5] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden flex flex-col">
+                            <button type="button" onclick="window.openCharacterDetail('${escapeJsString(project.id)}', '${escapeJsString(character.id)}')" class="aspect-[4/5] text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden flex flex-col hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
                                 <div class="flex-1 min-h-0 bg-gray-100 dark:bg-gray-900/50 relative">
                                     <img src="${escapeHtml(getAssetUrl(character.coverImage))}" alt="${escapeHtml(character.name)}" class="absolute inset-0 w-full h-full object-cover" onerror="this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden');">
                                     <div class="hidden absolute inset-0 flex items-center justify-center text-gray-300 dark:text-gray-600">
@@ -911,7 +1341,7 @@ function renderCharacterSection(section, state = {}) {
                                 <div class="p-3 border-t border-gray-100 dark:border-gray-700 min-h-[58px]">
                                     ${renderCharacterName(character)}
                                 </div>
-                            </div>
+                            </button>
                         `).join('')}
                     </div>
                 ` : ''}
@@ -967,6 +1397,8 @@ export async function restoreProjectState(state = {}) {
     if (state.projectView === 'section' && state.projectSection) {
         window.PROJECT_ACTIVE_PROJECT_ID = state.projectId || getDefaultProjectId();
         await openProjectSection(state.projectSection, true);
+    } else if (state.projectView === 'character-detail') {
+        await openCharacterDetail(state.projectId || getDefaultProjectId(), state.characterId || '', true);
     } else if (state.projectView === 'detail') {
         await openProjectDetail(state.projectId || getDefaultProjectId(), true);
     } else {

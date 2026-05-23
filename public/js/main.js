@@ -6,7 +6,7 @@ import * as Explorer from './explorer.js';
 import * as Craft from './craft.js?v=inpaint-modal-20260521';
 import * as TempGallery from './temp_gallery.js?v=inpaint-modal-20260521';
 import * as Modals from './modals.js';
-import * as Project from './project.js?v=project-tab-20260524h';
+import * as Project from './project.js?v=character-detail-20260524a';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals, Project);
