@@ -204,6 +204,69 @@ export function refreshGallery() {
     window.loadPath(window.currentPrefix, true); 
 }
 
+function splitFileKey(key) {
+    const parts = key.split('/');
+    const fileName = parts.pop();
+    return {
+        prefix: parts.length > 0 ? parts.join('/') + '/' : '',
+        fileName
+    };
+}
+
+function normalizeFolderPrefix(value) {
+    let prefix = (value || '').trim().replace(/^\/+/, '');
+    if (prefix && !prefix.endsWith('/')) prefix += '/';
+    return prefix;
+}
+
+function clearFolderCache(...prefixes) {
+    if (!window.FOLDER_DATA_CACHE) return;
+    prefixes.forEach(prefix => {
+        if (prefix !== undefined && window.FOLDER_DATA_CACHE[prefix]) delete window.FOLDER_DATA_CACHE[prefix];
+    });
+}
+
+function usesSameProjectAliasKey(oldKey, newKey) {
+    const oldParts = oldKey.split('/').filter(Boolean);
+    const newParts = newKey.split('/').filter(Boolean);
+    return oldParts.length > 1
+        && newParts.length > 1
+        && oldParts[0] === newParts[0]
+        && oldParts[oldParts.length - 1] === newParts[newParts.length - 1];
+}
+
+async function saveAlias(key, alias) {
+    const res = await fetch('/api/aliases', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ key, alias })
+    });
+    if (!res.ok) {
+        let message = '별칭 저장에 실패했습니다.';
+        try {
+            const data = await res.json();
+            if (data && data.error) message = data.error;
+        } catch(e) {}
+        throw new Error(message);
+    }
+}
+
+async function moveFileKey(oldKey, newKey) {
+    const res = await fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'move', key: oldKey, newKey })
+    });
+    if (!res.ok) {
+        let message = '파일 이동에 실패했습니다.';
+        try {
+            const data = await res.json();
+            if (data && data.error) message = data.error;
+        } catch(e) {}
+        throw new Error(message);
+    }
+}
+
 /**
  * 역할: 사용자 입력으로 새 폴더용 .keep 파일을 업로드해 폴더를 생성한다.
  * 매개변수: 없음.
@@ -231,6 +294,115 @@ export async function deleteFolder(folderPrefix) {
         if (!res.ok) throw new Error('폴더 삭제 실패');
         alert('폴더가 삭제되었습니다.'); window.refreshGallery();
     } catch (err) { alert(err.message); }
+}
+
+export async function setCurrentFolderAlias() {
+    if (!window.currentPrefix && window.currentPrefix !== '') return;
+
+    const currentAlias = window.getAliasOnly(window.currentPrefix, true) || '';
+    const folderName = window.currentPrefix
+        ? window.currentPrefix.split('/').filter(Boolean).pop()
+        : 'Root';
+    const nextAlias = prompt(`'${folderName}' 폴더의 별칭을 입력하세요.\n비워두면 별칭이 삭제됩니다.`, currentAlias);
+    if (nextAlias === null) return;
+
+    try {
+        await saveAlias(window.currentPrefix, nextAlias.trim());
+        clearFolderCache(window.currentPrefix);
+        await window.loadPath(window.currentPrefix, true);
+        alert(nextAlias.trim() ? '별칭이 저장되었습니다.' : '별칭이 삭제되었습니다.');
+    } catch (err) {
+        alert(err.message);
+    }
+}
+
+export async function setModalFileAlias() {
+    if (!window.currentFileKey) return alert('선택된 파일이 없습니다.');
+
+    const currentAlias = window.getAliasOnly(window.currentFileKey, false) || '';
+    const fileName = window.currentFileKey.split('/').pop();
+    const nextAlias = prompt(`'${fileName}' 파일의 별칭을 입력하세요.\n비워두면 별칭이 삭제됩니다.`, currentAlias);
+    if (nextAlias === null) return;
+
+    try {
+        await saveAlias(window.currentFileKey, nextAlias.trim());
+        clearFolderCache(window.currentPrefix);
+        await window.loadPath(window.currentPrefix, true);
+
+        const rawUrl = document.getElementById('modal-url')?.value || `/${window.currentFileKey}`;
+        const isText = fileName.toLowerCase().endsWith('.txt');
+        const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
+        const isPublic = document.getElementById('modal-public-check')?.checked || false;
+        await window.openModal(window.currentFileKey, rawUrl.split('?')[0] + '?t=' + Date.now(), isImage, isText, isPublic, true);
+        alert(nextAlias.trim() ? '별칭이 저장되었습니다.' : '별칭이 삭제되었습니다.');
+    } catch (err) {
+        alert(err.message);
+    }
+}
+
+export async function renameCurrentFileOnly() {
+    if (!window.currentFileKey) return alert('선택된 파일이 없습니다.');
+
+    const { prefix, fileName } = splitFileKey(window.currentFileKey);
+    const nextName = prompt('새 파일명을 입력하세요.', fileName);
+    if (nextName === null) return;
+
+    const cleanName = nextName.trim().replace(/^\/+/, '');
+    if (!cleanName) return alert('파일명을 입력하세요.');
+    if (cleanName.includes('/')) return alert('파일명에는 경로 구분자(/)를 넣을 수 없습니다.');
+    if (cleanName === fileName) return;
+
+    const oldKey = window.currentFileKey;
+    const newKey = prefix + cleanName;
+
+    try {
+        const alias = window.getAliasOnly(oldKey, false) || '';
+        await moveFileKey(oldKey, newKey);
+        await window.moveMetadataInDB(prefix, fileName, prefix, cleanName);
+        if (alias) {
+            await saveAlias(newKey, alias);
+            if (!usesSameProjectAliasKey(oldKey, newKey)) await saveAlias(oldKey, '');
+        }
+
+        window.currentFileKey = newKey;
+        clearFolderCache(prefix, window.currentPrefix);
+        await window.loadPath(window.currentPrefix, true);
+        window.closeModal(null, true);
+        alert('파일명이 변경되었습니다.');
+    } catch (err) {
+        alert(err.message);
+    }
+}
+
+export async function moveCurrentFile() {
+    if (!window.currentFileKey) return alert('선택된 파일이 없습니다.');
+
+    const { prefix: oldPrefix, fileName } = splitFileKey(window.currentFileKey);
+    const destinationInput = prompt('이동할 폴더 경로를 입력하세요.', oldPrefix);
+    if (destinationInput === null) return;
+
+    const newPrefix = normalizeFolderPrefix(destinationInput);
+    const oldKey = window.currentFileKey;
+    const newKey = newPrefix + fileName;
+    if (newKey === oldKey) return;
+
+    try {
+        const alias = window.getAliasOnly(oldKey, false) || '';
+        await moveFileKey(oldKey, newKey);
+        await window.moveMetadataInDB(oldPrefix, fileName, newPrefix, fileName);
+        if (alias) {
+            await saveAlias(newKey, alias);
+            if (!usesSameProjectAliasKey(oldKey, newKey)) await saveAlias(oldKey, '');
+        }
+
+        window.currentFileKey = newKey;
+        clearFolderCache(oldPrefix, newPrefix, window.currentPrefix);
+        await window.loadPath(window.currentPrefix, true);
+        window.closeModal(null, true);
+        alert('파일이 이동되었습니다.');
+    } catch (err) {
+        alert(err.message);
+    }
 }
 
 /**
