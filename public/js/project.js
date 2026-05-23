@@ -56,6 +56,10 @@ function getDefaultProjectId() {
     return getProjects()[0]?.id || '';
 }
 
+function getProjectBasePrefix() {
+    return window.ROOT_PATH || '';
+}
+
 function getProjectDisplayName(folderPrefix, folderName) {
     const alias = window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) : null;
     return alias || folderName;
@@ -84,7 +88,7 @@ async function saveProjectAlias(key, alias) {
 }
 
 async function createProjectFolder(folderName) {
-    const key = `${folderName}/.keep`;
+    const key = `${getProjectBasePrefix()}${folderName}/.keep`;
     const res = await fetch('/api/upload?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
@@ -102,9 +106,43 @@ async function createProjectFolder(folderName) {
     }
 }
 
+async function renameProjectFolder(oldPrefix, newPrefix) {
+    const res = await fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'rename_folder', key: oldPrefix, newKey: newPrefix })
+    });
+
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '프로젝트 이름 변경 실패');
+    }
+}
+
+async function deleteProjectFolder(prefix) {
+    const res = await fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_folder', key: prefix })
+    });
+
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '프로젝트 삭제 실패');
+    }
+}
+
 function clearRootProjectCache() {
-    if (window.FOLDER_DATA_CACHE) delete window.FOLDER_DATA_CACHE[''];
+    if (window.FOLDER_DATA_CACHE) delete window.FOLDER_DATA_CACHE[getProjectBasePrefix()];
     window.PROJECTS = null;
+}
+
+function clearProjectCaches(...prefixes) {
+    clearRootProjectCache();
+    if (!window.FOLDER_DATA_CACHE) return;
+    prefixes.forEach(prefix => {
+        if (prefix !== undefined && window.FOLDER_DATA_CACHE[prefix]) delete window.FOLDER_DATA_CACHE[prefix];
+    });
 }
 
 function normalizeProjectFolderName(value) {
@@ -119,8 +157,8 @@ export async function loadProjects(force = false) {
     if (!force && Array.isArray(window.PROJECTS)) return window.PROJECTS;
 
     const [listRes, aliasRes] = await Promise.all([
-        fetch('/api/list?prefix='),
-        fetch('/api/aliases?prefix=')
+        fetch(`/api/list?prefix=${encodeURIComponent(getProjectBasePrefix())}`),
+        fetch(`/api/aliases?prefix=${encodeURIComponent(getProjectBasePrefix())}`)
     ]);
 
     if (!listRes.ok) throw new Error('프로젝트 목록을 불러오지 못했습니다.');
@@ -381,12 +419,12 @@ export async function submitProjectCreate(event) {
 
     try {
         await createProjectFolder(folderName);
-        if (alias) await saveProjectAlias(`${folderName}/`, alias);
+        if (alias) await saveProjectAlias(`${getProjectBasePrefix()}${folderName}/`, alias);
         clearRootProjectCache();
         await loadProjects(true);
         window.closeProjectCreateModal();
         await window.renderProjectManage(true);
-        if (window.loadPath && window.currentPrefix === '') window.loadPath('', true);
+        if (window.loadPath && window.currentPrefix === getProjectBasePrefix()) window.loadPath(getProjectBasePrefix(), true);
     } catch (err) {
         setProjectCreateError(err.message || '프로젝트 생성에 실패했습니다.');
     } finally {
@@ -422,9 +460,15 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
                 </button>
                 <h1 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(project.name)}</h1>
             </div>
-            <button type="button" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
-                <i data-lucide="more-vertical" class="w-5 h-5"></i>
-            </button>
+            <div class="relative flex-shrink-0">
+                <button type="button" onclick="window.toggleProjectActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
+                    <i data-lucide="more-vertical" class="w-5 h-5"></i>
+                </button>
+                <div id="project-action-menu" class="hidden absolute right-0 top-10 z-20 w-40 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
+                    <button type="button" onclick="window.renameActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 이름 변경</button>
+                    <button type="button" onclick="window.deleteActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">프로젝트 삭제</button>
+                </div>
+            </div>
         </div>
 
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
@@ -445,6 +489,72 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
     `);
 
     if (!skipHistory) setProjectRoute({ projectView: 'detail', projectId: project.id }, `#project/${project.id}`);
+}
+
+export function toggleProjectActionMenu(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('project-action-menu');
+    if (!menu) return;
+
+    menu.classList.toggle('hidden');
+}
+
+function closeProjectActionMenu() {
+    document.getElementById('project-action-menu')?.classList.add('hidden');
+}
+
+export async function renameActiveProject() {
+    closeProjectActionMenu();
+    const project = getActiveProject();
+    if (!project) return;
+
+    const nextName = prompt('새 프로젝트 이름을 입력하세요.', project.folderName);
+    if (nextName === null) return;
+
+    const folderName = normalizeProjectFolderName(nextName);
+    if (isInvalidProjectFolderName(folderName)) {
+        alert('이름에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
+        return;
+    }
+
+    if (folderName === project.folderName) return;
+    if (getProjects().some(item => item.folderName === folderName)) {
+        alert('이미 존재하는 프로젝트 이름입니다.');
+        return;
+    }
+
+    const oldPrefix = project.prefix;
+    const newPrefix = `${getProjectBasePrefix()}${folderName}/`;
+
+    try {
+        await renameProjectFolder(oldPrefix, newPrefix);
+        clearProjectCaches(oldPrefix, newPrefix);
+        await loadProjects(true);
+        await openProjectDetail(folderName, true);
+        history.replaceState({ tab: 'project', projectView: 'detail', projectId: folderName }, '', `#project/${folderName}`);
+        if (window.currentPrefix === getProjectBasePrefix() && window.loadPath) window.loadPath(getProjectBasePrefix(), true);
+    } catch (err) {
+        alert(err.message || '프로젝트 이름 변경 실패');
+    }
+}
+
+export async function deleteActiveProject() {
+    closeProjectActionMenu();
+    const project = getActiveProject();
+    if (!project) return;
+
+    if (!confirm(`'${project.name}' 프로젝트와 그 안의 모든 파일을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+
+    try {
+        await deleteProjectFolder(project.prefix);
+        clearProjectCaches(project.prefix);
+        await loadProjects(true);
+        await renderProjectManage(true);
+        history.replaceState({ tab: 'project', projectView: 'manage' }, '', '#project');
+        if (window.currentPrefix === getProjectBasePrefix() && window.loadPath) window.loadPath(getProjectBasePrefix(), true);
+    } catch (err) {
+        alert(err.message || '프로젝트 삭제 실패');
+    }
 }
 
 function renderProjectPanelItems(project, section) {

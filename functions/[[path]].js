@@ -292,7 +292,111 @@ export async function onRequest(context) {
                     const keysToDelete = list.objects.map(o => o.key);
                     if (keysToDelete.length > 0) await env.imgBucket.delete(keysToDelete);
                 }
+                try {
+                    const obj = await env.imgBucket.get('.imggul_aliases.json');
+                    if (obj) {
+                        let aliases = await obj.json();
+                        if (aliases[prefix]) {
+                            delete aliases[prefix];
+                            await env.imgBucket.put('.imggul_aliases.json', JSON.stringify(aliases), {
+                                httpMetadata: { contentType: 'application/json' }
+                            });
+                        }
+                    }
+                    const parts = prefix.split('/').filter(Boolean);
+                    if (parts.length > 1) {
+                        const aliasPath = `${parts[0]}/.aliases.json`;
+                        const aliasObj = await env.imgBucket.get(aliasPath);
+                        if (aliasObj) {
+                            let aliases = await aliasObj.json();
+                            const targetName = parts[parts.length - 1];
+                            if (aliases[targetName]) {
+                                delete aliases[targetName];
+                                await env.imgBucket.put(aliasPath, JSON.stringify(aliases), {
+                                    httpMetadata: { contentType: 'application/json' }
+                                });
+                            }
+                        }
+                    }
+                } catch(e){}
                 return new Response(JSON.stringify({ success: true }));
+            }
+
+            if (action === 'rename_folder') {
+                if (!key || !newKey) throw new Error('Folder paths are required');
+                const oldPrefix = key.endsWith('/') ? key : key + '/';
+                const newPrefix = newKey.endsWith('/') ? newKey : newKey + '/';
+                if (oldPrefix === newPrefix) return new Response(JSON.stringify({ success: true, newKey: newPrefix }));
+                if (newPrefix.startsWith(oldPrefix)) throw new Error('Cannot move a folder into itself');
+
+                const existing = await env.imgBucket.list({ prefix: newPrefix, limit: 1 });
+                if (existing.objects.length > 0 || (existing.delimitedPrefixes && existing.delimitedPrefixes.length > 0)) {
+                    throw new Error('Destination folder already exists');
+                }
+
+                let truncated = true;
+                let cursor = undefined;
+                let movedKeys = [];
+
+                while (truncated) {
+                    const list = await env.imgBucket.list({ prefix: oldPrefix, cursor: cursor });
+                    truncated = list.truncated;
+                    cursor = list.cursor;
+
+                    for (const objectInfo of list.objects) {
+                        const targetKey = newPrefix + objectInfo.key.slice(oldPrefix.length);
+                        const object = await env.imgBucket.get(objectInfo.key);
+                        if (object) {
+                            await env.imgBucket.put(targetKey, object.body, {
+                                httpMetadata: object.httpMetadata,
+                                customMetadata: object.customMetadata
+                            });
+                            movedKeys.push(objectInfo.key);
+                        }
+                    }
+                }
+
+                if (movedKeys.length > 0) {
+                    await env.imgBucket.delete(movedKeys);
+                }
+
+                try {
+                    const obj = await env.imgBucket.get('.imggul_aliases.json');
+                    if (obj) {
+                        let aliases = await obj.json();
+                        if (aliases[oldPrefix]) {
+                            aliases[newPrefix] = aliases[oldPrefix];
+                            delete aliases[oldPrefix];
+                            await env.imgBucket.put('.imggul_aliases.json', JSON.stringify(aliases), {
+                                httpMetadata: { contentType: 'application/json' }
+                            });
+                        }
+                    }
+                    const oldParts = oldPrefix.split('/').filter(Boolean);
+                    const newParts = newPrefix.split('/').filter(Boolean);
+                    if (
+                        oldParts.length > 1 &&
+                        newParts.length > 1 &&
+                        oldParts[0] === newParts[0]
+                    ) {
+                        const aliasPath = `${oldParts[0]}/.aliases.json`;
+                        const aliasObj = await env.imgBucket.get(aliasPath);
+                        if (aliasObj) {
+                            let aliases = await aliasObj.json();
+                            const oldName = oldParts[oldParts.length - 1];
+                            const newName = newParts[newParts.length - 1];
+                            if (aliases[oldName]) {
+                                aliases[newName] = aliases[oldName];
+                                delete aliases[oldName];
+                                await env.imgBucket.put(aliasPath, JSON.stringify(aliases), {
+                                    httpMetadata: { contentType: 'application/json' }
+                                });
+                            }
+                        }
+                    }
+                } catch(e){}
+
+                return new Response(JSON.stringify({ success: true, newKey: newPrefix }));
             }
 
             if (action === 'move') {
