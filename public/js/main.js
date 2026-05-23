@@ -1,14 +1,15 @@
 // 8. main.js: 애플리케이션 진입점 및 모듈 통합 관리
 import './state.js?v=inpaint-modal-20260521';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
-import * as Ui from './ui.js?v=craft-layout-20260521b';
+import * as Ui from './ui.js?v=project-tab-20260524';
 import * as Explorer from './explorer.js';
 import * as Craft from './craft.js?v=inpaint-modal-20260521';
 import * as TempGallery from './temp_gallery.js?v=inpaint-modal-20260521';
 import * as Modals from './modals.js';
+import * as Project from './project.js?v=project-tab-20260524';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
-Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals);
+Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals, Project);
 
 // 즉시 실행
 window.initSidebarControls();
@@ -324,7 +325,11 @@ window.addEventListener('popstate', (e) => {
     if (modalClosed) return; 
 
     if (e.state && e.state.tab === 'craft') { window.switchTab('craft', true); return; } 
-    else if (e.state && e.state.tab === 'project') { window.switchTab('project', true); return; }
+    else if (e.state && e.state.tab === 'project') {
+        window.switchTab('project', true);
+        if (window.restoreProjectState) window.restoreProjectState(e.state);
+        return;
+    }
     else if (e.state && e.state.tab === 'explorer') {
         window.switchTab('explorer', true);
         if (e.state.path !== undefined && e.state.path !== window.currentPrefix) window.loadPath(e.state.path, true);

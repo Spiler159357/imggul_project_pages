@@ -1,132 +1,129 @@
-# imggul 프로젝트 개선 계획서
+# imggul Improvement Plan
 
-## 1. 목표
+## 1. Goal
 
-imggul 프로젝트는 이미지 생성, 이미지 탐색, 프로젝트별 에셋 관리 기능을 분리하고 정리하여, 단순 이미지 생성 도구에서 프로젝트 기반 에셋 제작 도구로 확장한다.
+The goal is to separate and organize image generation, image browsing, and project-specific asset management so imggul can evolve from a simple image generation tool into a project-based asset creation tool.
 
-핵심 방향은 다음과 같다.
+The main direction is:
 
-- 이미지 생성 탭은 캐릭터 디자인, 그림체 탐색, 아이디어 검증 용도로 유지한다.
-- 실제 에셋 생성과 대량 관리는 프로젝트 탭 중심으로 이전한다.
-- 프롬프트, 레퍼런스, 상황 프리셋, 임시 생성 결과를 프로젝트 단위로 관리한다.
-- 저장소 사용량과 모바일 확인 부담을 줄이기 위해 미리보기와 임시 보관 흐름을 개선한다.
+- Keep the image generation tab focused on character and pose exploration, art-style exploration, and idea validation.
+- Move actual asset creation and saved asset management into project-centered workflows.
+- Manage prompts, reference images, situations, presets, and temporary generation results at the project level.
+- Improve preview and temporary-storage workflows to reduce storage usage and mobile load.
 
-## 2. 주요 추진 과제
+## 2. Major Workstreams
 
-### 2.1 UI/UX 개선
+### 2.1 UI/UX Improvements
 
-- 게스트 상태에서 `imggul.com` 접근 시 잘못된 접근임을 명확히 안내한다.
-- 이미지 프롬프트 입력 칸에 가중치 표현을 보조하는 기능을 추가한다.
-- 예약 생성 시 예상 소요 시간을 표시한다.
-- 예약 생성이 백그라운드에서 진행되도록 개선한다.
-- 사용 중 발견되는 세부 불편 사항은 지속적으로 반영한다.
+- Show a clear invalid-access notice when a guest reaches `imggul.com` directly.
+- Add helper functionality for prompt weighting syntax.
+- Show estimated time for scheduled generation.
+- Let scheduled generation continue in the background.
+- Continuously incorporate usage issues found during normal use.
 
-### 2.2 이미지 생성 기능 개선
+### 2.2 Image Generation Flow Improvements
 
-- 레퍼런스 이미지를 외부 업로드뿐 아니라 저장소 내 이미지에서도 선택할 수 있게 한다.
-- 기존 `vibe transfer` 기능을 다시 사용할 수 있도록 복구한다.
-- 상황별 프롬프트 프리셋을 프로젝트 종속 구조로 저장하고, 필요 시 유연하게 import할 수 있도록 설계한다.
-- 여러 프리셋을 동시에 선택해 에셋 생성 플래너에서 대량 생성할 수 있도록 한다.
-- 플래너에서 캐릭터별 추가 태그, 제외 태그를 지정할 수 있게 한다.
-- 플래너 기반 생성 결과는 `webp` 형식으로 강제하고 별도 임시 저장소에 대량 보관한다.
-- 사용자가 선택한 에셋만 확정하고, 비선택 에셋은 임시 보관소에서 일괄 삭제할 수 있게 한다.
-- 방향키로 임시 보관함 이미지를 빠르게 탐색할 수 있게 한다.
-- 예약 생성 시작 시점의 프롬프트와 관련 자료를 일괄 저장하여 추후 import에 활용한다.
-- v4 모델 품질 차이는 확인 대상이나 우선순위는 낮게 둔다.
-- 업로드 흐름은 "타겟 선택 후 업로드"에서 "업로드 시작 후 타겟 선택" 방식으로 전환한다.
+- Allow reference images to be selected from storage, not only from local upload.
+- Restore the `vibe transfer` workflow.
+- Store situation-specific prompt presets in a project-owned structure and design them for natural import later.
+- Allow selecting multiple presets and using them for asset generation plans.
+- Support character-specific additional tags and excluded tags in plans.
+- Force plan-based generation results to `webp` and store them in separate temporary storage.
+- Let users confirm only selected assets and bulk-delete unselected temporary assets.
+- Support quick directional navigation through temporary-storage images.
+- Persist prompt-related data at the start of scheduled generation for later import.
+- Investigate v4 model pricing differences when this becomes relevant.
+- Change the upload flow from "select target, then upload" to "start upload, then select target".
 
-### 2.3 프로젝트 설계 기능 추가
+### 2.3 Project Structure Features
 
-- 기존 탐색기 화면을 프로젝트 리스트 중심 화면으로 전환한다.
-- 로그, 개인 메모, 임시 보관소 접근은 하단이나 측면 등 보조 영역에서 유지한다.
-- 프로젝트 선택 시 프로젝트 관리 화면으로 이동한다.
-- 이미지 생성 탭에 한해 측면 공간 접기/펼치기 구조를 적용해 레이아웃 낭비를 줄인다.
-- 프로젝트 관리 화면에는 프로젝트 이름, 코드, 별칭, 실제 경로명을 관리하는 기능을 둔다.
-- 하위 탭으로 캐릭터, 상황, 프롬프트 탭을 제공한다.
-- 프로젝트 단위로 그림체 통일을 위한 스타일 프롬프트를 보관한다.
+- Convert the existing explorer screen into a project-list-centered screen.
+- Keep logs, personal memos, and temporary storage access in a bottom or side utility area.
+- Navigate to a project management screen after selecting a project.
+- Reduce layout waste by applying collapsible or foldable side-space behavior where appropriate.
+- Manage project name, code, display alias, and actual storage path.
+- Provide child sections for characters, situations, and prompt sets.
+- Store style prompts for a consistent visual direction per project.
 
-### 2.4 기타 기능 개선
+### 2.4 Additional Improvements
 
-- 이미지 다운로드 시 저장 경로 지정 기능을 추가한다.
-- 탐색기 별칭 설정, 이미지 모달 이름 변경, 별칭 설정 등 현재 무력화된 기능을 복구한다.
-- 모자이크 등 간단한 이미지 처리 기능을 추가한다.
-- 저장소 버킷 사용량 제한을 고려해 버퍼 시스템을 강화한다.
-- 미리보기 기능은 전체 이미지를 한꺼번에 보여주는 방식 대신 캐릭터와 상황 조건에 맞춰 필요한 이미지만 표시하도록 개선한다.
-- 보안 기능을 강화한다.
+- Add support for choosing the save path when downloading images.
+- Add simple image processing features such as mosaic support.
+- Strengthen the buffer system with storage-usage limits in mind.
+- Improve previews so they show relevant images based on selected character or situation instead of loading everything.
+- Strengthen security features.
 
-## 3. 단계별 진행안
+## 3. Phased Progress Plan
 
-### 1단계: 안정화와 복구
+### Phase 1: Stabilization
 
-- 게스트 접근 안내 개선
-- 별칭, 이름 변경 등 기존 기능 복구
-- 이미지 다운로드 경로 지정
-- 기본 보안 점검
+- Improve guest-access guidance.
+- Add image download path selection.
+- Add basic security checks.
 
-### 2단계: 이미지 생성 흐름 개선
+### Phase 2: Image Generation Workflow
 
-- 프롬프트 입력 보조 기능 추가
-- 저장소 내 레퍼런스 이미지 선택 지원
-- `vibe transfer` 복구
-- 예약 생성 예상 시간 표시 및 백그라운드 처리
-- 예약 생성 시점 자료 저장
+- Add prompt input helper functionality.
+- Support selecting reference images from storage.
+- Restore `vibe transfer`.
+- Add estimated time display and background processing for scheduled generation.
+- Persist data at the start of scheduled generation.
 
-### 3단계: 프로젝트 탭 설계 및 구현
+### Phase 3: Project Screen And Structure
 
-- 기존 탐색기 화면을 프로젝트 리스트로 전환
-- 프로젝트 관리 화면 추가
-- 캐릭터, 상황, 프롬프트 탭 설계
-- 프로젝트별 스타일 프롬프트와 프리셋 저장 구조 설계
-- 외부 이미지 업로드와 프로젝트 연계 강화
+- Convert the existing explorer screen into a project list.
+- Add the project management screen.
+- Design character, situation, and prompt-set structures.
+- Design project-specific style prompt and preset storage.
+- Strengthen external image upload linkage to projects.
 
-### 4단계: 대량 에셋 생성 플래너
+### Phase 4: Saved Asset Generation Plans
 
-- 상황별 프리셋 저장 및 import 구조 구현
-- 다중 프리셋 선택 기반 생성 플래너 추가
-- 캐릭터별 추가 태그 및 제외 태그 지정 기능 추가
-- 임시 저장소 기반 대량 결과 관리
-- 선택 에셋 확정 및 비선택 에셋 일괄 삭제
-- 방향키 기반 임시 보관함 탐색 개선
+- Implement situation-specific preset storage and import structure.
+- Add generation plans based on multiple selected presets.
+- Add support for character-specific extra tags and excluded tags.
+- Add temporary-storage-based generated result management.
+- Add selected-asset confirmation and bulk cleanup of unselected assets.
+- Improve directional navigation in temporary storage.
 
-### 5단계: 운영 최적화
+### Phase 5: Operations And Optimization
 
-- 미리보기 로딩 방식 개선
-- 버퍼 시스템 강화
-- 저장소 사용량 최적화
-- v4 모델 품질 차이 조사
-- 코드 구조 문서화 및 개발 가이드 정리
+- Improve preview loading behavior.
+- Strengthen the buffer system.
+- Optimize storage usage.
+- Investigate v4 model pricing differences.
+- Document code structure and development guidance.
 
-## 4. 우선순위
+## 4. Priorities
 
-### 높음
+### High
 
-- 기존 무력화 기능 복구
-- 프로젝트 탭 구조 설계
-- 프롬프트와 관련 자료의 프로젝트 단위 저장
-- 임시 저장소와 대량 생성 결과 관리
+- Project structure design
+- Project-level persistence for prompts and related data
+- Temporary storage and generated result management
 
-### 중간
+### Medium
 
-- 프롬프트 입력 UX 개선
-- 예약 생성 백그라운드 처리
-- 저장소 내 레퍼런스 이미지 선택
-- 미리보기 개선
-- 다운로드 경로 지정
+- Prompt input UX improvements
+- Background scheduled generation
+- Reference image selection from storage
+- Preview improvements
+- Download path selection
 
-### 낮음
+### Low
 
-- v4 모델 품질 차이 조사
-- 세부 UI 편의 기능
-- 추가 이미지 처리 기능 확장
+- v4 model pricing investigation
+- Convenience features for external UI flows
+- Expansion of additional image processing features
 
-## 5. 별도 학습 과제
+## 5. Separate Study Items
 
-향후 직접 코드를 작성하고 유지보수하기 위해 프로젝트의 코드 구조를 명확히 파악한다.
+To make future development easier and safer, the codebase structure should be understood and documented clearly.
 
-우선적으로 파악할 영역은 다음과 같다.
+Priority areas to map:
 
-- Cloudflare Pages Functions 구조
-- 프론트엔드 파일 구성
-- 이미지 저장소와 API 호출 흐름
-- 이미지 생성 요청과 예약 처리 흐름
-- 탐색기, 모달, 임시 보관함 상태 관리 방식
+- Cloudflare Pages Functions structure
+- Frontend file organization
+- Image storage and API call flow
+- Image generation request and scheduled processing flow
+- Explorer, modal, and temporary-storage state management

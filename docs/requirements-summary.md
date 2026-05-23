@@ -1,142 +1,138 @@
-# imggul 프로젝트 요구사항 정리서
+# imggul Requirements Summary
 
-## 1. 개요
+## 1. Overview
 
-본 문서는 imggul 프로젝트의 향후 개선 요구사항을 정리한 문서다. 현재 요구사항은 이미지 생성 UX 개선, 프로젝트 기반 에셋 관리, 프롬프트 프리셋, 임시 보관함, 저장소 사용량 최적화에 집중되어 있다.
+This document summarizes future improvement requirements for the imggul project. The current direction focuses on image generation UX, project-based asset management, prompt presets, temporary storage workflows, and storage usage optimization.
 
-## 2. 기능 요구사항
+## 2. Functional Requirements
 
-### 2.1 접근 및 UI/UX
+### 2.1 Access And UI/UX
 
-- 게스트 사용자가 `imggul.com`에 접근할 경우 잘못된 접근임을 안내해야 한다.
-- 이미지 프롬프트 입력 칸은 가중치 표현을 쉽게 입력하거나 확인할 수 있어야 한다.
-- 예약 생성 화면은 예상 소요 시간을 표시해야 한다.
-- 예약 생성은 사용자가 화면을 계속 보고 있지 않아도 백그라운드에서 처리되어야 한다.
-- 이미지 생성 탭의 측면 영역은 필요 시 접고 펼칠 수 있어야 한다.
+- Guest users who access `imggul.com` directly should see a clear invalid-access notice.
+- Image prompt input should support easier weighting syntax entry and review.
+- Scheduled image generation should show an estimated duration.
+- Scheduled generation should continue in the background without requiring the user to keep watching the screen.
+- The side area shown after image generation should be collapsible when it is not needed.
 
-### 2.2 이미지 생성
+### 2.2 Image Generation
 
-- 레퍼런스 이미지는 외부 업로드 이미지와 저장소 내 이미지 모두에서 선택할 수 있어야 한다.
-- `vibe transfer` 기능은 다시 사용할 수 있어야 한다.
-- v4 모델 품질 차이는 추후 낮은 우선순위로 조사한다.
+- Reference images should be selectable from both direct uploads and images already stored in the storage bucket.
+- The `vibe transfer` feature should be usable again.
+- Differences in v4 model pricing should be investigated when needed.
 
-### 2.3 프롬프트 프리셋
+### 2.3 Prompt Presets
 
-- 상황별 프롬프트 프리셋을 저장할 수 있어야 한다.
-- 프리셋은 프로젝트에 종속되어야 한다.
-- 프리셋은 추후 다른 프로젝트나 기능에서 import하기 쉬운 구조여야 한다.
-- 여러 프리셋을 동시에 선택할 수 있어야 한다.
-- 선택한 프리셋 조합을 기반으로 에셋 생성 플래너를 실행할 수 있어야 한다.
-- 플래너에서는 캐릭터별 추가 태그와 제외 태그를 지정할 수 있어야 한다.
-- UI 방식은 체크박스, 태그 입력, 토글 등 추후 설계한다.
+- Users should be able to save prompt presets for different situations.
+- Presets should belong to a project.
+- Presets should have a structure that can later be imported from other project features.
+- Users should be able to select multiple presets at the same time.
+- Asset generation plans should be executable based on the selected preset combination.
+- Plans should support character-specific additional tags and excluded tags.
+- The final UI model for this area should be designed later, including checkboxes, tag entry, and toggles.
 
-### 2.4 예약 생성 및 자료 저장
+### 2.4 Scheduled Generation And Data Persistence
 
-- 예약 생성 시작 시점의 프롬프트, 레퍼런스, 설정값, 관련 자료를 일괄 저장해야 한다.
-- 저장된 자료는 추후 import나 재생성에 활용할 수 있어야 한다.
-- 예약 생성 결과는 필요한 경우 임시 저장소에 보관되어야 한다.
+- When scheduled generation starts, prompt data, reference images, and settings should be persisted together.
+- Persisted data should be reusable later through import and playback flows.
+- Scheduled generation results should be stored in temporary storage when needed.
 
-### 2.5 임시 보관함
+### 2.5 Temporary Storage
 
-- 플래너로 생성한 이미지는 `webp` 형식으로 저장되어야 한다.
-- 대량 생성 결과는 별도 임시 저장소에 보관되어야 한다.
-- 사용자는 원하는 에셋을 선택해 확정할 수 있어야 한다.
-- 선택하지 않은 에셋은 임시 보관소에서 일괄 삭제할 수 있어야 한다.
-- 방향키로 임시 보관함 이미지를 빠르게 이동할 수 있어야 한다.
+- Images generated through plans should be stored as `webp`.
+- Generation results should be stored in a separate temporary storage area.
+- Users should be able to select and confirm desired assets.
+- Unselected assets should be removable from temporary storage in bulk.
+- Users should be able to navigate temporary-storage images quickly by direction keys.
 
-### 2.6 업로드 흐름
+### 2.6 Upload Flow
 
-- 기존 "업로드 타겟 선택 후 업로드" 방식은 "업로드 실행 후 타겟 선택" 방식으로 전환한다.
-- 프로젝트 탭 개발 이후 업로드 대상 선택은 프로젝트, 캐릭터, 상황 정보와 연계되어야 한다.
-- 외부 이미지 업로드는 프로젝트 관리 화면에서도 계속 지원해야 한다.
+- The existing "select target, then upload" flow should become an "start upload, then select target" flow.
+- After project restructuring, upload targets should be connected to project, character, and situation data.
+- External image uploads should continue to be supported from the project management screen.
 
-### 2.7 프로젝트 관리
+### 2.7 Project Management
 
-- 기존 탐색기 화면은 프로젝트 리스트 화면으로 전환되어야 한다.
-- 사용자가 프로젝트를 선택하면 프로젝트 관리 화면으로 이동해야 한다.
-- 프로젝트는 이름, 코드, 별칭, 실제 경로명을 가져야 한다.
-- 프로젝트 관리 화면에는 캐릭터 탭, 상황 탭, 프롬프트 탭이 있어야 한다.
-- 프로젝트는 화풍 통일을 위한 그림체 프롬프트를 보관할 수 있어야 한다.
+- The existing explorer screen should become a project-list-centered screen.
+- Selecting a project should navigate to the project management screen.
+- Each project should have a name, code, display alias, and actual storage path.
+- Project management should include child areas for characters, situations, and prompt sets.
+- Projects should be able to store style prompts for unified visual direction.
 
-### 2.8 캐릭터 탭
+### 2.8 Characters
 
-- 캐릭터별 이미지 현황을 확인할 수 있어야 한다.
-- 캐릭터별 이미지 프롬프트를 보관하고 열람할 수 있어야 한다.
-- 외부 이미지 업로드를 지원해야 한다.
+- Users should be able to review images by character.
+- Users should be able to save and open image prompts per character.
+- External image upload should be supported.
 
-### 2.9 상황 탭
+### 2.9 Situations
 
-- 프로젝트에서 사용할 에셋 상황을 설정할 수 있어야 한다.
-- 상황은 프리셋 지정과 연결되어야 한다.
-- 상황별 생성 요구사항을 플래너에서 사용할 수 있어야 한다.
+- Users should be able to configure asset situations within a project.
+- Situations should connect to preset definitions.
+- Situation-specific generation requirements should be usable in plans.
 
-### 2.10 프롬프트 탭
+### 2.10 Prompt Sets
 
-- 시스템 프롬프트 설계에 특화된 화면이어야 한다.
-- 프로젝트별 공통 프롬프트, 스타일 프롬프트, 상황별 프롬프트를 관리할 수 있어야 한다.
-- 프롬프트 설계를 돕는 보조 기능을 제공해야 한다.
+- System prompt design should become formalized.
+- Users should be able to manage project-level common prompts, style prompts, and situation-specific prompts.
+- The app should provide helper functionality for defining prompt sets.
 
-### 2.11 이미지 탐색 및 관리
+### 2.11 Image Search And Management
 
-- 탐색기 화면의 별칭 설정 기능은 정상 작동해야 한다.
-- 이미지 모달의 이름 변경 기능은 정상 작동해야 한다.
-- 이미지 모달의 별칭 설정 기능은 정상 작동해야 한다.
-- 이미지 다운로드 시 저장 경로를 지정할 수 있어야 한다.
-- 간단한 이미지 처리 기능으로 모자이크 기능을 제공해야 한다.
+- Image downloads should support choosing a save path.
+- Basic image processing features, such as mosaic support, should be provided.
 
-### 2.12 미리보기 및 저장소 관리
+### 2.12 Preview And Storage Management
 
-- 저장소 버킷 사용량 제한을 고려해 버퍼 시스템을 강화해야 한다.
-- 모든 이미지를 동시에 보여주는 미리보기 방식은 지양한다.
-- 캐릭터와 상황을 입력하면 해당 조건에 맞는 이미지만 표시하는 방식으로 미리보기를 개선한다.
-- 모바일에서 대량 이미지를 확인해야 하는 부담을 줄여야 한다.
+- The buffer system should be strengthened to account for storage usage limits.
+- Showing all images at once should be avoided for previews.
+- If a character or situation is selected, previews should show only matching images.
+- Mobile views should reduce the amount of storage-heavy image checking.
 
-### 2.13 보안
+### 2.13 Security
 
-- 인증, 접근 제어, 업로드, 저장소 접근과 관련된 보안 기능을 강화해야 한다.
-- 게스트 접근과 일반 사용자 접근의 권한 차이를 명확히 관리해야 한다.
+- Security around authentication, access control, uploads, and storage access should be strengthened.
+- Guest access and regular user/admin access should have clearly separated permissions.
 
-## 3. 비기능 요구사항
+## 3. Non-Functional Requirements
 
-- 프로젝트 단위 데이터 구조는 추후 import와 export가 쉬워야 한다.
-- 대량 이미지 생성 시 저장소 사용량을 통제할 수 있어야 한다.
-- UI는 이미지 생성 탭과 프로젝트 관리 탭의 역할 차이를 명확히 드러내야 한다.
-- 임시 저장소 데이터는 확정 여부에 따라 정리할 수 있어야 한다.
-- 코드 구조는 사용자가 직접 수정하고 이해할 수 있도록 문서화되어야 한다.
+- Project-level data structures should be easy to import and export later.
+- Storage usage for generated images should be controllable.
+- The UI should clearly separate image generation from project management responsibilities.
+- Temporary-storage data should be cleanable based on confirmation state.
+- Code structure should be documented so it remains understandable and directly editable.
 
-## 4. 역할 구분
+## 4. Responsibility Areas
 
-### 이미지 생성 탭
+### Image Generation Area
 
-- 캐릭터 디자인 탐색
-- 그림체 탐색
-- 단발성 이미지 생성
-- 프롬프트 실험
-- 레퍼런스 기반 테스트
+- Character and pose exploration
+- Art-style exploration
+- Single-image generation
+- Prompt experimentation
+- Reference-image-based tests
 
-### 프로젝트 탭
+### Project Area
 
-- 실제 에셋 생성
-- 캐릭터별 이미지 관리
-- 상황별 에셋 관리
-- 프롬프트 프리셋 관리
-- 대량 생성 플래너 실행
-- 임시 결과 확정 및 정리
+- Actual asset generation
+- Character-specific image management
+- Situation-specific asset management
+- Prompt preset management
+- Stored generation plan execution
+- Temporary result confirmation and cleanup
 
-## 5. 미정 사항
+## 5. Open Questions
 
-- 프로젝트 관리 화면의 최종 UI 레이아웃
-- 플래너의 태그 포함/제외 UI 방식
-- 측면 바 공간 낭비를 줄이는 구체적 레이아웃
-- 버퍼 시스템의 저장 위치와 삭제 정책
-- 보안 강화의 구체 범위
-- v4 모델 품질 차이 원인
+- Final layout for the project management screen
+- UI model for including and excluding plan tags
+- Concrete layout for collapsing side and shared space
+- Exact storage location and cleanup rules for the buffer system
+- Concrete scope for security hardening
+- Cause of v4 model pricing differences
 
-## 6. 우선 검토 필요 항목
+## 6. Priority Investigation Items
 
-- 현재 무력화된 별칭, 이름 변경 기능의 원인
-- 프로젝트 단위 데이터 모델
-- 이미지 생성 예약 처리 구조
-- 임시 저장소 구조
-- 저장소 내 이미지 참조 방식
-- 프리셋 import/export 포맷
+- Project-level data model
+- Scheduled image generation processing structure
+- Temporary storage structure
+- How stored images should be referenced
+- Preset import/export format

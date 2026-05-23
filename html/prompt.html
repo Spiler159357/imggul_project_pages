@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>프롬프트 탭 레이아웃</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="h-screen flex flex-col overflow-hidden text-gray-800 bg-white">
+    <header class="flex items-end justify-between px-6 pt-4 border-b border-gray-300">
+        <div class="mb-3">
+            <strong class="text-2xl font-extrabold text-gray-900">ImgGul</strong>
+        </div>
+        <nav class="flex space-x-2 -mb-[1px]">
+            <span class="px-5 py-2.5 cursor-pointer tab-inactive">탐색기</span>
+            <span class="px-5 py-2.5 cursor-pointer tab-inactive">이미지 생성</span>
+            <span class="px-5 py-2.5 cursor-pointer tab-active">프로젝트</span>
+        </nav>
+        <div class="mb-3">
+            <span class="cursor-pointer text-sm font-medium">로그아웃</span>
+        </div>
+    </header>
+
+    <main class="flex-1 flex flex-col p-6 overflow-hidden">
+        <section class="flex items-center mb-6 shrink-0">
+            <div class="flex items-center space-x-3">
+                <button class="text-2xl font-bold focus:outline-none" aria-label="뒤로 가기">&#8592;</button>
+                <h1 class="text-2xl font-bold">프로젝트 이름</h1>
+            </div>
+        </section>
+
+        <section class="flex-1 flex gap-6 min-h-0">
+            <div class="w-3/5 flex flex-col border border-gray-300 rounded p-4">
+                <h3 class="font-bold mb-4">입력 공간</h3>
+                <textarea class="flex-1 resize-none outline-none auto-resize-textarea" placeholder=""></textarea>
+            </div>
+            
+            <div class="w-2/5 flex flex-col gap-4">
+                <div class="border border-gray-300 rounded p-4 text-center">
+                    <span class="font-bold">현재 글자 수</span>
+                </div>
+                <div class="border border-gray-300 rounded p-4 text-center">
+                    <button class="font-bold">마크다운화</button>
+                    <span class="mx-2">|</span>
+                    <button class="font-bold">요약</button>
+                </div>
+                <div class="border border-gray-300 rounded p-4 flex-1">
+                    <p class="font-bold">추가 기능을 위한 공간</p>
+                    <p class="mt-2 text-sm">- 기능 추가 가능성 높음</p>
+                </div>
+            </div>
+        </section>
+    </main>
+</body>
+</html>

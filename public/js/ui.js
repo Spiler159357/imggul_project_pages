@@ -224,7 +224,8 @@ export function switchTab(tabName, skipHistory = false) {
 
         if (!skipHistory) history.pushState({ tab: 'craft' }, '', '#craft');
     } else if (tabName === 'project') {
-        if (!skipHistory) history.pushState({ tab: 'project' }, '', '#project');
+        if (window.renderProjectManage) window.renderProjectManage(true);
+        if (!skipHistory) history.pushState({ tab: 'project', projectView: 'manage' }, '', '#project');
     }
 
     if (window.lucide) window.lucide.createIcons();
