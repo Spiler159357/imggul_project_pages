@@ -106,6 +106,25 @@ async function createProjectFolder(folderName) {
     }
 }
 
+async function createProjectChildFolder(project, folderName) {
+    const key = `${project.prefix}${folderName}/.keep`;
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/octet-stream',
+            'X-File-Name': encodeURIComponent('.keep'),
+            'X-Absolute-Path': encodeURIComponent(key)
+        },
+        body: new Blob(['']),
+        cache: 'no-store'
+    });
+
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '폴더 생성 실패');
+    }
+}
+
 async function renameProjectFolder(oldPrefix, newPrefix) {
     const res = await fetch('/api/manage', {
         method: 'POST',
@@ -151,6 +170,10 @@ function normalizeProjectFolderName(value) {
 
 function isInvalidProjectFolderName(value) {
     return !value || value.includes('/') || value.includes('\\') || value.startsWith('.') || EXCLUDED_PROJECT_FOLDERS.has(value);
+}
+
+function getSituationMetaKey(project) {
+    return `${project.prefix}_situations_meta.json`;
 }
 
 export async function loadProjects(force = false) {
@@ -223,6 +246,48 @@ export async function loadProjectCharacters(project, force = false) {
     project.charactersLoaded = true;
 
     return project.characters;
+}
+
+export async function loadProjectSituations(project, force = false) {
+    if (!project?.prefix) return [];
+    if (!force && project.situationsLoaded) return getProjectItems(project, 'situations');
+
+    const metaKey = getSituationMetaKey(project);
+    const res = await fetch(`${getAssetUrl(metaKey)}?_t=${Date.now()}`, { cache: 'no-store' });
+
+    if (res.status === 404) {
+        project.situations = [];
+        project.situationsLoaded = true;
+        return project.situations;
+    }
+
+    if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
+
+    const data = await res.json();
+    project.situations = Array.isArray(data.situations) ? data.situations : [];
+    project.situationsLoaded = true;
+
+    return project.situations;
+}
+
+async function saveProjectSituations(project) {
+    const metaKey = getSituationMetaKey(project);
+    const content = JSON.stringify({ situations: getProjectItems(project, 'situations') }, null, 2);
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'X-File-Name': encodeURIComponent('_situations_meta.json'),
+            'X-Absolute-Path': encodeURIComponent(metaKey)
+        },
+        body: new Blob([content], { type: 'application/json; charset=utf-8' }),
+        cache: 'no-store'
+    });
+
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '상황 저장 실패');
+    }
 }
 
 function renderEmptyState(message) {
@@ -446,7 +511,10 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
         return;
     }
 
-    await loadProjectCharacters(project).catch(() => []);
+    await Promise.all([
+        loadProjectCharacters(project).catch(() => []),
+        loadProjectSituations(project).catch(() => [])
+    ]);
 
     window.PROJECT_VIEW = 'detail';
     window.PROJECT_ACTIVE_PROJECT_ID = project.id;
@@ -596,7 +664,14 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         });
         if (window.PROJECT_ACTIVE_SECTION === 'character') renderCharacterSection(section);
     }
-    else renderSituationSection(section);
+    else {
+        const project = getActiveProject();
+        renderSituationSection(section, { loading: !!project && !project.situationsLoaded });
+        await loadProjectSituations(project).catch(err => {
+            if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section, { error: err.message });
+        });
+        if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section);
+    }
 
     if (!skipHistory) {
         setProjectRoute(
@@ -650,6 +725,163 @@ function renderPromptSection(section) {
     `);
 }
 
+function renderProjectItemCreateModal() {
+    return `
+        <div id="project-item-create-modal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm items-center justify-center p-4" onclick="window.closeProjectItemCreateModal(event)">
+            <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden" onclick="event.stopPropagation()">
+                <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+                    <h3 id="project-item-create-title" class="text-sm font-bold text-gray-900 dark:text-white">항목 추가</h3>
+                    <button type="button" onclick="window.closeProjectItemCreateModal()" class="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition" aria-label="닫기">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+
+                <form id="project-item-create-form" class="p-4 sm:p-5 space-y-4" onsubmit="window.submitProjectItemCreate(event)">
+                    <input id="project-item-create-type" type="hidden">
+                    <div>
+                        <label for="project-item-create-name" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">이름</label>
+                        <input id="project-item-create-name" type="text" required class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="저장 이름">
+                        <p id="project-item-create-help" class="mt-1 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                    </div>
+
+                    <div>
+                        <label for="project-item-create-alias" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">별칭</label>
+                        <input id="project-item-create-alias" type="text" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="표시 이름">
+                    </div>
+
+                    <div id="project-item-create-error" class="hidden text-xs text-red-500"></div>
+
+                    <div class="flex justify-end gap-2 pt-2">
+                        <button type="button" onclick="window.closeProjectItemCreateModal()" class="px-4 py-2 text-sm font-bold rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition">취소</button>
+                        <button id="project-item-create-submit" type="submit" class="px-4 py-2 text-sm font-bold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">생성</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    `;
+}
+
+export function openProjectItemCreateModal(type) {
+    const modal = document.getElementById('project-item-create-modal');
+    const form = document.getElementById('project-item-create-form');
+    const typeInput = document.getElementById('project-item-create-type');
+    const title = document.getElementById('project-item-create-title');
+    const help = document.getElementById('project-item-create-help');
+    const error = document.getElementById('project-item-create-error');
+    if (!modal || !typeInput) return;
+
+    if (form) form.reset();
+    if (error) {
+        error.textContent = '';
+        error.classList.add('hidden');
+    }
+
+    typeInput.value = type;
+    if (title) title.textContent = type === 'character' ? '캐릭터 추가' : '상황 추가';
+    if (help) {
+        help.textContent = type === 'character'
+            ? '프로젝트 하위 캐릭터 폴더 이름으로 사용됩니다.'
+            : '프로젝트 상황 메타데이터에 저장됩니다.';
+    }
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    setTimeout(() => document.getElementById('project-item-create-name')?.focus(), 0);
+}
+
+export function closeProjectItemCreateModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    const modal = document.getElementById('project-item-create-modal');
+    if (!modal) return;
+
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+function setProjectItemCreateError(message) {
+    const error = document.getElementById('project-item-create-error');
+    if (!error) return;
+
+    error.textContent = message;
+    error.classList.toggle('hidden', !message);
+}
+
+export async function submitProjectItemCreate(event) {
+    if (event) event.preventDefault();
+
+    const project = getActiveProject();
+    const type = document.getElementById('project-item-create-type')?.value;
+    const nameInput = document.getElementById('project-item-create-name');
+    const aliasInput = document.getElementById('project-item-create-alias');
+    const submitBtn = document.getElementById('project-item-create-submit');
+    const itemName = normalizeProjectFolderName(nameInput?.value || '');
+    const alias = (aliasInput?.value || '').trim();
+
+    if (!project || !['character', 'situation'].includes(type)) return;
+
+    if (isInvalidProjectFolderName(itemName)) {
+        setProjectItemCreateError('이름에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
+        return;
+    }
+
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.textContent = '생성 중...';
+    }
+
+    try {
+        if (type === 'character') {
+            await createCharacter(project, itemName, alias);
+            window.closeProjectItemCreateModal();
+            renderCharacterSection(PROJECT_SECTIONS.find(section => section.key === 'character'));
+        } else {
+            await createSituation(project, itemName, alias);
+            window.closeProjectItemCreateModal();
+            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+        }
+    } catch (err) {
+        setProjectItemCreateError(err.message || '생성에 실패했습니다.');
+    } finally {
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.textContent = '생성';
+        }
+    }
+}
+
+async function createCharacter(project, folderName, alias) {
+    if (!project.charactersLoaded) await loadProjectCharacters(project);
+    if (getProjectItems(project, 'characters').some(character => character.folderName === folderName)) {
+        throw new Error('이미 존재하는 캐릭터 이름입니다.');
+    }
+
+    await createProjectChildFolder(project, folderName);
+    if (alias) await saveProjectAlias(`${project.prefix}${folderName}/`, alias);
+    if (window.FOLDER_DATA_CACHE) delete window.FOLDER_DATA_CACHE[project.prefix];
+    await loadProjectCharacters(project, true);
+    if (window.loadPath && window.currentPrefix === project.prefix) window.loadPath(project.prefix, true);
+}
+
+async function createSituation(project, situationId, alias) {
+    if (!project.situationsLoaded) await loadProjectSituations(project);
+    if (getProjectItems(project, 'situations').some(situation => situation.id === situationId)) {
+        throw new Error('이미 존재하는 상황 이름입니다.');
+    }
+
+    project.situations = [
+        ...getProjectItems(project, 'situations'),
+        {
+            id: situationId,
+            folderName: situationId,
+            name: alias || situationId,
+            alias,
+            createdAt: Date.now()
+        }
+    ];
+    project.situationsLoaded = true;
+    await saveProjectSituations(project);
+}
+
 function renderCharacterSection(section, state = {}) {
     const project = getActiveProject();
     const characters = getProjectItems(project, 'characters');
@@ -660,7 +892,7 @@ function renderCharacterSection(section, state = {}) {
             <section class="max-w-6xl mx-auto">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="font-bold text-base text-gray-900 dark:text-white">캐릭터 목록</h3>
-                    <button type="button" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="캐릭터 추가" aria-label="캐릭터 추가">
+                    <button type="button" onclick="window.openProjectItemCreateModal('character')" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="캐릭터 추가" aria-label="캐릭터 추가">
                         <i data-lucide="plus" class="w-5 h-5"></i>
                     </button>
                 </div>
@@ -686,10 +918,11 @@ function renderCharacterSection(section, state = {}) {
                 ${!state.loading && !state.error && !characters.length ? renderEmptyState('등록된 캐릭터가 없습니다.') : ''}
             </section>
         </div>
+        ${renderProjectItemCreateModal()}
     `);
 }
 
-function renderSituationSection(section) {
+function renderSituationSection(section, state = {}) {
     const project = getActiveProject();
     const situations = getProjectItems(project, 'situations');
 
@@ -700,11 +933,13 @@ function renderSituationSection(section) {
                 <div class="min-h-[360px]">
                     <div class="flex items-center justify-between mb-4">
                         <h3 class="font-bold text-base text-gray-900 dark:text-white">상황 목록</h3>
-                        <button type="button" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="상황 추가" aria-label="상황 추가">
+                        <button type="button" onclick="window.openProjectItemCreateModal('situation')" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="상황 추가" aria-label="상황 추가">
                             <i data-lucide="plus" class="w-5 h-5"></i>
                         </button>
                     </div>
-                    ${situations.length ? `
+                    ${state.loading ? renderEmptyState('상황을 불러오는 중입니다.') : ''}
+                    ${state.error ? renderEmptyState(state.error) : ''}
+                    ${!state.loading && !state.error && situations.length ? `
                         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 gap-3 sm:gap-4">
                             ${situations.map(situation => `
                                 <div class="aspect-square bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-end">
@@ -712,7 +947,8 @@ function renderSituationSection(section) {
                                 </div>
                             `).join('')}
                         </div>
-                    ` : renderEmptyState('등록된 상황이 없습니다.')}
+                    ` : ''}
+                    ${!state.loading && !state.error && !situations.length ? renderEmptyState('등록된 상황이 없습니다.') : ''}
                 </div>
 
                 <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 min-h-[360px] flex flex-col">
@@ -723,6 +959,7 @@ function renderSituationSection(section) {
                 </div>
             </section>
         </div>
+        ${renderProjectItemCreateModal()}
     `);
 }
 
