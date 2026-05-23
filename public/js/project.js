@@ -177,7 +177,8 @@ export async function loadProjectCharacters(project, force = false) {
                 folderName,
                 prefix: folderPrefix,
                 name: getFolderDisplayName(folderPrefix, folderName),
-                alias: window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) || '' : ''
+                alias: window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) || '' : '',
+                coverImage: `${folderPrefix}0.webp`
             };
         })
         .filter(character => isVisibleProjectChildFolder(character.folderName));
@@ -196,6 +197,7 @@ function renderEmptyState(message) {
 
 function getItemLabel(item, fallback) {
     if (typeof item === 'string') return item;
+    if (item?.alias && item?.folderName) return `${item.name} (${item.folderName})`;
     return item?.name || item?.title || item?.content || fallback;
 }
 
@@ -210,6 +212,21 @@ function escapeHtml(value) {
 
 function escapeJsString(value) {
     return String(value ?? '').replaceAll('\\', '\\\\').replaceAll("'", "\\'");
+}
+
+function getAssetUrl(key) {
+    return `/${encodeURI(key)}`;
+}
+
+function renderCharacterName(character) {
+    if (character.alias) {
+        return `
+            <span class="block text-xs font-bold text-gray-800 dark:text-gray-100 truncate">${escapeHtml(character.name)}</span>
+            <span class="block text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">${escapeHtml(character.folderName)}</span>
+        `;
+    }
+
+    return `<span class="block text-xs font-bold text-gray-800 dark:text-gray-100 truncate">${escapeHtml(character.folderName || character.name || '캐릭터 이름')}</span>`;
 }
 
 function renderProjectShell(content) {
@@ -542,8 +559,16 @@ function renderCharacterSection(section, state = {}) {
                 ${!state.loading && !state.error && characters.length ? `
                     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                         ${characters.map(character => `
-                            <div class="aspect-[4/5] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-end">
-                                <span class="text-xs font-bold text-gray-700 dark:text-gray-200 truncate">${escapeHtml(getItemLabel(character, '캐릭터 이름'))}</span>
+                            <div class="aspect-[4/5] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden flex flex-col">
+                                <div class="flex-1 min-h-0 bg-gray-100 dark:bg-gray-900/50 relative">
+                                    <img src="${escapeHtml(getAssetUrl(character.coverImage))}" alt="${escapeHtml(character.name)}" class="absolute inset-0 w-full h-full object-cover" onerror="this.classList.add('hidden'); this.nextElementSibling.classList.remove('hidden');">
+                                    <div class="hidden absolute inset-0 flex items-center justify-center text-gray-300 dark:text-gray-600">
+                                        <i data-lucide="image-off" class="w-8 h-8"></i>
+                                    </div>
+                                </div>
+                                <div class="p-3 border-t border-gray-100 dark:border-gray-700 min-h-[58px]">
+                                    ${renderCharacterName(character)}
+                                </div>
                             </div>
                         `).join('')}
                     </div>
