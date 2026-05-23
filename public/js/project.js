@@ -915,10 +915,22 @@ function renderCharacterDetailShell(project, character, state = {}) {
                     <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${escapeHtml(project.name)} / 캐릭터 상세</p>
                 </div>
             </div>
-            <button type="button" onclick="window.openCharacterFolder('${escapeJsString(character.prefix)}')" class="flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
-                <i data-lucide="folder-open" class="w-4 h-4"></i>
-                폴더 열기
-            </button>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <button type="button" onclick="window.openCharacterFolder('${escapeJsString(character.prefix)}')" class="hidden sm:flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                    <i data-lucide="folder-open" class="w-4 h-4"></i>
+                    폴더 열기
+                </button>
+                <div class="relative">
+                    <button type="button" onclick="window.toggleCharacterActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
+                        <i data-lucide="more-vertical" class="w-5 h-5"></i>
+                    </button>
+                    <div id="character-action-menu" class="hidden absolute right-0 top-10 z-20 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
+                        <button type="button" onclick="window.renameActiveCharacter()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">캐릭터 이름 변경</button>
+                        <button type="button" onclick="window.openCharacterFolder('${escapeJsString(character.prefix)}')" class="sm:hidden w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">폴더 열기</button>
+                        <button type="button" onclick="window.deleteActiveCharacter()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">캐릭터 삭제</button>
+                    </div>
+                </div>
+            </div>
         </div>
 
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
@@ -1153,6 +1165,103 @@ export function openCharacterFolder(prefix) {
     if (!prefix || !window.loadPath) return;
     window.switchTab('explorer');
     window.loadPath(prefix);
+}
+
+export function toggleCharacterActionMenu(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('character-action-menu');
+    if (!menu) return;
+
+    menu.classList.toggle('hidden');
+}
+
+function closeCharacterActionMenu() {
+    document.getElementById('character-action-menu')?.classList.add('hidden');
+}
+
+export async function renameActiveCharacter() {
+    closeCharacterActionMenu();
+
+    const project = getActiveProject();
+    const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
+    if (!project || !character) return;
+
+    const nextFolderName = prompt('캐릭터 폴더 이름을 입력하세요.', character.folderName);
+    if (nextFolderName === null) return;
+
+    const folderName = normalizeProjectFolderName(nextFolderName);
+    if (isInvalidProjectFolderName(folderName)) {
+        alert('이름에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
+        return;
+    }
+
+    const nextAlias = prompt('캐릭터 표시 이름을 입력하세요. 비워두면 폴더 이름을 표시합니다.', character.alias || '');
+    if (nextAlias === null) return;
+
+    const alias = nextAlias.trim();
+    const folderChanged = folderName !== character.folderName;
+    const aliasChanged = alias !== (character.alias || '');
+
+    if (!folderChanged && !aliasChanged) return;
+
+    if (folderChanged && getProjectItems(project, 'characters').some(item => item.folderName === folderName)) {
+        alert('이미 존재하는 캐릭터 이름입니다.');
+        return;
+    }
+
+    const oldPrefix = character.prefix;
+    const newPrefix = `${project.prefix}${folderName}/`;
+
+    try {
+        if (folderChanged) {
+            await renameProjectFolder(oldPrefix, newPrefix);
+        }
+
+        if (aliasChanged || folderChanged) {
+            await saveProjectAlias(newPrefix, alias);
+        }
+
+        clearProjectCaches(project.prefix, oldPrefix, newPrefix);
+        project.charactersLoaded = false;
+        await loadProjectCharacters(project, true);
+        await openCharacterDetail(project.id, newPrefix, true);
+        history.replaceState(
+            { tab: 'project', projectView: 'character-detail', projectId: project.id, characterId: newPrefix },
+            '',
+            `#project/${project.id}/character/${encodeURIComponent(folderName)}`
+        );
+
+        if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
+    } catch (err) {
+        alert(err.message || '캐릭터 이름 변경에 실패했습니다.');
+    }
+}
+
+export async function deleteActiveCharacter() {
+    closeCharacterActionMenu();
+
+    const project = getActiveProject();
+    const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
+    if (!project || !character) return;
+
+    if (!confirm(`'${character.name || character.folderName}' 캐릭터와 그 안의 모든 파일을 삭제하시겠습니까?\n이 작업은 되돌릴 수 없습니다.`)) return;
+
+    try {
+        await deleteProjectFolder(character.prefix);
+        clearProjectCaches(project.prefix, character.prefix);
+        project.charactersLoaded = false;
+        await loadProjectCharacters(project, true);
+        await openProjectSection('character', true);
+        history.replaceState(
+            { tab: 'project', projectView: 'section', projectId: project.id, projectSection: 'character' },
+            '',
+            `#project/${project.id}/character`
+        );
+
+        if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
+    } catch (err) {
+        alert(err.message || '캐릭터 삭제에 실패했습니다.');
+    }
 }
 
 function renderProjectItemCreateModal() {
