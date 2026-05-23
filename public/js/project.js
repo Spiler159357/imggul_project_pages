@@ -61,6 +61,15 @@ function getProjectDisplayName(folderPrefix, folderName) {
     return alias || folderName;
 }
 
+function getFolderDisplayName(folderPrefix, folderName) {
+    const alias = window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) : null;
+    return alias || folderName;
+}
+
+function isVisibleProjectChildFolder(folderName) {
+    return folderName && !folderName.startsWith('.') && !EXCLUDED_PROJECT_FOLDERS.has(folderName);
+}
+
 async function saveProjectAlias(key, alias) {
     const res = await fetch('/api/aliases', {
         method: 'POST',
@@ -140,6 +149,41 @@ export async function loadProjects(force = false) {
         .filter(project => project.folderName && !EXCLUDED_PROJECT_FOLDERS.has(project.folderName));
 
     return window.PROJECTS;
+}
+
+export async function loadProjectCharacters(project, force = false) {
+    if (!project?.prefix) return [];
+    if (!force && project.charactersLoaded) return getProjectItems(project, 'characters');
+
+    const [listRes, aliasRes] = await Promise.all([
+        fetch(`/api/list?prefix=${encodeURIComponent(project.prefix)}`),
+        fetch(`/api/aliases?prefix=${encodeURIComponent(project.prefix)}`)
+    ]);
+
+    if (!listRes.ok) throw new Error('캐릭터 목록을 불러오지 못했습니다.');
+
+    if (aliasRes.ok) {
+        const aliasData = await aliasRes.json();
+        window.GLOBAL_ALIASES = aliasData.global || {};
+        window.PROJECT_ALIASES = aliasData.project || {};
+    }
+
+    const data = await listRes.json();
+    project.characters = (data.folders || [])
+        .map(folderPrefix => {
+            const folderName = folderPrefix.split('/').filter(Boolean).pop();
+            return {
+                id: folderPrefix,
+                folderName,
+                prefix: folderPrefix,
+                name: getFolderDisplayName(folderPrefix, folderName),
+                alias: window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) || '' : ''
+            };
+        })
+        .filter(character => isVisibleProjectChildFolder(character.folderName));
+    project.charactersLoaded = true;
+
+    return project.characters;
 }
 
 function renderEmptyState(message) {
@@ -347,6 +391,8 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
         return;
     }
 
+    await loadProjectCharacters(project).catch(() => []);
+
     window.PROJECT_VIEW = 'detail';
     window.PROJECT_ACTIVE_PROJECT_ID = project.id;
     window.PROJECT_ACTIVE_SECTION = null;
@@ -415,7 +461,14 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
     window.PROJECT_ACTIVE_SECTION = section.key;
 
     if (section.key === 'prompt') renderPromptSection(section);
-    else if (section.key === 'character') renderCharacterSection(section);
+    else if (section.key === 'character') {
+        const project = getActiveProject();
+        renderCharacterSection(section, { loading: !!project && !project.charactersLoaded });
+        await loadProjectCharacters(project).catch(err => {
+            if (window.PROJECT_ACTIVE_SECTION === 'character') renderCharacterSection(section, { error: err.message });
+        });
+        if (window.PROJECT_ACTIVE_SECTION === 'character') renderCharacterSection(section);
+    }
     else renderSituationSection(section);
 
     if (!skipHistory) {
@@ -470,7 +523,7 @@ function renderPromptSection(section) {
     `);
 }
 
-function renderCharacterSection(section) {
+function renderCharacterSection(section, state = {}) {
     const project = getActiveProject();
     const characters = getProjectItems(project, 'characters');
 
@@ -484,7 +537,9 @@ function renderCharacterSection(section) {
                         <i data-lucide="plus" class="w-5 h-5"></i>
                     </button>
                 </div>
-                ${characters.length ? `
+                ${state.loading ? renderEmptyState('캐릭터를 불러오는 중입니다.') : ''}
+                ${state.error ? renderEmptyState(state.error) : ''}
+                ${!state.loading && !state.error && characters.length ? `
                     <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                         ${characters.map(character => `
                             <div class="aspect-[4/5] bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-end">
@@ -492,7 +547,8 @@ function renderCharacterSection(section) {
                             </div>
                         `).join('')}
                     </div>
-                ` : renderEmptyState('등록된 캐릭터가 없습니다.')}
+                ` : ''}
+                ${!state.loading && !state.error && !characters.length ? renderEmptyState('등록된 캐릭터가 없습니다.') : ''}
             </section>
         </div>
     `);
