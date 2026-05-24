@@ -72,6 +72,37 @@ body {
     min-height: 38px;
 }
 
+.prose-like h1,
+.prose-like h2,
+.prose-like h3,
+.prose-like h4,
+.prose-like h5,
+.prose-like h6 {
+    margin: 0.75rem 0 0.35rem;
+    font-weight: 800;
+    line-height: 1.25;
+}
+
+.prose-like h1 { font-size: 1.5rem; }
+.prose-like h2 { font-size: 1.25rem; }
+.prose-like h3 { font-size: 1.125rem; }
+.prose-like p { margin: 0.35rem 0; }
+.prose-like ul {
+    margin: 0.4rem 0;
+    padding-left: 1.25rem;
+    list-style: disc;
+}
+.prose-like code {
+    padding: 0.1rem 0.25rem;
+    border-radius: 0.25rem;
+    background: #f3f4f6;
+    font-size: 0.9em;
+}
+
+.dark .prose-like code {
+    background: #1f2937;
+}
+
 .bg-checkered {
     background-image: 
         linear-gradient(45deg, #e5e7eb 25%, transparent 25%),

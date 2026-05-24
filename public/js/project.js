@@ -482,6 +482,118 @@ function initPromptSectionInput() {
     updateCount();
 }
 
+async function loadProjectPromptMarkdown(project) {
+    if (!project?.prefix) return '';
+
+    const key = `${project.prefix}prompt.md`;
+    const res = await fetch(`${getAssetUrl(key)}?_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.status === 404) return '';
+    if (!res.ok) throw new Error('prompt.md를 불러오지 못했습니다.');
+
+    return await res.text();
+}
+
+function renderInlineMarkdown(value) {
+    return escapeHtml(value)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+}
+
+function renderMarkdownPreview(markdown) {
+    const lines = String(markdown || '').split(/\r?\n/);
+    const html = [];
+    let listOpen = false;
+
+    const closeList = () => {
+        if (listOpen) {
+            html.push('</ul>');
+            listOpen = false;
+        }
+    };
+
+    lines.forEach(line => {
+        const heading = line.match(/^(#{1,6})\s+(.+)$/);
+        const listItem = line.match(/^\s*[-*]\s+(.+)$/);
+
+        if (heading) {
+            closeList();
+            const level = heading[1].length;
+            html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
+            return;
+        }
+
+        if (listItem) {
+            if (!listOpen) {
+                html.push('<ul>');
+                listOpen = true;
+            }
+            html.push(`<li>${renderInlineMarkdown(listItem[1])}</li>`);
+            return;
+        }
+
+        closeList();
+        html.push(line.trim() ? `<p>${renderInlineMarkdown(line)}</p>` : '<br>');
+    });
+
+    closeList();
+    return html.join('');
+}
+
+function syncProjectPromptPreview() {
+    const input = document.getElementById('project-prompt-input');
+    const preview = document.getElementById('project-prompt-preview');
+    if (!input || !preview) return;
+
+    preview.innerHTML = renderMarkdownPreview(input.value);
+}
+
+async function hydrateProjectPromptInput() {
+    const project = getActiveProject();
+    const input = document.getElementById('project-prompt-input');
+    const status = document.getElementById('project-prompt-load-status');
+    if (!project || !input) return;
+
+    if (status) status.textContent = 'prompt.md를 불러오는 중입니다.';
+
+    try {
+        input.value = await loadProjectPromptMarkdown(project);
+        input.dispatchEvent(new Event('input'));
+        syncProjectPromptPreview();
+        if (status) status.textContent = input.value ? 'prompt.md를 불러왔습니다.' : '';
+    } catch (err) {
+        if (status) status.textContent = err.message || 'prompt.md를 불러오지 못했습니다.';
+    }
+}
+
+function initProjectPromptMarkdownToggle() {
+    const input = document.getElementById('project-prompt-input');
+    const preview = document.getElementById('project-prompt-preview');
+    const toggle = document.getElementById('project-prompt-preview-toggle');
+    if (!input || !preview || !toggle) return;
+
+    const setPreviewMode = (enabled) => {
+        input.classList.toggle('hidden', enabled);
+        preview.classList.toggle('hidden', !enabled);
+        input.readOnly = enabled;
+        toggle.setAttribute('aria-pressed', String(enabled));
+        toggle.classList.toggle('bg-indigo-600', enabled);
+        toggle.classList.toggle('text-white', enabled);
+        toggle.classList.toggle('border-indigo-600', enabled);
+        toggle.classList.toggle('border-gray-200', !enabled);
+        toggle.classList.toggle('dark:border-gray-700', !enabled);
+        toggle.classList.toggle('text-gray-600', !enabled);
+        toggle.classList.toggle('dark:text-gray-300', !enabled);
+        if (enabled) syncProjectPromptPreview();
+    };
+
+    input.addEventListener('input', syncProjectPromptPreview);
+    toggle.addEventListener('click', () => {
+        setPreviewMode(toggle.getAttribute('aria-pressed') !== 'true');
+    });
+    setPreviewMode(false);
+}
+
 async function uploadProjectPromptMarkdown(project, content) {
     if (!project?.prefix) throw new Error('프로젝트 경로를 찾을 수 없습니다.');
 
@@ -868,8 +980,18 @@ function renderPromptSection(section) {
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
             <section class="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(260px,2fr)] gap-4 sm:gap-6 min-h-full">
                 <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex flex-col min-h-[360px]">
-                    <h3 class="font-bold text-sm text-gray-900 dark:text-white mb-3">입력 공간</h3>
+                    <div class="flex items-start justify-between gap-3 mb-3">
+                        <div>
+                            <h3 class="font-bold text-sm text-gray-900 dark:text-white">입력 공간</h3>
+                            <p id="project-prompt-load-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                        </div>
+                        <button id="project-prompt-preview-toggle" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition" aria-pressed="false">
+                            <i data-lucide="eye" class="w-4 h-4"></i>
+                            <span>마크다운 보기</span>
+                        </button>
+                    </div>
                     <textarea id="project-prompt-input" class="flex-1 resize-none outline-none bg-transparent text-sm leading-6 text-gray-700 dark:text-gray-200" aria-label="프롬프트 입력"></textarea>
+                    <div id="project-prompt-preview" class="hidden flex-1 overflow-y-auto text-sm leading-6 text-gray-700 dark:text-gray-200 prose-like" aria-label="마크다운 미리보기"></div>
                 </div>
 
                 <div class="flex flex-col gap-3">
@@ -901,6 +1023,8 @@ function renderPromptSection(section) {
         </div>
     `);
     initPromptSectionInput();
+    initProjectPromptMarkdownToggle();
+    hydrateProjectPromptInput();
 }
 
 export async function saveProjectPromptMarkdown() {
