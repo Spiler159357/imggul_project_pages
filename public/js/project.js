@@ -469,6 +469,19 @@ function renderProjectShell(content) {
     refreshProjectIcons();
 }
 
+function initPromptSectionInput() {
+    const input = document.getElementById('project-prompt-input');
+    const count = document.getElementById('project-prompt-count');
+    if (!input || !count) return;
+
+    const updateCount = () => {
+        count.textContent = `${Array.from(input.value).length.toLocaleString()}자`;
+    };
+
+    input.addEventListener('input', updateCount);
+    updateCount();
+}
+
 export async function renderProjectManage(skipHistory = true) {
     window.PROJECT_VIEW = 'manage';
     window.PROJECT_ACTIVE_SECTION = null;
@@ -833,15 +846,19 @@ function renderPromptSection(section) {
             <section class="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(260px,2fr)] gap-4 sm:gap-6 min-h-full">
                 <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex flex-col min-h-[360px]">
                     <h3 class="font-bold text-sm text-gray-900 dark:text-white mb-3">입력 공간</h3>
-                    <textarea class="flex-1 resize-none outline-none bg-transparent text-sm text-gray-700 dark:text-gray-200" aria-label="프롬프트 입력"></textarea>
+                    <textarea id="project-prompt-input" class="flex-1 resize-none outline-none bg-transparent text-sm leading-6 text-gray-700 dark:text-gray-200" aria-label="프롬프트 입력"></textarea>
                 </div>
 
                 <div class="flex flex-col gap-3">
-                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-center font-bold text-sm text-gray-700 dark:text-gray-200">현재 글자 수</div>
+                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-center">
+                        <span class="block text-[11px] font-bold text-gray-500 dark:text-gray-400">현재 글자 수</span>
+                        <strong id="project-prompt-count" class="block mt-1 text-2xl font-extrabold text-gray-900 dark:text-white">0자</strong>
+                    </div>
                     <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-center text-sm text-gray-700 dark:text-gray-200">
-                        <button type="button" class="font-bold hover:text-indigo-600 dark:hover:text-indigo-400">마크다운</button>
-                        <span class="mx-2 text-gray-300 dark:text-gray-600">|</span>
-                        <button type="button" class="font-bold hover:text-indigo-600 dark:hover:text-indigo-400">요약</button>
+                        <button type="button" class="inline-flex items-center justify-center gap-1.5 font-bold hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                            <i data-lucide="sparkles" class="w-4 h-4"></i>
+                            <span>마크다운/요약</span>
+                        </button>
                     </div>
                     <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex-1 min-h-[180px]">
                         <p class="font-bold text-sm text-gray-900 dark:text-white">추가 기능을 위한 공간</p>
@@ -851,6 +868,7 @@ function renderPromptSection(section) {
             </section>
         </div>
     `);
+    initPromptSectionInput();
 }
 
 function getSituationImageCandidates(situation, index) {

@@ -34,17 +34,16 @@
         <section class="flex-1 flex gap-6 min-h-0">
             <div class="w-3/5 flex flex-col border border-gray-300 rounded p-4">
                 <h3 class="font-bold mb-4">입력 공간</h3>
-                <textarea class="flex-1 resize-none outline-none auto-resize-textarea" placeholder=""></textarea>
+                <textarea id="project-prompt-input" class="flex-1 resize-none outline-none auto-resize-textarea" placeholder="" aria-label="프롬프트 입력"></textarea>
             </div>
             
             <div class="w-2/5 flex flex-col gap-4">
                 <div class="border border-gray-300 rounded p-4 text-center">
-                    <span class="font-bold">현재 글자 수</span>
+                    <span class="block text-sm font-bold text-gray-500">현재 글자 수</span>
+                    <strong id="project-prompt-count" class="block mt-1 text-2xl font-extrabold text-gray-900">0자</strong>
                 </div>
                 <div class="border border-gray-300 rounded p-4 text-center">
-                    <button class="font-bold">마크다운화</button>
-                    <span class="mx-2">|</span>
-                    <button class="font-bold">요약</button>
+                    <button class="font-bold">마크다운/요약</button>
                 </div>
                 <div class="border border-gray-300 rounded p-4 flex-1">
                     <p class="font-bold">추가 기능을 위한 공간</p>
@@ -53,5 +52,16 @@
             </div>
         </section>
     </main>
+    <script>
+        const promptInput = document.getElementById('project-prompt-input');
+        const promptCount = document.getElementById('project-prompt-count');
+
+        function updatePromptCount() {
+            promptCount.textContent = `${Array.from(promptInput.value).length.toLocaleString()}자`;
+        }
+
+        promptInput.addEventListener('input', updatePromptCount);
+        updatePromptCount();
+    </script>
 </body>
 </html>
