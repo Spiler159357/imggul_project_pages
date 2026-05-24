@@ -1,4 +1,4 @@
-const EXCLUDED_PROJECT_FOLDERS = new Set(['logs', '_temp_craft']);
+const EXCLUDED_PROJECT_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 
 const PROJECT_SECTIONS = [
     {
