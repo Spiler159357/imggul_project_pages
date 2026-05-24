@@ -482,6 +482,29 @@ function initPromptSectionInput() {
     updateCount();
 }
 
+async function uploadProjectPromptMarkdown(project, content) {
+    if (!project?.prefix) throw new Error('프로젝트 경로를 찾을 수 없습니다.');
+
+    const key = `${project.prefix}prompt.md`;
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'text/markdown; charset=utf-8',
+            'X-File-Name': encodeURIComponent('prompt.md'),
+            'X-Absolute-Path': encodeURIComponent(key)
+        },
+        body: new Blob([content], { type: 'text/markdown; charset=utf-8' }),
+        cache: 'no-store'
+    });
+
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '프롬프트 저장에 실패했습니다.');
+    }
+
+    return key;
+}
+
 export async function renderProjectManage(skipHistory = true) {
     window.PROJECT_VIEW = 'manage';
     window.PROJECT_ACTIVE_SECTION = null;
@@ -860,15 +883,54 @@ function renderPromptSection(section) {
                             <span>마크다운/요약</span>
                         </button>
                     </div>
-                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex-1 min-h-[180px]">
-                        <p class="font-bold text-sm text-gray-900 dark:text-white">추가 기능을 위한 공간</p>
-                        <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">기능 추가 가능성 높음</p>
+                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex-1 min-h-[180px] flex flex-col">
+                        <div>
+                            <p class="font-bold text-sm text-gray-900 dark:text-white">추가 기능을 위한 공간</p>
+                            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">기능 추가 가능성 높음</p>
+                        </div>
+                        <div class="mt-auto pt-4 flex items-center justify-end gap-3">
+                            <p id="project-prompt-save-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                            <button id="project-prompt-save-btn" type="button" onclick="window.saveProjectPromptMarkdown()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
+                                <i data-lucide="save" class="w-4 h-4"></i>
+                                <span>저장</span>
+                            </button>
+                        </div>
                     </div>
                 </div>
             </section>
         </div>
     `);
     initPromptSectionInput();
+}
+
+export async function saveProjectPromptMarkdown() {
+    const project = getActiveProject();
+    const input = document.getElementById('project-prompt-input');
+    const button = document.getElementById('project-prompt-save-btn');
+    const status = document.getElementById('project-prompt-save-status');
+    if (!project || !input) return;
+
+    const previousButtonHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span>저장 중</span>';
+        refreshProjectIcons();
+    }
+    if (status) status.textContent = '';
+
+    try {
+        await uploadProjectPromptMarkdown(project, input.value);
+        if (status) status.textContent = 'prompt.md로 저장되었습니다.';
+        if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
+    } catch (err) {
+        if (status) status.textContent = err.message || '저장에 실패했습니다.';
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = previousButtonHtml;
+            refreshProjectIcons();
+        }
+    }
 }
 
 function getSituationImageCandidates(situation, index) {
