@@ -350,10 +350,31 @@ export async function loadProjectSituations(project, force = false) {
     if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
 
     const data = await res.json();
-    project.situations = Array.isArray(data.situations) ? data.situations : [];
+    project.situations = normalizeProjectSituations(Array.isArray(data.situations) ? data.situations : []);
     project.situationsLoaded = true;
 
     return project.situations;
+}
+
+function normalizeProjectSituations(situations) {
+    return situations.map((situation, index) => {
+        const id = situation?.id || situation?.folderName || `situation-${index + 1}`;
+        const alias = situation?.alias || '';
+        const name = situation?.name || alias || id;
+        return {
+            ...situation,
+            id,
+            folderName: situation?.folderName || id,
+            name,
+            alias,
+            imageNumber: Number(situation?.imageNumber) || index + 1,
+            prompt: {
+                expression: situation?.prompt?.expression || situation?.expression || '',
+                action: situation?.prompt?.action || situation?.action || ''
+            },
+            createdAt: situation?.createdAt || Date.now()
+        };
+    });
 }
 
 async function saveProjectSituations(project) {
@@ -405,6 +426,27 @@ function escapeJsString(value) {
 
 function getAssetUrl(key) {
     return `/${encodeURI(key)}`;
+}
+
+function getSituationDisplayName(situation) {
+    return situation?.alias || situation?.name || situation?.id || '상황 이름';
+}
+
+function getSituationImageNumber(project, situation) {
+    const situations = getProjectItems(project, 'situations');
+    const index = situations.findIndex(item => item.id === situation?.id);
+    return Number(situation?.imageNumber) || (index >= 0 ? index + 1 : situations.length + 1);
+}
+
+function getSituationImageKey(project, situation) {
+    return `${project.prefix}${getSituationImageNumber(project, situation)}.webp`;
+}
+
+function getNextSituationImageNumber(project) {
+    const usedNumbers = getProjectItems(project, 'situations')
+        .map(situation => Number(situation.imageNumber))
+        .filter(number => Number.isFinite(number));
+    return usedNumbers.length ? Math.max(...usedNumbers) + 1 : getProjectItems(project, 'situations').length + 1;
 }
 
 function renderCharacterName(character) {
@@ -812,14 +854,7 @@ function renderPromptSection(section) {
 }
 
 function getSituationImageCandidates(situation, index) {
-    const values = [
-        String(index),
-        String(index + 1),
-        situation?.id,
-        situation?.folderName,
-        situation?.name,
-        situation?.alias
-    ];
+    const values = [String(Number(situation?.imageNumber) || index + 1)];
 
     return values
         .filter(Boolean)
@@ -1407,18 +1442,28 @@ async function createSituation(project, situationId, alias) {
         throw new Error('이미 존재하는 상황 이름입니다.');
     }
 
+    const imageNumber = getNextSituationImageNumber(project);
+    const name = alias || situationId;
+    const situation = {
+        id: situationId,
+        folderName: situationId,
+        name,
+        alias,
+        imageNumber,
+        prompt: {
+            expression: '',
+            action: ''
+        },
+        createdAt: Date.now()
+    };
+
     project.situations = [
         ...getProjectItems(project, 'situations'),
-        {
-            id: situationId,
-            folderName: situationId,
-            name: alias || situationId,
-            alias,
-            createdAt: Date.now()
-        }
+        situation
     ];
     project.situationsLoaded = true;
     await saveProjectSituations(project);
+    await saveProjectAlias(getSituationImageKey(project, situation), getSituationDisplayName(situation));
 }
 
 function renderCharacterSection(section, state = {}) {
@@ -1481,9 +1526,10 @@ function renderSituationSection(section, state = {}) {
                     ${!state.loading && !state.error && situations.length ? `
                         <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 gap-3 sm:gap-4">
                             ${situations.map(situation => `
-                                <div class="aspect-square bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex items-end">
-                                    <span class="text-xs font-bold text-gray-700 dark:text-gray-200 truncate">${escapeHtml(getItemLabel(situation, '상황 이름'))}</span>
-                                </div>
+                                <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="aspect-square text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
+                                    <span class="text-[11px] font-bold text-gray-400 dark:text-gray-500">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
+                                    <span class="text-xs font-bold text-gray-700 dark:text-gray-200 truncate">${escapeHtml(getSituationDisplayName(situation))}</span>
+                                </button>
                             `).join('')}
                         </div>
                     ` : ''}
@@ -1502,12 +1548,297 @@ function renderSituationSection(section, state = {}) {
     `);
 }
 
+function getSituationById(project, situationId) {
+    const decodedId = decodeURIComponent(situationId || '');
+    return getProjectItems(project, 'situations').find(situation =>
+        situation.id === decodedId ||
+        situation.folderName === decodedId
+    );
+}
+
+function getSituationPrompt(situation) {
+    return {
+        expression: situation?.prompt?.expression || '',
+        action: situation?.prompt?.action || ''
+    };
+}
+
+function getSituationCharacterRows(project, situation) {
+    const imageIndex = getSituationImageNumber(project, situation) - 1;
+    return getProjectItems(project, 'characters').map(character => {
+        const files = Array.isArray(character.files) ? character.files : [];
+        const image = findSituationImage(files, situation, imageIndex);
+        return {
+            character,
+            image,
+            imageUrl: image ? `${getAssetUrl(image.key)}?t=${image.uploaded ? new Date(image.uploaded).getTime() : Date.now()}` : ''
+        };
+    });
+}
+
+function renderSituationCharacterProgress(project, situation, state = {}) {
+    if (state.loading) return renderEmptyState('캐릭터별 이미지 공정률을 불러오는 중입니다.');
+    if (state.error) return renderEmptyState(state.error);
+
+    const rows = getSituationCharacterRows(project, situation);
+    if (!rows.length) return renderEmptyState('등록된 캐릭터가 없습니다. 캐릭터를 먼저 추가하면 공정률을 표시할 수 있습니다.');
+
+    const complete = rows.filter(row => row.image).length;
+    const total = rows.length;
+    const percent = total ? Math.round((complete / total) * 100) : 0;
+
+    return `
+        <div class="space-y-3">
+            <div class="flex items-center justify-between gap-3">
+                <div>
+                    <h3 class="text-sm font-bold text-gray-900 dark:text-white">캐릭터별 공정률</h3>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">${complete}/${total} 완료</p>
+                </div>
+                <span class="text-2xl font-bold text-indigo-600 dark:text-indigo-400">${percent}%</span>
+            </div>
+            <div class="h-2.5 rounded-full bg-gray-100 dark:bg-gray-900 overflow-hidden">
+                <div class="h-full bg-indigo-600 dark:bg-indigo-500 rounded-full transition-all" style="width: ${percent}%"></div>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
+                ${rows.map(row => `
+                    <div class="bg-gray-50 dark:bg-gray-900/40 border border-gray-100 dark:border-gray-700 rounded-lg p-2.5 flex items-center gap-3 min-w-0">
+                        <div class="w-12 h-12 flex-shrink-0 rounded-md overflow-hidden bg-gray-100 dark:bg-gray-900/60 flex items-center justify-center">
+                            ${row.image ? `
+                                <img src="${escapeHtml(row.imageUrl)}" alt="${escapeHtml(row.character.name)}" class="w-full h-full object-cover" loading="lazy">
+                            ` : `
+                                <i data-lucide="image-plus" class="w-5 h-5 text-gray-300 dark:text-gray-600"></i>
+                            `}
+                        </div>
+                        <div class="min-w-0 flex-1">
+                            <div class="flex items-center justify-between gap-2">
+                                <span class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(row.character.name || row.character.folderName)}</span>
+                                ${renderCharacterStatusBadge(!!row.image)}
+                            </div>
+                            <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500 truncate">${row.image ? escapeHtml(getFileNameFromKey(row.image.key)) : `${escapeHtml(getSituationImageNumber(project, situation))}.webp 미생성`}</p>
+                        </div>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderSituationDetailShell(project, situation, state = {}) {
+    const prompt = getSituationPrompt(situation);
+    const imageNumber = getSituationImageNumber(project, situation);
+
+    renderProjectShell(`
+        <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
+            <div class="flex items-center gap-2 min-w-0">
+                <button type="button" onclick="window.openProjectSection('situation', false)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="상황 목록" aria-label="상황 목록">
+                    <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                </button>
+                <div class="min-w-0">
+                    <h1 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(getSituationDisplayName(situation))}</h1>
+                    <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${escapeHtml(project.name)} / 상황 상세 / ${escapeHtml(imageNumber)}.webp</p>
+                </div>
+            </div>
+            <div class="relative flex-shrink-0">
+                <button type="button" onclick="window.toggleSituationActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
+                    <i data-lucide="more-vertical" class="w-5 h-5"></i>
+                </button>
+                <div id="situation-action-menu" class="hidden absolute right-0 top-10 z-20 w-40 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
+                    <button type="button" onclick="window.renameActiveSituation()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">상황 이름 변경</button>
+                    <button type="button" onclick="window.deleteActiveSituation()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">상황 삭제</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-4 sm:p-6">
+            <section class="max-w-7xl mx-auto min-h-full">
+                <form id="situation-prompt-form" onsubmit="window.saveActiveSituationPrompt(event)" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                        <div>
+                            <label for="situation-expression-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">표정</label>
+                            <textarea id="situation-expression-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="상황에 필요한 표정 프롬프트">${escapeHtml(prompt.expression)}</textarea>
+                        </div>
+                        <div>
+                            <label for="situation-action-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">행위</label>
+                            <textarea id="situation-action-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="상황에 필요한 행위 프롬프트">${escapeHtml(prompt.action)}</textarea>
+                        </div>
+                    </div>
+                    <div class="mt-3 flex items-center justify-end gap-3">
+                        <p id="situation-prompt-save-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                        <button id="situation-prompt-save-btn" type="submit" class="flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
+                            <i data-lucide="save" class="w-4 h-4"></i>
+                            저장
+                        </button>
+                    </div>
+                </form>
+
+                <div class="mt-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 min-h-[280px]">
+                    ${renderSituationCharacterProgress(project, situation, state)}
+                </div>
+            </section>
+        </div>
+    `);
+}
+
+export async function openSituationDetail(projectId = window.PROJECT_ACTIVE_PROJECT_ID, situationId = '', skipHistory = false) {
+    if (!Array.isArray(window.PROJECTS)) {
+        await loadProjects().catch(() => []);
+    }
+
+    const project = getProjectById(projectId);
+    if (!project) {
+        renderProjectManage(skipHistory);
+        return;
+    }
+
+    await Promise.all([
+        loadProjectCharacters(project).catch(() => []),
+        loadProjectSituations(project).catch(() => [])
+    ]);
+
+    const situation = getSituationById(project, situationId);
+    if (!situation) {
+        await openProjectSection('situation', skipHistory);
+        return;
+    }
+
+    window.PROJECT_VIEW = 'situation-detail';
+    window.PROJECT_ACTIVE_PROJECT_ID = project.id;
+    window.PROJECT_ACTIVE_SECTION = 'situation';
+    window.PROJECT_ACTIVE_SITUATION_ID = situation.id;
+
+    renderSituationDetailShell(project, situation, { loading: getProjectItems(project, 'characters').some(character => !character.filesLoaded) });
+
+    try {
+        await Promise.all(getProjectItems(project, 'characters').map(character => loadCharacterFiles(character).catch(() => [])));
+        if (window.PROJECT_VIEW === 'situation-detail' && window.PROJECT_ACTIVE_SITUATION_ID === situation.id) {
+            renderSituationDetailShell(project, situation);
+        }
+    } catch (err) {
+        if (window.PROJECT_VIEW === 'situation-detail' && window.PROJECT_ACTIVE_SITUATION_ID === situation.id) {
+            renderSituationDetailShell(project, situation, { error: err.message });
+        }
+    }
+
+    if (!skipHistory) {
+        setProjectRoute(
+            { projectView: 'situation-detail', projectId: project.id, situationId: situation.id },
+            `#project/${project.id}/situation/${encodeURIComponent(situation.id)}`
+        );
+    }
+}
+
+export function toggleSituationActionMenu(event) {
+    if (event) event.stopPropagation();
+    const menu = document.getElementById('situation-action-menu');
+    if (!menu) return;
+
+    menu.classList.toggle('hidden');
+}
+
+function closeSituationActionMenu() {
+    document.getElementById('situation-action-menu')?.classList.add('hidden');
+}
+
+export async function renameActiveSituation() {
+    closeSituationActionMenu();
+
+    const project = getActiveProject();
+    const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    if (!project || !situation) return;
+
+    const nextName = prompt('상황 이름을 입력하세요.', getSituationDisplayName(situation));
+    if (nextName === null) return;
+
+    const name = nextName.trim();
+    if (!name) {
+        alert('상황 이름을 입력하세요.');
+        return;
+    }
+
+    situation.name = name;
+    situation.alias = name;
+
+    try {
+        await saveProjectSituations(project);
+        await saveProjectAlias(getSituationImageKey(project, situation), name);
+        renderSituationDetailShell(project, situation);
+    } catch (err) {
+        alert(err.message || '상황 이름 변경에 실패했습니다.');
+    }
+}
+
+export async function deleteActiveSituation() {
+    closeSituationActionMenu();
+
+    const project = getActiveProject();
+    const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    if (!project || !situation) return;
+
+    if (!confirm(`'${getSituationDisplayName(situation)}' 상황을 삭제하시겠습니까?\n이미 생성된 이미지는 삭제하지 않습니다.`)) return;
+
+    try {
+        const imageKey = getSituationImageKey(project, situation);
+        project.situations = getProjectItems(project, 'situations').filter(item => item.id !== situation.id);
+        project.situationsLoaded = true;
+        await saveProjectSituations(project);
+        await saveProjectAlias(imageKey, '');
+        await openProjectSection('situation', true);
+        history.replaceState(
+            { tab: 'project', projectView: 'section', projectId: project.id, projectSection: 'situation' },
+            '',
+            `#project/${project.id}/situation`
+        );
+    } catch (err) {
+        alert(err.message || '상황 삭제에 실패했습니다.');
+    }
+}
+
+export async function saveActiveSituationPrompt(event) {
+    if (event) event.preventDefault();
+
+    const project = getActiveProject();
+    const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    const expressionInput = document.getElementById('situation-expression-input');
+    const actionInput = document.getElementById('situation-action-input');
+    const button = document.getElementById('situation-prompt-save-btn');
+    const status = document.getElementById('situation-prompt-save-status');
+    if (!project || !situation || !expressionInput || !actionInput) return;
+
+    const previousButtonHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin"></i> 저장 중';
+        refreshProjectIcons();
+    }
+    if (status) status.textContent = '';
+
+    try {
+        situation.prompt = {
+            expression: expressionInput.value.trim(),
+            action: actionInput.value.trim()
+        };
+        situation.updatedAt = Date.now();
+        await saveProjectSituations(project);
+        if (status) status.textContent = '저장되었습니다.';
+    } catch (err) {
+        if (status) status.textContent = err.message || '저장에 실패했습니다.';
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = previousButtonHtml;
+            refreshProjectIcons();
+        }
+    }
+}
+
 export async function restoreProjectState(state = {}) {
     if (state.projectView === 'section' && state.projectSection) {
         window.PROJECT_ACTIVE_PROJECT_ID = state.projectId || getDefaultProjectId();
         await openProjectSection(state.projectSection, true);
     } else if (state.projectView === 'character-detail') {
         await openCharacterDetail(state.projectId || getDefaultProjectId(), state.characterId || '', true);
+    } else if (state.projectView === 'situation-detail') {
+        await openSituationDetail(state.projectId || getDefaultProjectId(), state.situationId || '', true);
     } else if (state.projectView === 'detail') {
         await openProjectDetail(state.projectId || getDefaultProjectId(), true);
     } else {
