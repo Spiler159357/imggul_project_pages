@@ -1,12 +1,12 @@
 // 8. main.js: 애플리케이션 진입점 및 모듈 통합 관리
-import './state.js?v=inpaint-modal-20260521';
+import './state.js?v=planner-demo-20260525a';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=project-tab-20260524';
 import * as Explorer from './explorer.js';
-import * as Craft from './craft.js?v=inpaint-modal-20260521';
+import * as Craft from './craft.js?v=planner-demo-20260525a';
 import * as TempGallery from './temp_gallery.js?v=inpaint-modal-20260521';
 import * as Modals from './modals.js';
-import * as Project from './project.js?v=prompt-md-view-20260524a';
+import * as Project from './project.js?v=planner-demo-20260525a';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals, Project);

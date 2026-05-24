@@ -197,10 +197,15 @@ export function loadCraftSettings() {
  * 반환값: 명시 반환 없음.
  */
 export function saveCraftSettings() {
+    localStorage.setItem('naiCraftSettings', JSON.stringify(window.readCraftSettings()));
+}
+
+export function readCraftSettings() {
     let promptsObj = {};
     window.PROMPT_IDS.forEach(id => { promptsObj[id] = document.getElementById(id)?.value || ''; });
     promptsObj['prompt-raw'] = document.getElementById('prompt-raw')?.value || '';
-    const settings = {
+
+    return {
         simpleMode: document.getElementById('prompt-toggle-simple')?.checked || false,
         prompts: promptsObj,
         negative: document.getElementById('nai-negative')?.value || '',
@@ -212,9 +217,69 @@ export function saveCraftSettings() {
         sm: document.getElementById('nai-sm')?.checked || false,
         sm_dyn: document.getElementById('nai-sm-dyn')?.checked || false,
         seed: document.getElementById('nai-seed')?.value || '',
+        batchCount: document.getElementById('nai-batch-count')?.value || '1',
+        vibeInfo: document.getElementById('vibe-info')?.value || '1.0',
+        vibeStrength: document.getElementById('vibe-strength')?.value || '0.6',
+        preciseStrength: document.getElementById('precise-strength')?.value || '1.0',
+        preciseFidelity: document.getElementById('precise-fidelity')?.value || '0.5',
+        preciseType: document.getElementById('precise-type')?.value || 'character&style',
         inpaintStrength: document.getElementById('inpaint-strength')?.value || '1'
     };
-    localStorage.setItem('naiCraftSettings', JSON.stringify(settings));
+}
+
+export function applyCraftSettings(settings = {}) {
+    const toggle = document.getElementById('prompt-toggle-simple');
+    if (toggle && settings.simpleMode !== undefined) {
+        toggle.checked = !!settings.simpleMode;
+        window.togglePromptMode();
+    }
+
+    if (settings.prompts) {
+        window.PROMPT_IDS.forEach(id => {
+            const el = document.getElementById(id);
+            if (el) el.value = settings.prompts[id] || '';
+        });
+        const raw = document.getElementById('prompt-raw');
+        if (raw) raw.value = settings.prompts['prompt-raw'] || '';
+    }
+
+    const valueTargets = {
+        'nai-negative': settings.negative,
+        'nai-model': settings.model,
+        'nai-steps': settings.steps,
+        'nai-scale': settings.scale,
+        'nai-sampler': settings.sampler,
+        'nai-seed': settings.seed,
+        'nai-batch-count': settings.batchCount,
+        'vibe-info': settings.vibeInfo,
+        'vibe-strength': settings.vibeStrength,
+        'precise-strength': settings.preciseStrength,
+        'precise-fidelity': settings.preciseFidelity,
+        'precise-type': settings.preciseType,
+        'inpaint-strength': settings.inpaintStrength
+    };
+    Object.entries(valueTargets).forEach(([id, value]) => {
+        const el = document.getElementById(id);
+        if (el && value !== undefined) el.value = value || '';
+    });
+
+    if (settings.res) {
+        const radio = document.querySelector(`input[name="nai-res"][value="${settings.res}"]`);
+        if (radio) radio.checked = true;
+    }
+    if (settings.sm !== undefined && document.getElementById('nai-sm')) document.getElementById('nai-sm').checked = !!settings.sm;
+    if (settings.sm_dyn !== undefined && document.getElementById('nai-sm-dyn')) document.getElementById('nai-sm-dyn').checked = !!settings.sm_dyn;
+
+    ['vibe-strength', 'vibe-info', 'precise-strength', 'precise-fidelity'].forEach(id => {
+        const el = document.getElementById(id);
+        const val = document.getElementById(`${id}-val`);
+        if (el && val) val.innerText = parseFloat(el.value || '0').toFixed(1);
+    });
+    if (document.getElementById('inpaint-strength-val') && document.getElementById('inpaint-strength')) {
+        document.getElementById('inpaint-strength-val').innerText = parseFloat(document.getElementById('inpaint-strength').value || '1').toFixed(2);
+    }
+    window.updateModelSpecificUI();
+    window.saveCraftSettings();
 }
 
 /**
@@ -305,7 +370,7 @@ export function removeExtraCharacter(id) {
  * 주요 변수: batchCount, splitPrompts, combinedPrompt, negativeText, width, height, model, charCaptionsArray - 생성 요청 구성값.
  * 반환값: 명시 반환 없음. 이미 생성 중이면 바로 종료한다.
  */
-export async function generateNaiImage() {
+export async function generateNaiImage(options = {}) {
     if (window.IS_GENERATING) return;
     window.saveCraftSettings();
 
@@ -417,7 +482,7 @@ export async function generateNaiImage() {
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < batchCount; i++) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
-        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType });
+        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix: options.outputPrefix || window.TEMP_FOLDER, planner: options.planner || null });
     }
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }
@@ -430,8 +495,11 @@ export async function generateNaiImage() {
  */
 export async function processNextQueueItem() {
     if (window.CANCEL_GENERATION || window.GENERATION_QUEUE.length === 0) {
+        const wasCancelled = window.CANCEL_GENERATION;
         window.IS_GENERATING = false; window.CANCEL_GENERATION = false; window.GENERATION_QUEUE = [];
-        window.saveQueueToStorage(); window.updateQueueUI(false); return;
+        window.saveQueueToStorage(); window.updateQueueUI(false);
+        window.dispatchEvent(new CustomEvent('imggul:generation-queue-complete', { detail: { cancelled: wasCancelled } }));
+        return;
     }
 
     const task = window.GENERATION_QUEUE[0]; const totalCount = task.total; const currentIdx = task.index;
@@ -539,18 +607,19 @@ export async function processNextQueueItem() {
         let extractedMetadata = await window.extractMetadata(generatedFile);
         if (extractedMetadata && task.splitPrompts && Object.keys(task.splitPrompts).length > 0) { extractedMetadata["Split Prompts"] = task.splitPrompts; delete extractedMetadata["Prompt"]; }
 
-        const tempKey = window.TEMP_FOLDER + newFileName;
+        const outputPrefix = task.outputPrefix || window.TEMP_FOLDER;
+        const tempKey = outputPrefix + newFileName;
         const uploadHeaders = { 'X-File-Name': encodeURIComponent(newFileName), 'Content-Type': 'image/png', 'X-Absolute-Path': encodeURIComponent(tempKey) };
         const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(generatedFile); });
         const uploadRes = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: uploadHeaders, body: buffer, cache: 'no-store' });
         if (!uploadRes.ok) throw new Error("서버 임시 저장소 동기화에 실패했습니다.");
 
-        if (extractedMetadata) await window.saveMetadataToDB(window.TEMP_FOLDER, newFileName, extractedMetadata);
+        if (extractedMetadata) await window.saveMetadataToDB(outputPrefix, newFileName, extractedMetadata);
 
         updateProgress('완료!', 100);
-        window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString() });
+        if (outputPrefix === window.TEMP_FOLDER) window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString() });
         
-        if (window.TEMP_IMAGES.length > 100) {
+        if (outputPrefix === window.TEMP_FOLDER && window.TEMP_IMAGES.length > 100) {
             const toDelete = window.TEMP_IMAGES.pop();
             try {
                 await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: toDelete.key }) });
@@ -558,8 +627,11 @@ export async function processNextQueueItem() {
             } catch(err) { if (window.logErrorToStorage) window.logErrorToStorage("로컬 기반 오래된 파일 삭제 에러", err); }
         }
         
-        window.CRAFT_ACTIVE_INDEX = 0;
-        window.renderTempGallery();
+        if (outputPrefix === window.TEMP_FOLDER) {
+            window.CRAFT_ACTIVE_INDEX = 0;
+            window.renderTempGallery();
+        }
+        window.dispatchEvent(new CustomEvent('imggul:generation-task-complete', { detail: { task, key: tempKey, fileName: newFileName, metadata: extractedMetadata } }));
         window.processDelayedWebPConversion();
 
         window.GENERATION_QUEUE.shift();
@@ -571,6 +643,7 @@ export async function processNextQueueItem() {
         clearInterval(progressTimer); console.error('배치 생성 중 에러:', e);
         updateProgress(`생성 실패: ${e.message}`, 0);
         if (window.logErrorToStorage) window.logErrorToStorage('이미지 생성 큐 처리 중 에러', e);
+        window.dispatchEvent(new CustomEvent('imggul:generation-task-failed', { detail: { task, error: e.message } }));
         window.GENERATION_QUEUE.shift(); window.saveQueueToStorage();
         await new Promise(r => setTimeout(r, 2000));
         window.processNextQueueItem();

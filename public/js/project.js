@@ -182,6 +182,14 @@ function getCharacterMetaKey(character) {
     return `${character.prefix}_character_meta.json`;
 }
 
+function getPlannerPrefix(project) {
+    return `${project.prefix}_planner_temp_image/`;
+}
+
+function getPlannerMetaKey(project) {
+    return `${getPlannerPrefix(project)}_planner_meta.json`;
+}
+
 function getCharacterById(project, characterId) {
     const decodedId = decodeURIComponent(characterId || '');
     return getProjectItems(project, 'characters').find(character =>
@@ -367,7 +375,7 @@ function normalizeProjectSituations(situations) {
             folderName: situation?.folderName || id,
             name,
             alias,
-            imageNumber: Number(situation?.imageNumber) || index + 1,
+            imageNumber: Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index,
             prompt: {
                 expression: situation?.prompt?.expression || situation?.expression || '',
                 action: situation?.prompt?.action || situation?.action || ''
@@ -435,7 +443,8 @@ function getSituationDisplayName(situation) {
 function getSituationImageNumber(project, situation) {
     const situations = getProjectItems(project, 'situations');
     const index = situations.findIndex(item => item.id === situation?.id);
-    return Number(situation?.imageNumber) || (index >= 0 ? index + 1 : situations.length + 1);
+    const imageNumber = Number(situation?.imageNumber);
+    return Number.isFinite(imageNumber) ? imageNumber : (index >= 0 ? index : situations.length);
 }
 
 function getSituationImageKey(project, situation) {
@@ -446,7 +455,7 @@ function getNextSituationImageNumber(project) {
     const usedNumbers = getProjectItems(project, 'situations')
         .map(situation => Number(situation.imageNumber))
         .filter(number => Number.isFinite(number));
-    return usedNumbers.length ? Math.max(...usedNumbers) + 1 : getProjectItems(project, 'situations').length + 1;
+    return usedNumbers.length ? Math.max(...usedNumbers) + 1 : getProjectItems(project, 'situations').length;
 }
 
 function renderCharacterName(character) {
@@ -943,7 +952,11 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
     else {
         const project = getActiveProject();
         renderSituationSection(section, { loading: !!project && !project.situationsLoaded });
-        await loadProjectSituations(project).catch(err => {
+        await Promise.all([
+            loadProjectSituations(project),
+            loadProjectCharacters(project),
+            loadPlannerMeta(project).then(meta => { window.PROJECT_PLANNER_META = meta; })
+        ]).catch(err => {
             if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section, { error: err.message });
         });
         if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section);
@@ -1058,7 +1071,8 @@ export async function saveProjectPromptMarkdown() {
 }
 
 function getSituationImageCandidates(situation, index) {
-    const values = [String(Number(situation?.imageNumber) || index + 1)];
+    const imageNumber = Number(situation?.imageNumber);
+    const values = [String(Number.isFinite(imageNumber) ? imageNumber : index)];
 
     return values
         .filter(Boolean)
@@ -1710,6 +1724,420 @@ function renderCharacterSection(section, state = {}) {
     `);
 }
 
+async function loadPlannerMeta(project) {
+    if (!project?.prefix) return null;
+    const res = await fetch(`${getAssetUrl(getPlannerMetaKey(project))}?_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error('Planner metadata could not be loaded.');
+    return await res.json();
+}
+
+async function savePlannerMeta(project, meta) {
+    const key = getPlannerMetaKey(project);
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'X-File-Name': encodeURIComponent('_planner_meta.json'),
+            'X-Absolute-Path': encodeURIComponent(key)
+        },
+        body: new Blob([JSON.stringify(meta || {}, null, 2)], { type: 'application/json; charset=utf-8' }),
+        cache: 'no-store'
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || 'Planner metadata could not be saved.');
+    }
+}
+
+function getPlannerImagePrefix(project, imageNumber) {
+    return `${getPlannerPrefix(project)}${imageNumber}/`;
+}
+
+function getPlannerField(item, key) {
+    return item?.generation?.fields?.[key] || '';
+}
+
+function setPlannerStatus(message) {
+    const el = document.getElementById('planner-status');
+    if (el) el.textContent = message || '';
+}
+
+function readPlannerEditsFromDom(meta) {
+    if (!meta?.items) return meta;
+    meta.items.forEach(item => {
+        const fields = item.generation.fields;
+        ['style', 'composition', 'character', 'clothing', 'expression', 'action', 'background', 'negative'].forEach(key => {
+            const input = document.getElementById(`planner-${item.imageNumber}-${key}`);
+            if (input) fields[key] = input.value.trim();
+        });
+        const countInput = document.getElementById(`planner-${item.imageNumber}-count`);
+        if (countInput) item.count = Math.max(1, parseInt(countInput.value) || 1);
+        item.generation.batchCount = String(item.count);
+        item.generation.negative = fields.negative;
+        item.generation.prompts = {
+            ...item.generation.prompts,
+            'prompt-style': fields.style,
+            'prompt-composition': fields.composition,
+            'prompt-character': fields.character,
+            'prompt-clothing': fields.clothing,
+            'prompt-expression': fields.expression,
+            'prompt-action': fields.action,
+            'prompt-background': fields.background,
+            'prompt-raw': ''
+        };
+    });
+    meta.updatedAt = Date.now();
+    return meta;
+}
+
+async function listPlannerImages(project, imageNumber) {
+    const prefix = getPlannerImagePrefix(project, imageNumber);
+    const res = await fetch(`/api/list?prefix=${encodeURIComponent(prefix)}&_t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return (data.files || []).filter(file => /\.(png|webp|jpe?g)$/i.test(file.key || '')).map(file => file.key);
+}
+
+function renderPlannerField(item, key, label, rows = 2) {
+    return `
+        <label class="block min-w-0">
+            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">${label}</span>
+            <textarea id="planner-${escapeHtml(item.imageNumber)}-${key}" rows="${rows}" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">${escapeHtml(getPlannerField(item, key))}</textarea>
+        </label>
+    `;
+}
+
+function renderPlannerImages(item) {
+    if (!Array.isArray(item.images) || !item.images.length) {
+        return '<div class="text-[11px] text-gray-400 dark:text-gray-500 py-3">No temporary images yet.</div>';
+    }
+
+    return `
+        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            ${item.images.map(key => {
+                const selected = item.selectedImage === key;
+                return `
+                    <button type="button" onclick="window.selectPlannerImage('${escapeJsString(key)}')" class="relative aspect-square rounded-md overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-900">
+                        <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="absolute inset-0 w-full h-full object-cover" loading="lazy">
+                        ${selected ? '<span class="absolute right-1 top-1 px-1.5 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-bold">selected</span>' : ''}
+                    </button>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderPlannerPanel(project, situations) {
+    const characters = getProjectItems(project, 'characters');
+    const meta = window.PROJECT_PLANNER_META || null;
+    const activeCharacter = characters.find(character => character.id === meta?.characterId || character.prefix === meta?.characterId) || characters[0];
+
+    return `
+        <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 min-h-[360px] flex flex-col">
+            <div class="flex items-start justify-between gap-3 mb-4">
+                <div>
+                    <h3 class="font-bold text-sm text-gray-900 dark:text-white">Planner demo</h3>
+                    <p id="planner-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(meta?.status || 'No draft')}</p>
+                </div>
+                <button type="button" onclick="window.refreshPlannerPanel()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="Refresh">
+                    <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                </button>
+            </div>
+
+            <div class="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_5rem] gap-2 mb-3">
+                <label class="block min-w-0">
+                    <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">Character</span>
+                    <select id="planner-character-select" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
+                        ${characters.map(character => `<option value="${escapeHtml(character.id)}" ${activeCharacter?.id === character.id ? 'selected' : ''}>${escapeHtml(character.name || character.folderName)}</option>`).join('')}
+                    </select>
+                </label>
+                <label class="block">
+                    <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">Count</span>
+                    <input id="planner-default-count" type="number" min="1" max="12" value="${escapeHtml(meta?.defaultCount || 2)}" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
+                </label>
+            </div>
+
+            <div class="flex flex-wrap gap-2 mb-4">
+                <button type="button" onclick="window.createPlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
+                    <i data-lucide="wand-2" class="w-4 h-4"></i> Auto draft
+                </button>
+                <button type="button" onclick="window.startPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
+                    <i data-lucide="play" class="w-4 h-4"></i> Generate
+                </button>
+                <button type="button" onclick="window.confirmPlannerSelection()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-emerald-400">
+                    <i data-lucide="check" class="w-4 h-4"></i> Confirm
+                </button>
+            </div>
+
+            ${!characters.length ? renderEmptyState('Add a character before creating a planner draft.') : ''}
+            ${!situations.length ? renderEmptyState('Add situations before creating a planner draft.') : ''}
+            ${meta?.items?.length ? `
+                <div class="space-y-3 overflow-y-auto pr-1">
+                    ${meta.items.map(item => `
+                        <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+                            <div class="flex items-center justify-between gap-3 mb-3">
+                                <div class="min-w-0">
+                                    <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
+                                    <p class="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(item.status || 'pending')} · ${item.images?.length || 0} images</p>
+                                </div>
+                                <input id="planner-${escapeHtml(item.imageNumber)}-count" type="number" min="1" max="12" value="${escapeHtml(item.count || 1)}" class="w-16 p-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                ${renderPlannerField(item, 'style', 'Style')}
+                                ${renderPlannerField(item, 'composition', 'Composition', 1)}
+                                ${renderPlannerField(item, 'character', 'Character')}
+                                ${renderPlannerField(item, 'clothing', 'Clothing')}
+                                ${renderPlannerField(item, 'expression', 'Expression', 1)}
+                                ${renderPlannerField(item, 'action', 'Action', 1)}
+                                ${renderPlannerField(item, 'background', 'Background', 1)}
+                                ${renderPlannerField(item, 'negative', 'Negative', 1)}
+                            </div>
+                            <div class="mt-3">
+                                ${renderPlannerImages(item)}
+                            </div>
+                        </div>
+                    `).join('')}
+                </div>
+            ` : '<div class="flex-1 flex items-center justify-center text-sm font-bold text-gray-500 dark:text-gray-400 text-center">Create a draft to import prompts into editable planner rows.</div>'}
+        </div>
+    `;
+}
+
+export async function refreshPlannerPanel() {
+    const project = getActiveProject();
+    if (!project) return;
+    window.PROJECT_PLANNER_META = await loadPlannerMeta(project).catch(() => null);
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export async function createPlannerDraft() {
+    const project = getActiveProject();
+    if (!project) return;
+    await Promise.all([
+        loadProjectCharacters(project).catch(() => []),
+        loadProjectSituations(project).catch(() => [])
+    ]);
+
+    const characterId = document.getElementById('planner-character-select')?.value || getProjectItems(project, 'characters')[0]?.id || '';
+    const character = getCharacterById(project, characterId);
+    if (!character) {
+        setPlannerStatus('Select a character first.');
+        return;
+    }
+
+    const defaultCount = Math.max(1, parseInt(document.getElementById('planner-default-count')?.value) || 2);
+    const characterMeta = await loadCharacterMeta(character).catch(() => ({}));
+    const projectStyle = await loadProjectPromptMarkdown(project).catch(() => '');
+    const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
+    const stylePrompt = currentSettings.prompts?.['prompt-style'] || projectStyle || '';
+    const negativePrompt = characterMeta.parts?.negative || currentSettings.negative || '';
+
+    const items = getProjectItems(project, 'situations').map((situation, index) => {
+        const prompt = getSituationPrompt(situation);
+        const imageNumber = getSituationImageNumber(project, situation);
+        const fields = {
+            style: stylePrompt,
+            composition: currentSettings.prompts?.['prompt-composition'] || 'straight-on',
+            character: characterMeta.parts?.character || characterMeta.prompt || '',
+            clothing: characterMeta.parts?.clothing || currentSettings.prompts?.['prompt-clothing'] || '',
+            expression: prompt.expression || currentSettings.prompts?.['prompt-expression'] || '',
+            action: prompt.action || currentSettings.prompts?.['prompt-action'] || '',
+            background: currentSettings.prompts?.['prompt-background'] || 'white background',
+            negative: negativePrompt
+        };
+        const generation = {
+            ...currentSettings,
+            simpleMode: false,
+            batchCount: String(defaultCount),
+            negative: fields.negative,
+            prompts: {
+                ...(currentSettings.prompts || {}),
+                'prompt-style': fields.style,
+                'prompt-composition': fields.composition,
+                'prompt-character': fields.character,
+                'prompt-clothing': fields.clothing,
+                'prompt-expression': fields.expression,
+                'prompt-action': fields.action,
+                'prompt-background': fields.background,
+                'prompt-raw': ''
+            },
+            fields
+        };
+
+        return {
+            situationId: situation.id,
+            situationName: getSituationDisplayName(situation),
+            situationIndex: index,
+            imageNumber,
+            count: defaultCount,
+            status: 'pending',
+            generation,
+            images: [],
+            selectedImage: null
+        };
+    });
+
+    const meta = {
+        projectId: project.id,
+        characterId: character.id,
+        characterPrefix: character.prefix,
+        status: 'draft',
+        defaultCount,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        items
+    };
+
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+async function waitForPlannerQueueComplete() {
+    return await new Promise(resolve => {
+        const handler = (event) => {
+            window.removeEventListener('imggul:generation-queue-complete', handler);
+            resolve(event.detail || {});
+        };
+        window.addEventListener('imggul:generation-queue-complete', handler);
+    });
+}
+
+export async function startPlannerGeneration() {
+    const project = getActiveProject();
+    if (!project || window.IS_GENERATING) {
+        setPlannerStatus(window.IS_GENERATING ? 'Generation is already running.' : '');
+        return;
+    }
+
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!meta?.items?.length) {
+        setPlannerStatus('Create a planner draft first.');
+        return;
+    }
+
+    meta = readPlannerEditsFromDom(meta);
+    meta.status = 'running';
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+
+    const previousSettings = window.readCraftSettings ? window.readCraftSettings() : null;
+    try {
+        for (const item of meta.items) {
+            item.status = 'running';
+            item.generation.batchCount = String(item.count || meta.defaultCount || 1);
+            await savePlannerMeta(project, meta);
+            setPlannerStatus(`Generating ${item.imageNumber}.webp...`);
+
+            if (window.applyCraftSettings) window.applyCraftSettings(item.generation);
+            window.generateNaiImage({
+                outputPrefix: getPlannerImagePrefix(project, item.imageNumber),
+                planner: {
+                    projectId: project.id,
+                    situationId: item.situationId,
+                    imageNumber: item.imageNumber
+                }
+            });
+
+            const result = await waitForPlannerQueueComplete();
+            item.images = await listPlannerImages(project, item.imageNumber);
+            item.status = result.cancelled ? 'paused' : (item.images.length ? 'done' : 'failed');
+            meta.updatedAt = Date.now();
+            await savePlannerMeta(project, meta);
+            if (result.cancelled) {
+                meta.status = 'paused';
+                break;
+            }
+        }
+
+        if (meta.status !== 'paused') meta.status = meta.items.every(item => item.status === 'done') ? 'completed' : 'failed';
+        meta.updatedAt = Date.now();
+        await savePlannerMeta(project, meta);
+        window.PROJECT_PLANNER_META = meta;
+        setPlannerStatus(meta.status);
+    } finally {
+        if (previousSettings && window.applyCraftSettings) window.applyCraftSettings(previousSettings);
+        renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    }
+}
+
+export async function selectPlannerImage(key) {
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!project || !meta?.items) return;
+    const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
+    if (!item) return;
+    item.selectedImage = key;
+    meta.updatedAt = Date.now();
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export async function confirmPlannerSelection() {
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!project || !meta?.items?.length) return;
+
+    const character = getCharacterById(project, meta.characterId) || getCharacterById(project, meta.characterPrefix);
+    if (!character) {
+        setPlannerStatus('Planner character could not be found.');
+        return;
+    }
+
+    const selectedItems = meta.items.filter(item => item.selectedImage);
+    if (!selectedItems.length) {
+        setPlannerStatus('Select one image per situation before confirming.');
+        return;
+    }
+
+    for (const item of selectedItems) {
+        const newKey = `${character.prefix}${item.imageNumber}.webp`;
+        const imageRes = await fetch(getAssetUrl(item.selectedImage), { cache: 'no-store' });
+        if (!imageRes.ok) throw new Error(`Could not read ${item.selectedImage}`);
+        const blob = await imageRes.blob();
+        const sourceFile = new File([blob], getFileNameFromKey(item.selectedImage), { type: blob.type || 'image/png' });
+        const finalFile = sourceFile.type === 'image/webp' ? sourceFile : await window.convertToWebP(sourceFile);
+        const buffer = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('FileReader error'));
+            reader.readAsArrayBuffer(finalFile);
+        });
+        const uploadRes = await fetch('/api/upload?_t=' + Date.now(), {
+            method: 'PUT',
+            headers: {
+                'X-File-Name': encodeURIComponent(`${item.imageNumber}.webp`),
+                'Content-Type': 'image/webp',
+                'X-Absolute-Path': encodeURIComponent(newKey)
+            },
+            body: buffer,
+            cache: 'no-store'
+        });
+        if (!uploadRes.ok) {
+            const data = await uploadRes.json().catch(() => ({}));
+            throw new Error(data.error || `Could not confirm ${item.imageNumber}.webp`);
+        }
+        item.finalImage = newKey;
+        item.status = 'confirmed';
+    }
+
+    await fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_folder', key: getPlannerPrefix(project) })
+    });
+
+    meta.status = 'confirmed';
+    meta.updatedAt = Date.now();
+    window.PROJECT_PLANNER_META = null;
+    clearProjectCaches(project.prefix, character.prefix, getPlannerPrefix(project));
+    character.filesLoaded = false;
+    await loadCharacterFiles(character, true).catch(() => []);
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
 function renderSituationSection(section, state = {}) {
     const project = getActiveProject();
     const situations = getProjectItems(project, 'situations');
@@ -1740,7 +2168,8 @@ function renderSituationSection(section, state = {}) {
                     ${!state.loading && !state.error && !situations.length ? renderEmptyState('등록된 상황이 없습니다.') : ''}
                 </div>
 
-                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-6 min-h-[360px] flex flex-col">
+                ${renderPlannerPanel(project, situations)}
+                <div class="hidden">
                     <h3 class="font-bold text-sm text-gray-900 dark:text-white mb-4">액션 생성 플래너</h3>
                     <div class="flex-1 flex items-start justify-center pt-10 text-sm font-bold text-gray-500 dark:text-gray-400 text-center">
                         기능 및 상세 레이아웃은 추후 구현
@@ -1768,7 +2197,7 @@ function getSituationPrompt(situation) {
 }
 
 function getSituationCharacterRows(project, situation) {
-    const imageIndex = getSituationImageNumber(project, situation) - 1;
+    const imageIndex = getProjectItems(project, 'situations').findIndex(item => item.id === situation?.id);
     return getProjectItems(project, 'characters').map(character => {
         const files = Array.isArray(character.files) ? character.files : [];
         const image = findSituationImage(files, situation, imageIndex);
