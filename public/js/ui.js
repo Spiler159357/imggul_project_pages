@@ -224,8 +224,15 @@ export function switchTab(tabName, skipHistory = false) {
 
         if (!skipHistory) history.pushState({ tab: 'craft' }, '', '#craft');
     } else if (tabName === 'project') {
-        if (window.renderProjectManage) window.renderProjectManage(true);
-        if (!skipHistory) history.pushState({ tab: 'project', projectView: 'manage' }, '', '#project');
+        if (!skipHistory) {
+            const projectState = window.PROJECT_LAST_STATE || { tab: 'project', projectView: 'manage' };
+            const projectHash = window.PROJECT_LAST_HASH || '#project';
+
+            if (window.restoreProjectState) window.restoreProjectState(projectState);
+            else if (window.renderProjectManage) window.renderProjectManage(true);
+
+            history.pushState(projectState, '', projectHash);
+        }
     }
 
     if (window.lucide) window.lucide.createIcons();

@@ -30,8 +30,19 @@ function getProjectRoot() {
     return document.getElementById('main-project-content');
 }
 
+function rememberProjectRoute(state, hash) {
+    window.PROJECT_LAST_STATE = { tab: 'project', ...state };
+    window.PROJECT_LAST_HASH = hash || '#project';
+}
+
 function setProjectRoute(state, hash) {
-    history.pushState({ tab: 'project', ...state }, '', hash);
+    rememberProjectRoute(state, hash);
+    history.pushState(window.PROJECT_LAST_STATE, '', window.PROJECT_LAST_HASH);
+}
+
+function replaceProjectRoute(state, hash) {
+    rememberProjectRoute(state, hash);
+    history.replaceState(window.PROJECT_LAST_STATE, '', window.PROJECT_LAST_HASH);
 }
 
 function refreshProjectIcons() {
@@ -695,7 +706,9 @@ export async function renderProjectManage(skipHistory = true) {
         if (window.PROJECT_VIEW === 'manage') renderProjectManageShell([], { error: err.message });
     }
 
-    if (!skipHistory) setProjectRoute({ projectView: 'manage' }, '#project');
+    const routeState = { projectView: 'manage' };
+    if (!skipHistory) setProjectRoute(routeState, '#project');
+    else rememberProjectRoute(routeState, '#project');
 }
 
 function renderProjectManageShell(projects, state = {}) {
@@ -898,7 +911,10 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
         </div>
     `);
 
-    if (!skipHistory) setProjectRoute({ projectView: 'detail', projectId: project.id }, `#project/${project.id}`);
+    const routeState = { projectView: 'detail', projectId: project.id };
+    const routeHash = `#project/${project.id}`;
+    if (!skipHistory) setProjectRoute(routeState, routeHash);
+    else rememberProjectRoute(routeState, routeHash);
 }
 
 export function toggleProjectActionMenu(event) {
@@ -941,7 +957,7 @@ export async function renameActiveProject() {
         clearProjectCaches(oldPrefix, newPrefix);
         await loadProjects(true);
         await openProjectDetail(folderName, true);
-        history.replaceState({ tab: 'project', projectView: 'detail', projectId: folderName }, '', `#project/${folderName}`);
+        replaceProjectRoute({ projectView: 'detail', projectId: folderName }, `#project/${folderName}`);
         if (window.currentPrefix === getProjectBasePrefix() && window.loadPath) window.loadPath(getProjectBasePrefix(), true);
     } catch (err) {
         alert(err.message || '프로젝트 이름 변경 실패');
@@ -960,7 +976,7 @@ export async function deleteActiveProject() {
         clearProjectCaches(project.prefix);
         await loadProjects(true);
         await renderProjectManage(true);
-        history.replaceState({ tab: 'project', projectView: 'manage' }, '', '#project');
+        replaceProjectRoute({ projectView: 'manage' }, '#project');
         if (window.currentPrefix === getProjectBasePrefix() && window.loadPath) window.loadPath(getProjectBasePrefix(), true);
     } catch (err) {
         alert(err.message || '프로젝트 삭제 실패');
@@ -1019,12 +1035,10 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section);
     }
 
-    if (!skipHistory) {
-        setProjectRoute(
-            { projectView: 'section', projectId: window.PROJECT_ACTIVE_PROJECT_ID, projectSection: section.key },
-            `#project/${window.PROJECT_ACTIVE_PROJECT_ID}/${section.key}`
-        );
-    }
+    const routeState = { projectView: 'section', projectId: window.PROJECT_ACTIVE_PROJECT_ID, projectSection: section.key };
+    const routeHash = `#project/${window.PROJECT_ACTIVE_PROJECT_ID}/${section.key}`;
+    if (!skipHistory) setProjectRoute(routeState, routeHash);
+    else rememberProjectRoute(routeState, routeHash);
 }
 
 function renderSectionHeader(title) {
@@ -1437,12 +1451,10 @@ export async function openCharacterDetail(projectId = window.PROJECT_ACTIVE_PROJ
         }
     }
 
-    if (!skipHistory) {
-        setProjectRoute(
-            { projectView: 'character-detail', projectId: project.id, characterId: character.id },
-            `#project/${project.id}/character/${encodeURIComponent(character.folderName)}`
-        );
-    }
+    const routeState = { projectView: 'character-detail', projectId: project.id, characterId: character.id };
+    const routeHash = `#project/${project.id}/character/${encodeURIComponent(character.folderName)}`;
+    if (!skipHistory) setProjectRoute(routeState, routeHash);
+    else rememberProjectRoute(routeState, routeHash);
 }
 
 export async function saveCharacterPrompt(event) {
@@ -1602,9 +1614,8 @@ export async function renameActiveCharacter() {
         project.charactersLoaded = false;
         await loadProjectCharacters(project, true);
         await openCharacterDetail(project.id, newPrefix, true);
-        history.replaceState(
-            { tab: 'project', projectView: 'character-detail', projectId: project.id, characterId: newPrefix },
-            '',
+        replaceProjectRoute(
+            { projectView: 'character-detail', projectId: project.id, characterId: newPrefix },
             `#project/${project.id}/character/${encodeURIComponent(folderName)}`
         );
 
@@ -1629,9 +1640,8 @@ export async function deleteActiveCharacter() {
         project.charactersLoaded = false;
         await loadProjectCharacters(project, true);
         await openProjectSection('character', true);
-        history.replaceState(
-            { tab: 'project', projectView: 'section', projectId: project.id, projectSection: 'character' },
-            '',
+        replaceProjectRoute(
+            { projectView: 'section', projectId: project.id, projectSection: 'character' },
             `#project/${project.id}/character`
         );
 
@@ -2675,12 +2685,10 @@ export async function openSituationDetail(projectId = window.PROJECT_ACTIVE_PROJ
         }
     }
 
-    if (!skipHistory) {
-        setProjectRoute(
-            { projectView: 'situation-detail', projectId: project.id, situationId: situation.id },
-            `#project/${project.id}/situation/${encodeURIComponent(situation.id)}`
-        );
-    }
+    const routeState = { projectView: 'situation-detail', projectId: project.id, situationId: situation.id };
+    const routeHash = `#project/${project.id}/situation/${encodeURIComponent(situation.id)}`;
+    if (!skipHistory) setProjectRoute(routeState, routeHash);
+    else rememberProjectRoute(routeState, routeHash);
 }
 
 export function toggleSituationActionMenu(event) {
@@ -2739,9 +2747,8 @@ export async function deleteActiveSituation() {
         await saveProjectSituations(project);
         await saveProjectAlias(imageKey, '');
         await openProjectSection('situation', true);
-        history.replaceState(
-            { tab: 'project', projectView: 'section', projectId: project.id, projectSection: 'situation' },
-            '',
+        replaceProjectRoute(
+            { projectView: 'section', projectId: project.id, projectSection: 'situation' },
             `#project/${project.id}/situation`
         );
     } catch (err) {
