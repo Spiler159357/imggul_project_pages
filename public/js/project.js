@@ -1949,10 +1949,15 @@ function renderPlannerImages(item) {
             ${item.images.map(key => {
                 const selected = item.selectedImage === key;
                 return `
-                    <button type="button" onclick="window.selectPlannerImage('${escapeJsString(key)}')" class="relative aspect-square rounded-md overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-900">
-                        <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="absolute inset-0 w-full h-full object-cover" loading="lazy">
-                        ${selected ? '<span class="absolute right-1 top-1 px-1.5 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-bold">선택됨</span>' : ''}
-                    </button>
+                    <div class="relative aspect-square rounded-md overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-900">
+                        <button type="button" onclick="window.selectPlannerImage('${escapeJsString(key)}')" class="absolute inset-0">
+                            <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="w-full h-full object-cover" loading="lazy">
+                        </button>
+                        ${selected ? '<span class="absolute left-1 top-1 px-1.5 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-bold">선택됨</span>' : ''}
+                        <button type="button" onclick="window.deletePlannerImage('${escapeJsString(key)}')" class="absolute right-1 top-1 p-1 rounded bg-black/60 text-white hover:bg-red-600 transition" title="임시 이미지 삭제" aria-label="임시 이미지 삭제">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                        </button>
+                    </div>
                 `;
             }).join('')}
         </div>
@@ -1982,7 +1987,12 @@ function renderPlannerPanel(project, situations) {
                             <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
                             <p class="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 생성 ${escapeHtml(item.count || 1)}장</p>
                         </div>
-                        <input id="planner-${escapeHtml(item.imageNumber)}-count" type="number" min="1" max="12" value="${escapeHtml(item.count || 1)}" class="w-16 p-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            <input id="planner-${escapeHtml(item.imageNumber)}-count" type="number" min="1" max="12" value="${escapeHtml(item.count || 1)}" class="w-16 p-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
+                            <button type="button" onclick="window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </div>
                     </div>
                     <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                         ${renderPlannerField(item, 'style', '그림체')}
@@ -2049,7 +2059,12 @@ function renderPlannerPanel(project, situations) {
                             <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
                             <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 후보 ${item.images?.length || 0}장</p>
                         </div>
-                        <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(item.count || 1)}장</span>
+                        <div class="flex items-center gap-2 flex-shrink-0">
+                            <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(item.count || 1)}장</span>
+                            <button type="button" onclick="window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
+                        </div>
                     </div>
                 `).join('')}
             </div>
@@ -2229,6 +2244,68 @@ export async function savePlannerDraft() {
 
 export async function createPlannerDraft() {
     await addPlannerDraftItem();
+}
+
+export async function deletePlannerItem(situationId) {
+    const project = getActiveProject();
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!project || !meta?.items?.length) return;
+
+    const item = meta.items.find(entry => entry.situationId === situationId);
+    if (!item) return;
+    if (!confirm(`'${item.situationName || item.situationId}' 플랜을 삭제하시겠습니까?\n이 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
+
+    await fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_folder', key: getPlannerImagePrefix(project, item.imageNumber) })
+    }).catch(() => null);
+
+    meta.items = meta.items.filter(entry => entry.situationId !== situationId);
+    meta.updatedAt = Date.now();
+    if (meta.items.length) {
+        await savePlannerMeta(project, meta);
+        window.PROJECT_PLANNER_META = meta;
+    } else {
+        await fetch('/api/manage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_folder', key: getPlannerPrefix(project) })
+        }).catch(() => null);
+        window.PROJECT_PLANNER_META = null;
+    }
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export async function deletePlannerImage(key) {
+    const project = getActiveProject();
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!project || !meta?.items?.length || !key) return;
+
+    const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
+    if (!item) return;
+    if (!confirm('이 임시 이미지를 삭제하시겠습니까?')) return;
+
+    const res = await fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', key })
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPlannerStatus(data.error || '임시 이미지 삭제에 실패했습니다.');
+        return;
+    }
+
+    const prefix = key.slice(0, key.lastIndexOf('/') + 1);
+    await window.removeMetadataFromDB(prefix, getFileNameFromKey(key)).catch(() => null);
+    item.images = item.images.filter(imageKey => imageKey !== key);
+    if (item.selectedImage === key) item.selectedImage = null;
+    item.status = item.images.length ? item.status : 'pending';
+    meta.updatedAt = Date.now();
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
 async function waitForPlannerQueueComplete() {
