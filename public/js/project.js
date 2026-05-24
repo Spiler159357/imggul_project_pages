@@ -502,6 +502,17 @@ async function loadProjectPromptMarkdown(project) {
     return await res.text();
 }
 
+async function loadProjectStylePrompt(project) {
+    if (!project?.prefix) return '';
+
+    const key = `${project.prefix}style_prompt.md`;
+    const res = await fetch(`${getAssetUrl(key)}?_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.status === 404) return '';
+    if (!res.ok) throw new Error('그림체 프롬프트를 불러오지 못했습니다.');
+
+    return await res.text();
+}
+
 function renderInlineMarkdown(value) {
     return escapeHtml(value)
         .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -575,6 +586,22 @@ async function hydrateProjectPromptInput() {
     }
 }
 
+async function hydrateProjectStylePromptInput() {
+    const project = getActiveProject();
+    const input = document.getElementById('project-style-prompt-input');
+    const status = document.getElementById('project-style-prompt-status');
+    if (!project || !input) return;
+
+    if (status) status.textContent = '그림체 프롬프트를 불러오는 중입니다.';
+
+    try {
+        input.value = await loadProjectStylePrompt(project);
+        if (status) status.textContent = input.value ? 'style_prompt.md를 불러왔습니다.' : '';
+    } catch (err) {
+        if (status) status.textContent = err.message || '그림체 프롬프트를 불러오지 못했습니다.';
+    }
+}
+
 function initProjectPromptMarkdownToggle() {
     const input = document.getElementById('project-prompt-input');
     const preview = document.getElementById('project-prompt-preview');
@@ -621,6 +648,29 @@ async function uploadProjectPromptMarkdown(project, content) {
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || '프롬프트 저장에 실패했습니다.');
+    }
+
+    return key;
+}
+
+async function uploadProjectStylePrompt(project, content) {
+    if (!project?.prefix) throw new Error('프로젝트 경로를 찾을 수 없습니다.');
+
+    const key = `${project.prefix}style_prompt.md`;
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'text/markdown; charset=utf-8',
+            'X-File-Name': encodeURIComponent('style_prompt.md'),
+            'X-Absolute-Path': encodeURIComponent(key)
+        },
+        body: new Blob([content], { type: 'text/markdown; charset=utf-8' }),
+        cache: 'no-store'
+    });
+
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '그림체 프롬프트 저장에 실패했습니다.');
     }
 
     return key;
@@ -1023,6 +1073,17 @@ function renderPromptSection(section) {
                             <p class="font-bold text-sm text-gray-900 dark:text-white">추가 기능을 위한 공간</p>
                             <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">기능 추가 가능성 높음</p>
                         </div>
+                        <label class="mt-4 block flex-1 min-h-[120px]">
+                            <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">그림체 프롬프트</span>
+                            <textarea id="project-style-prompt-input" class="w-full min-h-[120px] resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="플래너의 그림체 항목으로 가져올 프롬프트"></textarea>
+                        </label>
+                        <div class="mt-3 flex items-center justify-end gap-3">
+                            <p id="project-style-prompt-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                            <button id="project-style-prompt-save-btn" type="button" onclick="window.saveProjectStylePrompt()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400 transition">
+                                <i data-lucide="save" class="w-4 h-4"></i>
+                                <span>그림체 저장</span>
+                            </button>
+                        </div>
                         <div class="mt-auto pt-4 flex items-center justify-end gap-3">
                             <p id="project-prompt-save-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                             <button id="project-prompt-save-btn" type="button" onclick="window.saveProjectPromptMarkdown()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
@@ -1038,6 +1099,7 @@ function renderPromptSection(section) {
     initPromptSectionInput();
     initProjectPromptMarkdownToggle();
     hydrateProjectPromptInput();
+    hydrateProjectStylePromptInput();
 }
 
 export async function saveProjectPromptMarkdown() {
@@ -1061,6 +1123,36 @@ export async function saveProjectPromptMarkdown() {
         if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
     } catch (err) {
         if (status) status.textContent = err.message || '저장에 실패했습니다.';
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = previousButtonHtml;
+            refreshProjectIcons();
+        }
+    }
+}
+
+export async function saveProjectStylePrompt() {
+    const project = getActiveProject();
+    const input = document.getElementById('project-style-prompt-input');
+    const button = document.getElementById('project-style-prompt-save-btn');
+    const status = document.getElementById('project-style-prompt-status');
+    if (!project || !input) return;
+
+    const previousButtonHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span>저장 중</span>';
+        refreshProjectIcons();
+    }
+    if (status) status.textContent = '';
+
+    try {
+        await uploadProjectStylePrompt(project, input.value);
+        if (status) status.textContent = 'style_prompt.md로 저장되었습니다.';
+        if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
+    } catch (err) {
+        if (status) status.textContent = err.message || '그림체 프롬프트 저장에 실패했습니다.';
     } finally {
         if (button) {
             button.disabled = false;
@@ -1155,7 +1247,10 @@ function renderCharacterDetailShell(project, character, state = {}) {
     const rows = getSituationRows(character, situations, files);
     const progress = getCharacterProgress(rows);
     const coverImage = rows.find(row => row.image)?.imageUrl || getAssetUrl(character.coverImage);
-    const prompt = meta.prompt || '';
+    const promptParts = meta.parts || {};
+    const characterPrompt = promptParts.character || meta.prompt || '';
+    const clothingPrompt = promptParts.clothing || '';
+    const negativePrompt = promptParts.negative || '';
 
     renderProjectShell(`
         <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
@@ -1232,7 +1327,20 @@ function renderCharacterDetailShell(project, character, state = {}) {
                                     저장
                                 </button>
                             </div>
-                            <textarea id="character-prompt-input" class="flex-1 min-h-[260px] resize-none p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="캐릭터의 외형, 분위기, 반복해서 유지해야 하는 특징을 입력하세요.">${escapeHtml(prompt)}</textarea>
+                            <div class="flex-1 grid grid-cols-1 gap-3">
+                                <label class="block">
+                                    <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">캐릭터</span>
+                                    <textarea id="character-prompt-character-input" class="w-full min-h-[130px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="외형, 얼굴, 신체 특징 등">${escapeHtml(characterPrompt)}</textarea>
+                                </label>
+                                <label class="block">
+                                    <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">의상</span>
+                                    <textarea id="character-prompt-clothing-input" class="w-full min-h-[100px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="기본 의상, 장신구, 소품 등">${escapeHtml(clothingPrompt)}</textarea>
+                                </label>
+                                <label class="block">
+                                    <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">부정 프롬프트</span>
+                                    <textarea id="character-prompt-negative-input" class="w-full min-h-[80px] resize-y p-3 rounded-lg border border-red-200 dark:border-red-900 bg-red-50/60 dark:bg-red-900/10 text-sm leading-6 text-red-700 dark:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400" placeholder="이 캐릭터에 반복 적용할 제외 태그">${escapeHtml(negativePrompt)}</textarea>
+                                </label>
+                            </div>
                             <p id="character-prompt-save-status" class="mt-2 min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                         </form>
 
@@ -1335,10 +1443,12 @@ export async function saveCharacterPrompt(event) {
 
     const project = getActiveProject();
     const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
-    const input = document.getElementById('character-prompt-input');
+    const characterInput = document.getElementById('character-prompt-character-input');
+    const clothingInput = document.getElementById('character-prompt-clothing-input');
+    const negativeInput = document.getElementById('character-prompt-negative-input');
     const button = document.getElementById('character-prompt-save-btn');
     const status = document.getElementById('character-prompt-save-status');
-    if (!project || !character || !input) return;
+    if (!project || !character || !characterInput || !clothingInput || !negativeInput) return;
 
     const previousButtonHtml = button?.innerHTML || '';
     if (button) {
@@ -1350,9 +1460,16 @@ export async function saveCharacterPrompt(event) {
 
     try {
         const meta = await loadCharacterMeta(character).catch(() => ({}));
+        const parts = {
+            ...(meta.parts || {}),
+            character: characterInput.value.trim(),
+            clothing: clothingInput.value.trim(),
+            negative: negativeInput.value.trim()
+        };
         await saveCharacterMeta(character, {
             ...meta,
-            prompt: input.value.trim(),
+            prompt: parts.character,
+            parts,
             updatedAt: Date.now()
         });
         if (status) status.textContent = '저장되었습니다.';
@@ -1846,6 +1963,123 @@ function renderPlannerPanel(project, situations) {
     const characters = getProjectItems(project, 'characters');
     const meta = window.PROJECT_PLANNER_META || null;
     const activeCharacter = characters.find(character => character.id === meta?.characterId || character.prefix === meta?.characterId) || characters[0];
+    const selectedSituationId = meta?.lastSituationId || situations[0]?.id || '';
+    const view = window.PROJECT_PLANNER_VIEW || 'plan';
+
+    const modeButton = (mode, label, icon) => `
+        <button type="button" onclick="window.setPlannerView('${mode}')" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${view === mode ? 'bg-indigo-600 text-white' : 'border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-400'}">
+            <i data-lucide="${icon}" class="w-4 h-4"></i>
+            ${label}
+        </button>
+    `;
+
+    const planRows = meta?.items?.length ? `
+        <div class="space-y-3 overflow-y-auto pr-1">
+            ${meta.items.map(item => `
+                <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+                    <div class="flex items-center justify-between gap-3 mb-3">
+                        <div class="min-w-0">
+                            <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
+                            <p class="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 생성 ${escapeHtml(item.count || 1)}장</p>
+                        </div>
+                        <input id="planner-${escapeHtml(item.imageNumber)}-count" type="number" min="1" max="12" value="${escapeHtml(item.count || 1)}" class="w-16 p-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                        ${renderPlannerField(item, 'style', '그림체')}
+                        ${renderPlannerField(item, 'composition', '구도', 1)}
+                        ${renderPlannerField(item, 'character', '캐릭터')}
+                        ${renderPlannerField(item, 'clothing', '의상')}
+                        ${renderPlannerField(item, 'expression', '표정', 1)}
+                        ${renderPlannerField(item, 'action', '행위', 1)}
+                        ${renderPlannerField(item, 'background', '배경', 1)}
+                        ${renderPlannerField(item, 'negative', '부정 프롬프트', 1)}
+                    </div>
+                </div>
+            `).join('')}
+        </div>
+    ` : '<div class="flex-1 flex items-center justify-center text-sm font-bold text-gray-500 dark:text-gray-400 text-center">캐릭터와 상황을 선택한 뒤 추가하기를 눌러 플랜 작성안을 만드세요.</div>';
+
+    const planView = `
+        <div class="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem] gap-2 mb-3">
+            <label class="block min-w-0">
+                <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">캐릭터</span>
+                <select id="planner-character-select" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
+                    ${characters.map(character => `<option value="${escapeHtml(character.id)}" ${activeCharacter?.id === character.id ? 'selected' : ''}>${escapeHtml(character.name || character.folderName)}</option>`).join('')}
+                </select>
+            </label>
+            <label class="block min-w-0">
+                <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">상황</span>
+                <select id="planner-situation-select" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
+                    ${situations.map(situation => `<option value="${escapeHtml(situation.id)}" ${selectedSituationId === situation.id ? 'selected' : ''}>${escapeHtml(getSituationImageNumber(project, situation))}.webp / ${escapeHtml(getSituationDisplayName(situation))}</option>`).join('')}
+                </select>
+            </label>
+            <label class="block">
+                <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">생성 수</span>
+                <input id="planner-default-count" type="number" min="1" max="12" value="${escapeHtml(meta?.defaultCount || 2)}" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
+            </label>
+        </div>
+        <div class="flex flex-wrap gap-2 mb-4">
+            <button type="button" onclick="window.addPlannerDraftItem()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
+                <i data-lucide="plus" class="w-4 h-4"></i> 추가하기
+            </button>
+            <button type="button" onclick="window.savePlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
+                <i data-lucide="save" class="w-4 h-4"></i> 플랜 저장하기
+            </button>
+        </div>
+        ${!characters.length ? renderEmptyState('플랜을 작성하려면 먼저 캐릭터를 추가하세요.') : ''}
+        ${!situations.length ? renderEmptyState('플랜을 작성하려면 먼저 상황을 추가하세요.') : ''}
+        ${planRows}
+    `;
+
+    const runView = `
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <div>
+                <p class="text-xs font-bold text-gray-900 dark:text-white">저장된 플랜 실행</p>
+                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">${meta?.items?.length || 0}개 플랜 항목</p>
+            </div>
+            <button type="button" onclick="window.startPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
+                <i data-lucide="play" class="w-4 h-4"></i> 실행 시작
+            </button>
+        </div>
+        ${meta?.items?.length ? `
+            <div class="space-y-2">
+                ${meta.items.map(item => `
+                    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3 flex items-center justify-between gap-3">
+                        <div class="min-w-0">
+                            <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
+                            <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 후보 ${item.images?.length || 0}장</p>
+                        </div>
+                        <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(item.count || 1)}장</span>
+                    </div>
+                `).join('')}
+            </div>
+        ` : renderEmptyState('플랜짜기 화면에서 플랜을 저장하면 실행 목록이 표시됩니다.')}
+    `;
+
+    const resultView = `
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <div>
+                <p class="text-xs font-bold text-gray-900 dark:text-white">결과 확인</p>
+                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">상황별 후보 이미지 중 실제 반영할 이미지를 선택합니다.</p>
+            </div>
+            <button type="button" onclick="window.confirmPlannerSelection()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-emerald-400">
+                <i data-lucide="check" class="w-4 h-4"></i> 선택 확정
+            </button>
+        </div>
+        ${meta?.items?.length ? `
+            <div class="space-y-3 overflow-y-auto pr-1">
+                ${meta.items.map(item => `
+                    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+                        <div class="mb-3">
+                            <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
+                            <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</p>
+                        </div>
+                        ${renderPlannerImages(item)}
+                    </div>
+                `).join('')}
+            </div>
+        ` : renderEmptyState('실행 화면에서 이미지를 생성하면 결과가 표시됩니다.')}
+    `;
 
     return `
         <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 min-h-[360px] flex flex-col">
@@ -1858,62 +2092,12 @@ function renderPlannerPanel(project, situations) {
                     <i data-lucide="refresh-cw" class="w-4 h-4"></i>
                 </button>
             </div>
-
-            <div class="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_5rem] gap-2 mb-3">
-                <label class="block min-w-0">
-                    <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">캐릭터</span>
-                    <select id="planner-character-select" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
-                        ${characters.map(character => `<option value="${escapeHtml(character.id)}" ${activeCharacter?.id === character.id ? 'selected' : ''}>${escapeHtml(character.name || character.folderName)}</option>`).join('')}
-                    </select>
-                </label>
-                <label class="block">
-                    <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">생성 수</span>
-                    <input id="planner-default-count" type="number" min="1" max="12" value="${escapeHtml(meta?.defaultCount || 2)}" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
-                </label>
-            </div>
-
             <div class="flex flex-wrap gap-2 mb-4">
-                <button type="button" onclick="window.createPlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
-                    <i data-lucide="wand-2" class="w-4 h-4"></i> 자동 초안
-                </button>
-                <button type="button" onclick="window.startPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
-                    <i data-lucide="play" class="w-4 h-4"></i> 생성 시작
-                </button>
-                <button type="button" onclick="window.confirmPlannerSelection()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-emerald-400">
-                    <i data-lucide="check" class="w-4 h-4"></i> 선택 확정
-                </button>
+                ${modeButton('plan', '플랜짜기', 'list-plus')}
+                ${modeButton('run', '실행 화면', 'play')}
+                ${modeButton('result', '결과 확인', 'images')}
             </div>
-
-            ${!characters.length ? renderEmptyState('플래너 초안을 만들려면 먼저 캐릭터를 추가하세요.') : ''}
-            ${!situations.length ? renderEmptyState('플래너 초안을 만들려면 먼저 상황을 추가하세요.') : ''}
-            ${meta?.items?.length ? `
-                <div class="space-y-3 overflow-y-auto pr-1">
-                    ${meta.items.map(item => `
-                        <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
-                            <div class="flex items-center justify-between gap-3 mb-3">
-                                <div class="min-w-0">
-                                    <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
-                                    <p class="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 이미지 ${item.images?.length || 0}장</p>
-                                </div>
-                                <input id="planner-${escapeHtml(item.imageNumber)}-count" type="number" min="1" max="12" value="${escapeHtml(item.count || 1)}" class="w-16 p-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
-                            </div>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                ${renderPlannerField(item, 'style', '그림체')}
-                                ${renderPlannerField(item, 'composition', '구도', 1)}
-                                ${renderPlannerField(item, 'character', '캐릭터')}
-                                ${renderPlannerField(item, 'clothing', '의상')}
-                                ${renderPlannerField(item, 'expression', '표정', 1)}
-                                ${renderPlannerField(item, 'action', '행위', 1)}
-                                ${renderPlannerField(item, 'background', '배경', 1)}
-                                ${renderPlannerField(item, 'negative', '부정 프롬프트', 1)}
-                            </div>
-                            <div class="mt-3">
-                                ${renderPlannerImages(item)}
-                            </div>
-                        </div>
-                    `).join('')}
-                </div>
-            ` : '<div class="flex-1 flex items-center justify-center text-sm font-bold text-gray-500 dark:text-gray-400 text-center">자동 초안을 만들면 상황별 프롬프트 계획표가 생성됩니다.</div>'}
+            ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
         </div>
     `;
 }
@@ -1925,7 +2109,12 @@ export async function refreshPlannerPanel() {
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
-export async function createPlannerDraft() {
+export function setPlannerView(view = 'plan') {
+    window.PROJECT_PLANNER_VIEW = ['plan', 'run', 'result'].includes(view) ? view : 'plan';
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export async function addPlannerDraftItem() {
     const project = getActiveProject();
     if (!project) return;
     await Promise.all([
@@ -1940,72 +2129,106 @@ export async function createPlannerDraft() {
         return;
     }
 
+    const situationId = document.getElementById('planner-situation-select')?.value || '';
+    const situation = getSituationById(project, situationId);
+    if (!situation) {
+        setPlannerStatus('먼저 상황을 선택하세요.');
+        return;
+    }
+
     const defaultCount = Math.max(1, parseInt(document.getElementById('planner-default-count')?.value) || 2);
     const characterMeta = await loadCharacterMeta(character).catch(() => ({}));
-    const projectStyle = await loadProjectPromptMarkdown(project).catch(() => '');
+    const projectStyle = await loadProjectStylePrompt(project).catch(() => '');
     const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
-    const stylePrompt = currentSettings.prompts?.['prompt-style'] || projectStyle || '';
+    const stylePrompt = projectStyle || currentSettings.prompts?.['prompt-style'] || '';
     const negativePrompt = characterMeta.parts?.negative || currentSettings.negative || '';
 
-    const items = getProjectItems(project, 'situations').map((situation, index) => {
-        const prompt = getSituationPrompt(situation);
-        const imageNumber = getSituationImageNumber(project, situation);
-        const fields = {
-            style: stylePrompt,
-            composition: currentSettings.prompts?.['prompt-composition'] || 'straight-on',
-            character: characterMeta.parts?.character || characterMeta.prompt || '',
-            clothing: characterMeta.parts?.clothing || currentSettings.prompts?.['prompt-clothing'] || '',
-            expression: prompt.expression || currentSettings.prompts?.['prompt-expression'] || '',
-            action: prompt.action || currentSettings.prompts?.['prompt-action'] || '',
-            background: currentSettings.prompts?.['prompt-background'] || 'white background',
-            negative: negativePrompt
-        };
-        const generation = {
-            ...currentSettings,
-            simpleMode: false,
-            batchCount: String(defaultCount),
-            negative: fields.negative,
-            prompts: {
-                ...(currentSettings.prompts || {}),
-                'prompt-style': fields.style,
-                'prompt-composition': fields.composition,
-                'prompt-character': fields.character,
-                'prompt-clothing': fields.clothing,
-                'prompt-expression': fields.expression,
-                'prompt-action': fields.action,
-                'prompt-background': fields.background,
-                'prompt-raw': ''
-            },
-            fields
-        };
-
-        return {
-            situationId: situation.id,
-            situationName: getSituationDisplayName(situation),
-            situationIndex: index,
-            imageNumber,
-            count: defaultCount,
-            status: 'pending',
-            generation,
-            images: [],
-            selectedImage: null
-        };
-    });
-
-    const meta = {
-        projectId: project.id,
-        characterId: character.id,
-        characterPrefix: character.prefix,
-        status: 'draft',
-        defaultCount,
-        createdAt: Date.now(),
-        updatedAt: Date.now(),
-        items
+    const prompt = getSituationPrompt(situation);
+    const imageNumber = getSituationImageNumber(project, situation);
+    const fields = {
+        style: stylePrompt,
+        composition: currentSettings.prompts?.['prompt-composition'] || 'straight-on',
+        character: characterMeta.parts?.character || characterMeta.prompt || '',
+        clothing: characterMeta.parts?.clothing || currentSettings.prompts?.['prompt-clothing'] || '',
+        expression: prompt.expression || currentSettings.prompts?.['prompt-expression'] || '',
+        action: prompt.action || currentSettings.prompts?.['prompt-action'] || '',
+        background: currentSettings.prompts?.['prompt-background'] || 'white background',
+        negative: negativePrompt
+    };
+    const generation = {
+        ...currentSettings,
+        simpleMode: false,
+        batchCount: String(defaultCount),
+        negative: fields.negative,
+        prompts: {
+            ...(currentSettings.prompts || {}),
+            'prompt-style': fields.style,
+            'prompt-composition': fields.composition,
+            'prompt-character': fields.character,
+            'prompt-clothing': fields.clothing,
+            'prompt-expression': fields.expression,
+            'prompt-action': fields.action,
+            'prompt-background': fields.background,
+            'prompt-raw': ''
+        },
+        fields
     };
 
-    await savePlannerMeta(project, meta);
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!meta || meta.characterId !== character.id) {
+        meta = {
+            projectId: project.id,
+            characterId: character.id,
+            characterPrefix: character.prefix,
+            status: 'draft',
+            defaultCount,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            items: []
+        };
+    }
+
+    const existingIndex = meta.items.findIndex(item => item.situationId === situation.id);
+    const item = {
+        situationId: situation.id,
+        situationName: getSituationDisplayName(situation),
+        situationIndex: getProjectItems(project, 'situations').findIndex(entry => entry.id === situation.id),
+        imageNumber,
+        count: defaultCount,
+        status: 'pending',
+        generation,
+        images: existingIndex >= 0 ? meta.items[existingIndex].images || [] : [],
+        selectedImage: existingIndex >= 0 ? meta.items[existingIndex].selectedImage || null : null
+    };
+
+    if (existingIndex >= 0) meta.items[existingIndex] = item;
+    else meta.items.push(item);
+    meta.defaultCount = defaultCount;
+    meta.lastSituationId = situation.id;
+    meta.updatedAt = Date.now();
     window.PROJECT_PLANNER_META = meta;
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export async function savePlannerDraft() {
+    const project = getActiveProject();
+    if (!project) return;
+
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!meta?.items?.length) {
+        setPlannerStatus('저장할 플랜 작성안이 없습니다.');
+        return;
+    }
+
+    meta = readPlannerEditsFromDom(meta);
+    meta.status = 'draft';
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+    setPlannerStatus('플랜이 저장되었습니다.');
+}
+
+export async function createPlannerDraft() {
+    await addPlannerDraftItem();
 }
 
 async function waitForPlannerQueueComplete() {

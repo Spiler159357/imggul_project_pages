@@ -33,6 +33,7 @@ window.CRAFT_ACTIVE_INDEX = null;
 window.CRAFT_HISTORY_EXPANDED = false;
 window.CRAFT_HISTORY_COLLAPSED = false;
 window.PROJECT_PLANNER_META = null;
+window.PROJECT_PLANNER_VIEW = 'plan';
 
 window.TEMP_FOLDER = '_temp_craft/';
 window.PROMPT_IDS = ['prompt-style', 'prompt-composition', 'prompt-character', 'prompt-clothing', 'prompt-expression', 'prompt-action', 'prompt-background'];
