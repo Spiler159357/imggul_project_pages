@@ -1,4 +1,30 @@
 // 5. craft.js: 이미지 생성 큐, 설정 로직
+const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
+
+function isCraftVisibleProjectChildFolder(folderPrefix) {
+    const folderName = String(folderPrefix || '').split('/').filter(Boolean).pop();
+    return folderName && !folderName.startsWith('.') && !CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS.has(folderName);
+}
+
+function getCraftSituationMetaUrl(projectPrefix) {
+    return `/${encodeURI(`${projectPrefix}_situations_meta.json`)}`;
+}
+
+async function loadCraftSituations(projectPrefix) {
+    if (!projectPrefix) return [];
+    const res = await fetch(`${getCraftSituationMetaUrl(projectPrefix)}?_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.status === 404) return [];
+    if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
+
+    const data = await res.json();
+    return Array.isArray(data.situations) ? data.situations : [];
+}
+
+function getCraftSituationDisplayName(situation, index) {
+    const imageNumber = Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index;
+    const name = situation?.alias || situation?.name || situation?.id || `상황 ${imageNumber}`;
+    return `${imageNumber} - ${name}`;
+}
 /**
  * 역할: localStorage에 남아 있는 생성 큐를 복원하고 중단된 생성 작업을 재개한다.
  * 매개변수: 없음.
@@ -295,7 +321,7 @@ export async function updateCraftFolderList() {
     try {
         const rootRes = await fetch(`/api/list?prefix=`); const rootData = await rootRes.json();
         let optionsHtml = `<option value="">프로젝트 선택</option>`;
-        const filteredFolders = rootData.folders.filter(f => !f.startsWith(window.TEMP_FOLDER) && !f.startsWith('logs/'));
+        const filteredFolders = rootData.folders.filter(f => !f.startsWith(window.TEMP_FOLDER) && !f.startsWith('logs/') && isCraftVisibleProjectChildFolder(f));
         for (let proj of filteredFolders) {
             const parts = proj.split('/').filter(Boolean); const folderName = parts[parts.length - 1];
             const alias = window.getAliasOnly(proj, true); const displayText = alias ? `${alias} (${folderName})` : folderName;
@@ -313,13 +339,39 @@ export async function updateCraftFolderList() {
  * 반환값: 명시 반환 없음.
  */
 export async function onCraftProjectChange() {
-    const projSelect = document.getElementById('craft-project-select'); const charSelect = document.getElementById('craft-char-select');
+    const projSelect = document.getElementById('craft-project-select');
+    const charSelect = document.getElementById('craft-char-select');
+    const situationSelect = document.getElementById('craft-situation-select');
     if (!projSelect || !charSelect) return;
-    const proj = projSelect.value; charSelect.innerHTML = '<option value="">캐릭터 선택</option>';
-    if (!proj) { charSelect.disabled = true; return; }
-    charSelect.disabled = false; charSelect.innerHTML = '<option value="">스캔 중...</option>';
+
+    const proj = projSelect.value;
+    charSelect.innerHTML = '<option value="">캐릭터 선택</option>';
+    if (situationSelect) situationSelect.innerHTML = '<option value="">상황 선택</option>';
+
+    if (!proj) {
+        charSelect.disabled = true;
+        charSelect.classList.add('hidden');
+        if (situationSelect) {
+            situationSelect.disabled = true;
+            situationSelect.classList.add('hidden');
+        }
+        return;
+    }
+
+    charSelect.disabled = false;
+    charSelect.classList.remove('hidden');
+    charSelect.innerHTML = '<option value="">스캔 중...</option>';
+    if (situationSelect) {
+        situationSelect.disabled = false;
+        situationSelect.classList.remove('hidden');
+        situationSelect.innerHTML = '<option value="">스캔 중...</option>';
+    }
     try {
-        const [listRes, aliasRes] = await Promise.all([ fetch(`/api/list?prefix=${encodeURIComponent(proj)}`), fetch(`/api/aliases?prefix=${encodeURIComponent(proj)}`) ]);
+        const [listRes, aliasRes, situations] = await Promise.all([
+            fetch(`/api/list?prefix=${encodeURIComponent(proj)}`),
+            fetch(`/api/aliases?prefix=${encodeURIComponent(proj)}`),
+            loadCraftSituations(proj).catch(() => [])
+        ]);
         if (aliasRes.ok) {
             const aliasData = await aliasRes.json();
             window.GLOBAL_ALIASES = Object.assign(window.GLOBAL_ALIASES || {}, aliasData.global || {});
@@ -327,13 +379,26 @@ export async function onCraftProjectChange() {
         }
         const data = await listRes.json();
         let optionsHtml = `<option value="">(선택하지 않음 - 루트 저장)</option>`;
-        for (let charF of data.folders) {
+        for (let charF of (data.folders || []).filter(isCraftVisibleProjectChildFolder)) {
             const parts = charF.split('/').filter(Boolean); const folderName = parts[parts.length - 1];
             const alias = window.getAliasOnly(charF, true); const displayText = alias ? `${alias} (${folderName})` : folderName;
             optionsHtml += `<option value="${charF}">${displayText}</option>`;
         }
         charSelect.innerHTML = optionsHtml;
-    } catch (e) { charSelect.innerHTML = '<option value="">로드 실패</option>'; }
+
+        if (situationSelect) {
+            let situationOptionsHtml = '<option value="">상황 선택</option>';
+            situations.forEach((situation, index) => {
+                const id = situation?.id || situation?.folderName || `situation-${index + 1}`;
+                situationOptionsHtml += `<option value="${String(id).replaceAll('"', '&quot;')}">${getCraftSituationDisplayName(situation, index)}</option>`;
+            });
+            situationSelect.innerHTML = situationOptionsHtml;
+            situationSelect.disabled = situations.length === 0;
+        }
+    } catch (e) {
+        charSelect.innerHTML = '<option value="">로드 실패</option>';
+        if (situationSelect) situationSelect.innerHTML = '<option value="">로드 실패</option>';
+    }
 }
 
 /**

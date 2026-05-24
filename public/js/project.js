@@ -46,6 +46,11 @@ function getProjectById(projectId) {
     return getProjects().find(project => project.id === projectId) || getProjects()[0];
 }
 
+function getProjectByPrefix(projectPrefix) {
+    const decodedPrefix = decodeURIComponent(projectPrefix || '');
+    return getProjects().find(project => project.prefix === decodedPrefix);
+}
+
 function getActiveProject() {
     return getProjectById(window.PROJECT_ACTIVE_PROJECT_ID);
 }
@@ -377,8 +382,10 @@ function normalizeProjectSituations(situations) {
             alias,
             imageNumber: Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index,
             prompt: {
+                composition: situation?.prompt?.composition || situation?.composition || '',
                 expression: situation?.prompt?.expression || situation?.expression || '',
-                action: situation?.prompt?.action || situation?.action || ''
+                action: situation?.prompt?.action || situation?.action || '',
+                background: situation?.prompt?.background || situation?.background || ''
             },
             createdAt: situation?.createdAt || Date.now()
         };
@@ -2162,12 +2169,12 @@ export async function addPlannerDraftItem() {
     const imageNumber = getSituationImageNumber(project, situation);
     const fields = {
         style: stylePrompt,
-        composition: currentSettings.prompts?.['prompt-composition'] || 'straight-on',
+        composition: prompt.composition || currentSettings.prompts?.['prompt-composition'] || 'straight-on',
         character: characterMeta.parts?.character || characterMeta.prompt || '',
         clothing: characterMeta.parts?.clothing || currentSettings.prompts?.['prompt-clothing'] || '',
         expression: prompt.expression || currentSettings.prompts?.['prompt-expression'] || '',
         action: prompt.action || currentSettings.prompts?.['prompt-action'] || '',
-        background: currentSettings.prompts?.['prompt-background'] || 'white background',
+        background: prompt.background || currentSettings.prompts?.['prompt-background'] || 'white background',
         negative: negativePrompt
     };
     const generation = {
@@ -2505,8 +2512,10 @@ function getSituationById(project, situationId) {
 
 function getSituationPrompt(situation) {
     return {
+        composition: situation?.prompt?.composition || '',
         expression: situation?.prompt?.expression || '',
-        action: situation?.prompt?.action || ''
+        action: situation?.prompt?.action || '',
+        background: situation?.prompt?.background || ''
     };
 }
 
@@ -2761,6 +2770,7 @@ export async function saveActiveSituationPrompt(event) {
 
     try {
         situation.prompt = {
+            ...(situation.prompt || {}),
             expression: expressionInput.value.trim(),
             action: actionInput.value.trim()
         };
@@ -2775,6 +2785,122 @@ export async function saveActiveSituationPrompt(event) {
             button.innerHTML = previousButtonHtml;
             refreshProjectIcons();
         }
+    }
+}
+
+function getCraftPromptFields() {
+    return {
+        style: document.getElementById('prompt-style')?.value.trim() || '',
+        composition: document.getElementById('prompt-composition')?.value.trim() || '',
+        character: document.getElementById('prompt-character')?.value.trim() || '',
+        clothing: document.getElementById('prompt-clothing')?.value.trim() || '',
+        expression: document.getElementById('prompt-expression')?.value.trim() || '',
+        action: document.getElementById('prompt-action')?.value.trim() || '',
+        background: document.getElementById('prompt-background')?.value.trim() || '',
+        negative: document.getElementById('nai-negative')?.value.trim() || ''
+    };
+}
+
+function getCraftSelectedPrefix(selectId) {
+    return document.getElementById(selectId)?.value || '';
+}
+
+async function getCraftSelectedProject() {
+    const projectPrefix = getCraftSelectedPrefix('craft-project-select');
+    if (!projectPrefix) throw new Error('먼저 이미지 생성 화면에서 프로젝트를 선택하세요.');
+
+    await loadProjects();
+    const project = getProjectByPrefix(projectPrefix);
+    if (!project) throw new Error('선택한 프로젝트를 찾지 못했습니다.');
+    return project;
+}
+
+function setCraftPromptSaveStatus(message, isError = false) {
+    const status = document.getElementById('craft-prompt-save-status');
+    if (!status) return;
+
+    status.textContent = message;
+    status.classList.toggle('text-red-500', isError);
+    status.classList.toggle('dark:text-red-400', isError);
+    status.classList.toggle('text-gray-500', !isError);
+    status.classList.toggle('dark:text-gray-400', !isError);
+}
+
+export async function saveCraftPromptToProjectStyle() {
+    setCraftPromptSaveStatus('저장 중...');
+
+    try {
+        const project = await getCraftSelectedProject();
+        const fields = getCraftPromptFields();
+        await uploadProjectStylePrompt(project, fields.style);
+        setCraftPromptSaveStatus('프로젝트 그림체 저장 완료');
+        if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
+    } catch (err) {
+        setCraftPromptSaveStatus(err.message || '프로젝트 그림체 저장 실패', true);
+    }
+}
+
+export async function saveCraftPromptToCharacterParts() {
+    setCraftPromptSaveStatus('저장 중...');
+
+    try {
+        const project = await getCraftSelectedProject();
+        const characterPrefix = getCraftSelectedPrefix('craft-char-select');
+        if (!characterPrefix) throw new Error('저장할 캐릭터를 선택하세요.');
+
+        await loadProjectCharacters(project, true);
+        const character = getCharacterById(project, characterPrefix) || {
+            id: characterPrefix,
+            prefix: characterPrefix,
+            folderName: characterPrefix.split('/').filter(Boolean).pop()
+        };
+        const meta = await loadCharacterMeta(character).catch(() => ({}));
+        const fields = getCraftPromptFields();
+        const parts = {
+            ...(meta.parts || {}),
+            character: fields.character,
+            clothing: fields.clothing,
+            negative: fields.negative
+        };
+
+        await saveCharacterMeta(character, {
+            ...meta,
+            prompt: parts.character,
+            parts,
+            updatedAt: Date.now()
+        });
+        setCraftPromptSaveStatus('캐릭터 프롬프트 저장 완료');
+    } catch (err) {
+        setCraftPromptSaveStatus(err.message || '캐릭터 프롬프트 저장 실패', true);
+    }
+}
+
+export async function saveCraftPromptToSituation() {
+    setCraftPromptSaveStatus('저장 중...');
+
+    try {
+        const project = await getCraftSelectedProject();
+        const situationId = getCraftSelectedPrefix('craft-situation-select');
+        if (!situationId) throw new Error('저장할 상황을 선택하세요.');
+
+        await loadProjectSituations(project, true);
+        const situation = getSituationById(project, situationId);
+        if (!situation) throw new Error('선택한 상황을 찾지 못했습니다.');
+
+        const fields = getCraftPromptFields();
+        situation.prompt = {
+            ...(situation.prompt || {}),
+            composition: fields.composition,
+            expression: fields.expression,
+            action: fields.action,
+            background: fields.background
+        };
+        situation.updatedAt = Date.now();
+
+        await saveProjectSituations(project);
+        setCraftPromptSaveStatus('상황 프롬프트 저장 완료');
+    } catch (err) {
+        setCraftPromptSaveStatus(err.message || '상황 프롬프트 저장 실패', true);
     }
 }
 
