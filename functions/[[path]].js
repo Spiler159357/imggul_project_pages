@@ -1,4 +1,10 @@
 // functions/[[path]].js
+import {
+    cancelPlannerBackgroundJob,
+    getPlannerBackgroundStatus,
+    jsonResponse,
+    startPlannerBackgroundJob
+} from "../src/planner-background.js";
 // Cloudflare Pages Functions - Catch-all 라우터 및 API 서버리스 핸들러
 
 /**
@@ -87,6 +93,41 @@ export async function onRequest(context) {
     }
 
     // 3. API 라우팅 처리
+    if (path === "/api/planner/background/start" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            const result = await startPlannerBackgroundJob(env, body);
+            return jsonResponse(result);
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/planner/background/status" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const jobId = url.searchParams.get('jobId');
+            if (!jobId) return jsonResponse({ error: 'jobId is required' }, { status: 400 });
+            const result = await getPlannerBackgroundStatus(env, jobId);
+            return jsonResponse(result);
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/planner/background/cancel" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            if (!body?.jobId) return jsonResponse({ error: 'jobId is required' }, { status: 400 });
+            const result = await cancelPlannerBackgroundJob(env, body.jobId);
+            return jsonResponse(result);
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
     if (path === "/api/generate" && method === "POST") {
         if (!isAdmin) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 403 });
         if (!env.NOVELAI_TOKEN) return new Response(JSON.stringify({ error: 'Novel AI API 토큰이 설정되지 않았습니다.' }), { status: 500 });

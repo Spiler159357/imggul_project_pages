@@ -2066,10 +2066,14 @@ function getPlannerField(item, key) {
 function getPlannerStatusLabel(status) {
     const labels = {
         draft: '초안',
+        queued: '대기 중',
         pending: '대기',
         running: '생성 중',
         paused: '중지됨',
         completed: '생성 완료',
+        partial_failed: '일부 실패',
+        cancel_requested: '취소 요청됨',
+        cancelled: '취소됨',
         confirmed: '확정 완료',
         failed: '실패',
         done: '완료'
@@ -2582,6 +2586,28 @@ function renderPlannerPanel(project, situations) {
                 <i data-lucide="play" class="w-4 h-4"></i> 실행 시작
             </button>
         </div>
+        <div class="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                    <p class="text-[11px] font-bold text-gray-700 dark:text-gray-200">실행 방식</p>
+                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${window.PROJECT_PLANNER_GENERATION_MODE === 'background' ? '서버 작업으로 등록하고 상태를 조회합니다.' : '현재 브라우저에서 기존 방식으로 생성합니다.'}</p>
+                </div>
+                <div class="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1">
+                    <button type="button" onclick="window.setPlannerGenerationMode('browser')" class="px-3 py-1.5 rounded-md text-[11px] font-bold ${window.PROJECT_PLANNER_GENERATION_MODE !== 'background' ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">브라우저</button>
+                    <button type="button" onclick="window.setPlannerGenerationMode('background')" class="px-3 py-1.5 rounded-md text-[11px] font-bold ${window.PROJECT_PLANNER_GENERATION_MODE === 'background' ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">백그라운드</button>
+                </div>
+            </div>
+            ${meta?.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status) ? `
+                <div class="mt-3 flex items-center gap-2">
+                    <button type="button" onclick="window.refreshPlannerBackgroundStatus('${escapeJsString(meta.backgroundJobId)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
+                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> 상태 갱신
+                    </button>
+                    <button type="button" onclick="window.cancelPlannerBackgroundGeneration('${escapeJsString(meta.backgroundJobId)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-red-200 dark:border-red-900 text-[10px] font-bold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20">
+                        <i data-lucide="square" class="w-3.5 h-3.5"></i> 취소 요청
+                    </button>
+                </div>
+            ` : ''}
+        </div>
         ${renderPlannerProgressPanel(meta)}
         ${meta?.items?.length ? `
             <div class="space-y-2">
@@ -2654,11 +2680,20 @@ export async function refreshPlannerPanel() {
         loadPlannerSettings(project, true).catch(() => normalizePlannerSettings())
     ]);
     window.PROJECT_PLANNER_META = meta;
+    if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
+        startPlannerBackgroundPolling(meta.backgroundJobId);
+    }
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
 export function setPlannerView(view = 'plan') {
     window.PROJECT_PLANNER_VIEW = ['plan', 'run', 'result'].includes(view) ? view : 'plan';
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export function setPlannerGenerationMode(mode = 'browser') {
+    window.PROJECT_PLANNER_GENERATION_MODE = mode === 'background' ? 'background' : 'browser';
+    localStorage.setItem('imggul_planner_generation_mode', window.PROJECT_PLANNER_GENERATION_MODE);
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
@@ -3054,7 +3089,137 @@ async function clearPlannerItemImages(project, item) {
     item.status = 'pending';
 }
 
+function startPlannerBackgroundPolling(jobId) {
+    if (!jobId) return;
+    if (window.PLANNER_BACKGROUND_POLL_TIMER) clearInterval(window.PLANNER_BACKGROUND_POLL_TIMER);
+    window.PLANNER_BACKGROUND_POLL_TIMER = setInterval(() => {
+        window.refreshPlannerBackgroundStatus(jobId).catch(() => null);
+    }, 5000);
+}
+
+function stopPlannerBackgroundPolling() {
+    if (!window.PLANNER_BACKGROUND_POLL_TIMER) return;
+    clearInterval(window.PLANNER_BACKGROUND_POLL_TIMER);
+    window.PLANNER_BACKGROUND_POLL_TIMER = null;
+}
+
+export async function refreshPlannerBackgroundStatus(jobId = null) {
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const targetJobId = jobId || meta?.backgroundJobId;
+    if (!project || !targetJobId) return null;
+
+    const res = await fetch(`/api/planner/background/status?jobId=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPlannerStatus(data.error || '백그라운드 상태 조회에 실패했습니다.');
+        return null;
+    }
+
+    const status = await res.json();
+    window.PROJECT_PLANNER_META = await loadPlannerMeta(project).catch(() => window.PROJECT_PLANNER_META);
+    if (!['queued', 'running', 'cancel_requested'].includes(status.status)) stopPlannerBackgroundPolling();
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    return status;
+}
+
+export async function cancelPlannerBackgroundGeneration(jobId = null) {
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const targetJobId = jobId || meta?.backgroundJobId;
+    if (!targetJobId) return;
+
+    const res = await fetch('/api/planner/background/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: targetJobId })
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPlannerStatus(data.error || '백그라운드 취소 요청에 실패했습니다.');
+        return;
+    }
+    setPlannerStatus('백그라운드 취소를 요청했습니다.');
+    await refreshPlannerBackgroundStatus(targetJobId);
+}
+
+async function startPlannerBackgroundGeneration(situationId = null) {
+    const project = getActiveProject();
+    if (!project) return;
+
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!meta?.items?.length) {
+        setPlannerStatus('먼저 플래너 초안을 생성하세요.');
+        return;
+    }
+
+    meta = readPlannerEditsFromDom(meta);
+    const targetItems = situationId
+        ? meta.items.filter(item => item.situationId === situationId)
+        : meta.items;
+    if (!targetItems.length) {
+        setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
+        return;
+    }
+
+    const unsupportedReference = targetItems.some(item => item.generation?.vibeImageKey || item.generation?.preciseImageKey);
+    if (unsupportedReference) {
+        setPlannerStatus('백그라운드 생성은 아직 참조 이미지를 지원하지 않습니다. 브라우저 모드를 사용하세요.');
+        return;
+    }
+
+    for (const item of targetItems) {
+        if (item.images?.length || item.selectedImage) await clearPlannerItemImages(project, item);
+        item.status = 'queued';
+        item.images = [];
+        item.selectedImage = null;
+    }
+
+    meta.status = 'queued';
+    meta.runningSituationIds = targetItems.map(item => item.situationId);
+    meta.updatedAt = Date.now();
+    window.PROJECT_PLANNER_VIEW = 'run';
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+
+    const res = await fetch('/api/planner/background/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            projectId: project.id,
+            projectPrefix: project.prefix,
+            targetSituationId: situationId || null,
+            plannerMeta: meta
+        })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        setPlannerStatus(data.error || '백그라운드 생성 등록에 실패했습니다.');
+        meta.status = 'failed';
+        meta.updatedAt = Date.now();
+        await savePlannerMeta(project, meta).catch(() => null);
+        window.PROJECT_PLANNER_META = meta;
+        renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+        return;
+    }
+
+    meta.backgroundJobId = data.jobId;
+    meta.status = data.status || 'queued';
+    meta.updatedAt = Date.now();
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+    setPlannerStatus('백그라운드 생성 작업을 등록했습니다.');
+    startPlannerBackgroundPolling(data.jobId);
+    await refreshPlannerBackgroundStatus(data.jobId);
+}
+
 export async function startPlannerGeneration(situationId = null) {
+    if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
+        await startPlannerBackgroundGeneration(situationId);
+        return;
+    }
+
     const project = getActiveProject();
     if (!project || window.IS_GENERATING) {
         setPlannerStatus(window.IS_GENERATING ? '이미 생성 작업이 진행 중입니다.' : '');
