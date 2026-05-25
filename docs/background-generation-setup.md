@@ -38,6 +38,7 @@ This implementation adds the application code for server-side planner generation
   - Pages config with D1/Queue producer bindings.
 - `wrangler.background.toml`
   - Production Worker config for the Queue consumer.
+  - Sets `[limits].cpu_ms = 300_000` for paid-plan queue processing.
 
 ## Current Known Resource Names
 
