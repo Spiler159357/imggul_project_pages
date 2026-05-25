@@ -2366,6 +2366,7 @@ function renderPlannerResultModal(meta) {
                     <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.'}</p>
                     <div class="flex items-center gap-2">
                         <button type="button" onclick="window.closePlannerResultModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
+                        <button type="button" onclick="window.startPlannerGeneration('${escapeJsString(item.situationId)}')" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">다시 생성</button>
                         <button type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}')" ${item.selectedImage ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
                     </div>
                 </div>
@@ -2946,7 +2947,23 @@ async function waitForPlannerQueueComplete() {
     });
 }
 
-export async function startPlannerGeneration() {
+async function clearPlannerItemImages(project, item) {
+    const prefix = getPlannerImagePrefix(project, item.imageNumber);
+    const imageKeys = Array.isArray(item.images) ? [...item.images] : [];
+    await Promise.all(imageKeys.map(key =>
+        window.removeMetadataFromDB(prefix, getFileNameFromKey(key)).catch(() => null)
+    ));
+    await fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_folder', key: prefix })
+    }).catch(() => null);
+    item.images = [];
+    item.selectedImage = null;
+    item.status = 'pending';
+}
+
+export async function startPlannerGeneration(situationId = null) {
     const project = getActiveProject();
     if (!project || window.IS_GENERATING) {
         setPlannerStatus(window.IS_GENERATING ? '이미 생성 작업이 진행 중입니다.' : '');
@@ -2960,7 +2977,18 @@ export async function startPlannerGeneration() {
     }
 
     meta = readPlannerEditsFromDom(meta);
+    const targetItems = situationId
+        ? meta.items.filter(item => item.situationId === situationId)
+        : meta.items;
+    if (!targetItems.length) {
+        setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
+        return;
+    }
     meta.status = 'running';
+    if (situationId) {
+        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+        window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    }
     await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
 
@@ -2969,7 +2997,10 @@ export async function startPlannerGeneration() {
     const previousPreciseFile = window.PRECISE_IMAGE_FILE || null;
     const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     try {
-        for (const item of meta.items) {
+        for (const item of targetItems) {
+            if (item.images?.length || item.selectedImage) {
+                await clearPlannerItemImages(project, item);
+            }
             item.status = 'running';
             item.generation.batchCount = String(item.count || meta.defaultCount || 1);
             applyPlannerSettingsToGeneration(item.generation, plannerSettings);
@@ -2999,7 +3030,7 @@ export async function startPlannerGeneration() {
             }
         }
 
-        if (meta.status !== 'paused') meta.status = meta.items.every(item => item.status === 'done') ? 'completed' : 'failed';
+        if (meta.status !== 'paused') meta.status = targetItems.every(item => item.status === 'done') ? 'completed' : 'failed';
         meta.updatedAt = Date.now();
         await savePlannerMeta(project, meta);
         window.PROJECT_PLANNER_META = meta;
