@@ -2081,6 +2081,24 @@ function getPlannerStatusLabel(status) {
     return labels[status] || status || '초안 없음';
 }
 
+function getPlannerStageLabel(stage) {
+    const labels = {
+        queued: '대기열 대기',
+        running: '생성 준비',
+        novelai_request: 'NovelAI 요청 중',
+        novelai_response: 'NovelAI 응답 수신',
+        zip_extract: '결과 압축 해제',
+        webp_encode: 'WebP 변환',
+        r2_put: 'R2 저장',
+        metadata_put: '메타데이터 저장',
+        rollup: '상태 갱신',
+        completed: '완료',
+        failed: '실패',
+        cancelled: '취소됨'
+    };
+    return labels[stage] || stage || '';
+}
+
 function setPlannerStatus(message) {
     const el = document.getElementById('planner-status');
     if (el) el.textContent = message || '';
@@ -2498,16 +2516,16 @@ function syncPlannerResultModalSelection(item) {
 }
 
 function renderPlannerProgressPanel(meta) {
-    if (!meta?.items?.length || meta.status !== 'running') return '';
+    if (!meta?.items?.length || !['queued', 'running', 'cancel_requested'].includes(meta.status)) return '';
 
     const activeIds = Array.isArray(meta.runningSituationIds) && meta.runningSituationIds.length
         ? new Set(meta.runningSituationIds)
         : null;
     const progressItems = activeIds ? meta.items.filter(item => activeIds.has(item.situationId)) : meta.items;
     const total = progressItems.length;
-    const doneCount = progressItems.filter(item => ['done', 'confirmed'].includes(item.status)).length;
-    const failedCount = progressItems.filter(item => item.status === 'failed').length;
-    const runningItem = progressItems.find(item => item.status === 'running');
+    const doneCount = progressItems.filter(item => ['done', 'completed', 'confirmed'].includes(item.status)).length;
+    const failedCount = progressItems.filter(item => ['failed', 'partial_failed', 'cancelled'].includes(item.status)).length;
+    const runningItem = progressItems.find(item => ['queued', 'running', 'cancel_requested'].includes(item.status));
     const runningIndex = runningItem ? progressItems.findIndex(item => item.situationId === runningItem.situationId) + 1 : doneCount + failedCount + 1;
     const progressCount = Math.min(total, doneCount + failedCount);
     const percent = total ? Math.round((progressCount / total) * 100) : 0;
@@ -2518,10 +2536,10 @@ function renderPlannerProgressPanel(meta) {
                 <div class="min-w-0">
                     <p class="inline-flex items-center gap-2 text-sm font-bold text-indigo-800 dark:text-indigo-200">
                         <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
-                        생성 진행 중
+                        ${meta.status === 'queued' ? '생성 대기 중' : meta.status === 'cancel_requested' ? '취소 요청 중' : '생성 진행 중'}
                     </p>
                     <p class="mt-1 text-xs text-indigo-700/80 dark:text-indigo-300/80 truncate">
-                        ${runningItem ? `${escapeHtml(runningItem.imageNumber)}.webp / ${escapeHtml(runningItem.situationName || runningItem.situationId)} 생성 중` : '다음 플랜을 준비 중입니다.'}
+                        ${runningItem ? `${escapeHtml(runningItem.imageNumber)}.webp / ${escapeHtml(runningItem.situationName || runningItem.situationId)} · ${escapeHtml(getPlannerStageLabel(runningItem.stage) || getPlannerStatusLabel(runningItem.status))}` : '다음 플랜을 준비 중입니다.'}
                     </p>
                 </div>
                 <div class="flex items-center gap-2 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
@@ -2535,12 +2553,14 @@ function renderPlannerProgressPanel(meta) {
             </div>
             <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
                 ${progressItems.map(item => `
-                    <div class="rounded-lg border ${item.status === 'running' ? 'border-indigo-400 bg-white dark:bg-indigo-950/50' : 'border-indigo-100 dark:border-indigo-900/50 bg-white/70 dark:bg-gray-900/50'} px-3 py-2">
+                    <div class="rounded-lg border ${['queued', 'running', 'cancel_requested'].includes(item.status) ? 'border-indigo-400 bg-white dark:bg-indigo-950/50' : 'border-indigo-100 dark:border-indigo-900/50 bg-white/70 dark:bg-gray-900/50'} px-3 py-2">
                         <div class="flex items-center justify-between gap-2">
                             <p class="min-w-0 truncate text-[11px] font-bold text-gray-800 dark:text-gray-100">${escapeHtml(item.situationName || item.situationId)}</p>
-                            <span class="flex-shrink-0 text-[10px] font-bold ${item.status === 'running' ? 'text-indigo-600 dark:text-indigo-300' : 'text-gray-500 dark:text-gray-400'}">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>
+                            <span class="flex-shrink-0 text-[10px] font-bold ${['queued', 'running', 'cancel_requested'].includes(item.status) ? 'text-indigo-600 dark:text-indigo-300' : 'text-gray-500 dark:text-gray-400'}">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>
                         </div>
                         <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">후보 ${item.images?.length || 0}장 / 목표 ${escapeHtml(item.count || 1)}장</p>
+                        ${item.stage ? `<p class="mt-1 text-[10px] font-bold text-indigo-600 dark:text-indigo-300">${escapeHtml(getPlannerStageLabel(item.stage))}</p>` : ''}
+                        ${item.errorMessage ? `<p class="mt-1 text-[10px] text-red-500 truncate">${escapeHtml(item.errorMessage)}</p>` : ''}
                     </div>
                 `).join('')}
             </div>
@@ -3169,7 +3189,27 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
     }
 
     const status = await res.json();
-    window.PROJECT_PLANNER_META = await loadPlannerMeta(project).catch(() => window.PROJECT_PLANNER_META);
+    const nextMeta = await loadPlannerMeta(project).catch(() => window.PROJECT_PLANNER_META);
+    if (nextMeta) {
+        nextMeta.backgroundStatus = status;
+        nextMeta.status = status.status || nextMeta.status;
+        nextMeta.backgroundJobId = status.jobId || nextMeta.backgroundJobId;
+        if (Array.isArray(status.items) && Array.isArray(nextMeta.items)) {
+            nextMeta.items = nextMeta.items.map(item => {
+                const statusItem = status.items.find(entry => entry.situationId === item.situationId);
+                if (!statusItem) return item;
+                return {
+                    ...item,
+                    status: statusItem.status === 'completed' ? 'done' : statusItem.status,
+                    stage: statusItem.stage || item.stage || '',
+                    stageLabel: statusItem.stageLabel || item.stageLabel || '',
+                    images: statusItem.resultKeys || item.images || [],
+                    errorMessage: statusItem.errorMessage || item.errorMessage || ''
+                };
+            });
+        }
+        window.PROJECT_PLANNER_META = nextMeta;
+    }
     if (!['queued', 'running', 'cancel_requested'].includes(status.status)) stopPlannerBackgroundPolling();
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
     return status;
@@ -3223,6 +3263,7 @@ async function startPlannerBackgroundGeneration(situationId = null) {
     for (const item of targetItems) {
         if (item.images?.length || item.selectedImage) await clearPlannerItemImages(project, item);
         item.status = 'queued';
+        item.stage = 'queued';
         item.images = [];
         item.selectedImage = null;
     }

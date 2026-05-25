@@ -2,6 +2,20 @@ const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
 const MAX_BACKGROUND_IMAGES = 100;
 const MAX_ATTEMPTS = 2;
+const STAGE_LABELS = {
+    queued: "Queue waiting",
+    running: "Preparing generation",
+    novelai_request: "Calling NovelAI",
+    novelai_response: "NovelAI response received",
+    zip_extract: "Extracting generated image",
+    webp_encode: "Encoding WebP",
+    r2_put: "Saving image to R2",
+    metadata_put: "Saving metadata",
+    rollup: "Updating job status",
+    completed: "Completed",
+    failed: "Failed",
+    cancelled: "Cancelled"
+};
 
 export function jsonResponse(data, init = {}) {
     const headers = new Headers(init.headers || {});
@@ -197,10 +211,12 @@ export async function startPlannerBackgroundJob(env, body) {
         ...plannerMeta,
         status: "queued",
         backgroundJobId: jobId,
+        stage: "queued",
+        stageLabel: STAGE_LABELS.queued,
         runningSituationIds: targetItems.map(item => item.situationId),
         updatedAt: Date.now(),
         items: plannerMeta.items.map(item => targetItems.includes(item)
-            ? { ...item, status: "queued", images: [], selectedImage: null, backgroundJobId: jobId }
+            ? { ...item, status: "queued", stage: "queued", stageLabel: STAGE_LABELS.queued, images: [], selectedImage: null, backgroundJobId: jobId }
             : item
         )
     };
@@ -208,10 +224,10 @@ export async function startPlannerBackgroundJob(env, body) {
     const inserts = [
         env.DB.prepare(`
             INSERT INTO planner_background_jobs (
-                id, project_id, project_prefix, character_id, character_prefix, status,
+                id, project_id, project_prefix, character_id, character_prefix, status, stage,
                 total_count, completed_count, failed_count, target_situation_id,
                 planner_meta_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'queued', ?, 0, 0, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, 'queued', 'queued', ?, 0, 0, ?, ?, ?, ?)
         `).bind(
             jobId,
             projectId,
@@ -234,9 +250,9 @@ export async function startPlannerBackgroundJob(env, body) {
         inserts.push(env.DB.prepare(`
             INSERT INTO planner_background_items (
                 id, job_id, situation_id, situation_name, image_number, output_prefix,
-                generation_json, count, completed_count, failed_count, status,
+                generation_json, count, completed_count, failed_count, status, stage,
                 result_keys, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', '[]', ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', 'queued', '[]', ?, ?)
         `).bind(
             itemId,
             jobId,
@@ -283,6 +299,8 @@ export async function getPlannerBackgroundStatus(env, jobId) {
     return {
         jobId: job.id,
         status: job.status,
+        stage: job.stage || "",
+        stageLabel: STAGE_LABELS[job.stage] || job.stage || "",
         projectId: job.project_id,
         projectPrefix: job.project_prefix,
         totalCount: job.total_count,
@@ -302,6 +320,8 @@ export async function getPlannerBackgroundStatus(env, jobId) {
             completedCount: item.completed_count,
             failedCount: item.failed_count,
             status: item.status,
+            stage: item.stage || "",
+            stageLabel: STAGE_LABELS[item.stage] || item.stage || "",
             resultKeys: JSON.parse(item.result_keys || "[]"),
             errorMessage: item.error_message || ""
         }))
@@ -313,15 +333,17 @@ export async function cancelPlannerBackgroundJob(env, jobId) {
     const updatedAt = nowIso();
     await env.DB.batch([
         env.DB.prepare(`
-            UPDATE planner_background_jobs
-            SET status = CASE WHEN status IN ('completed', 'failed', 'partial_failed', 'cancelled') THEN status ELSE 'cancel_requested' END,
-                updated_at = ?
+        UPDATE planner_background_jobs
+        SET status = CASE WHEN status IN ('completed', 'failed', 'partial_failed', 'cancelled') THEN status ELSE 'cancel_requested' END,
+            stage = CASE WHEN status IN ('completed', 'failed', 'partial_failed', 'cancelled') THEN stage ELSE 'cancelled' END,
+            updated_at = ?
             WHERE id = ?
         `).bind(updatedAt, jobId),
         env.DB.prepare(`
-            UPDATE planner_background_items
-            SET status = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN status ELSE 'cancel_requested' END,
-                updated_at = ?
+        UPDATE planner_background_items
+        SET status = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN status ELSE 'cancel_requested' END,
+            stage = CASE WHEN status IN ('completed', 'failed', 'cancelled') THEN stage ELSE 'cancelled' END,
+            updated_at = ?
             WHERE job_id = ? AND status IN ('queued', 'running')
         `).bind(updatedAt, jobId)
     ]);
@@ -449,6 +471,17 @@ async function saveMetadata(env, outputPrefix, fileName, metadata) {
     await putJsonObject(env.imgBucket, key, db);
 }
 
+async function updateProgressStage(env, jobId, itemId, stage) {
+    const updatedAt = nowIso();
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_background_jobs SET stage = ?, updated_at = ? WHERE id = ?")
+            .bind(stage, updatedAt, jobId),
+        env.DB.prepare("UPDATE planner_background_items SET stage = ?, updated_at = ? WHERE id = ?")
+            .bind(stage, updatedAt, itemId)
+    ]);
+    await syncPlannerMetaToR2(env, jobId).catch(() => null);
+}
+
 async function refreshJobRollup(env, jobId) {
     const rows = await queryAll(env.DB, "SELECT status, completed_count, failed_count, count FROM planner_background_items WHERE job_id = ?", jobId);
     const completedCount = rows.reduce((sum, row) => sum + Number(row.completed_count || 0), 0);
@@ -464,9 +497,9 @@ async function refreshJobRollup(env, jobId) {
     const completedAt = done ? nowIso() : null;
     await env.DB.prepare(`
         UPDATE planner_background_jobs
-        SET status = ?, completed_count = ?, failed_count = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?)
+        SET status = ?, stage = ?, completed_count = ?, failed_count = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?)
         WHERE id = ?
-    `).bind(status, completedCount, failedCount, nowIso(), completedAt, jobId).run();
+    `).bind(status, done ? status : "rollup", completedCount, failedCount, nowIso(), completedAt, jobId).run();
 }
 
 export async function syncPlannerMetaToR2(env, jobId) {
@@ -477,6 +510,8 @@ export async function syncPlannerMetaToR2(env, jobId) {
     const bySituation = new Map(items.map(item => [item.situation_id, item]));
 
     meta.status = job.status;
+    meta.stage = job.stage || "";
+    meta.stageLabel = STAGE_LABELS[job.stage] || job.stage || "";
     meta.backgroundJobId = job.id;
     meta.updatedAt = Date.now();
     if (["completed", "failed", "partial_failed", "cancelled"].includes(job.status)) {
@@ -489,6 +524,8 @@ export async function syncPlannerMetaToR2(env, jobId) {
         return {
             ...item,
             status: row.status === "completed" ? "done" : row.status,
+            stage: row.stage || "",
+            stageLabel: STAGE_LABELS[row.stage] || row.stage || "",
             images: resultKeys,
             selectedImage: resultKeys.includes(item.selectedImage) ? item.selectedImage : null,
             backgroundJobId: job.id,
@@ -509,7 +546,7 @@ async function markItemFailure(env, item, errorMessage) {
         : "running";
     await env.DB.prepare(`
         UPDATE planner_background_items
-        SET failed_count = ?, status = ?, error_message = ?, updated_at = ?
+        SET failed_count = ?, status = ?, stage = 'failed', error_message = ?, updated_at = ?
         WHERE id = ?
     `).bind(failedCount, status, errorMessage.slice(0, 1000), nowIso(), item.id).run();
 }
@@ -536,7 +573,7 @@ export async function processPlannerQueueMessage(env, message) {
     if (!job || !item) throw new Error("Background job item not found");
 
     if (["cancel_requested", "cancelled"].includes(job.status) || ["cancel_requested", "cancelled"].includes(item.status)) {
-        await env.DB.prepare("UPDATE planner_background_items SET status = 'cancelled', updated_at = ? WHERE id = ?")
+        await env.DB.prepare("UPDATE planner_background_items SET status = 'cancelled', stage = 'cancelled', updated_at = ? WHERE id = ?")
             .bind(nowIso(), itemId)
             .run();
         await refreshJobRollup(env, jobId);
@@ -545,9 +582,9 @@ export async function processPlannerQueueMessage(env, message) {
     }
 
     await env.DB.batch([
-        env.DB.prepare("UPDATE planner_background_jobs SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?")
+        env.DB.prepare("UPDATE planner_background_jobs SET status = 'running', stage = 'running', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?")
             .bind(nowIso(), nowIso(), jobId),
-        env.DB.prepare("UPDATE planner_background_items SET status = 'running', started_at = COALESCE(started_at, ?), attempts = ?, updated_at = ? WHERE id = ?")
+        env.DB.prepare("UPDATE planner_background_items SET status = 'running', stage = 'running', started_at = COALESCE(started_at, ?), attempts = ?, updated_at = ? WHERE id = ?")
             .bind(nowIso(), attempt, nowIso(), itemId)
     ]);
     await syncPlannerMetaToR2(env, jobId);
@@ -558,12 +595,17 @@ export async function processPlannerQueueMessage(env, message) {
         const seed = Number.isFinite(baseSeed) ? (baseSeed + imageIndex) % 4294967296 : Math.floor(Math.random() * 4294967296);
         const generatedAt = nowIso();
         const request = buildNovelAiPayload(generation, seed);
+        await updateProgressStage(env, jobId, itemId, "novelai_request");
         const zipBuffer = await callNovelAi(env, request.payload);
+        await updateProgressStage(env, jobId, itemId, "novelai_response");
+        await updateProgressStage(env, jobId, itemId, "zip_extract");
         const extracted = await extractFirstZipFile(zipBuffer);
+        await updateProgressStage(env, jobId, itemId, "webp_encode");
         const webpBuffer = await encodeWebP(env, extracted.data);
         const fileName = makeResultFileName(imageIndex);
         const key = `${item.output_prefix}${fileName}`;
 
+        await updateProgressStage(env, jobId, itemId, "r2_put");
         await env.imgBucket.put(key, webpBuffer, {
             httpMetadata: { contentType: "image/webp" },
             customMetadata: { ispublic: "false", backgroundjobid: jobId }
@@ -571,6 +613,7 @@ export async function processPlannerQueueMessage(env, message) {
 
         const resultKeys = JSON.parse(item.result_keys || "[]");
         resultKeys.push(key);
+        await updateProgressStage(env, jobId, itemId, "metadata_put");
         await saveMetadata(env, item.output_prefix, fileName, {
             Prompt: request.prompt,
             "Negative Prompt": request.negative,
@@ -590,15 +633,15 @@ export async function processPlannerQueueMessage(env, message) {
         const status = completedCount + failedCount >= count ? "completed" : "running";
         await env.DB.prepare(`
             UPDATE planner_background_items
-            SET completed_count = ?, status = ?, result_keys = ?, error_message = NULL, updated_at = ?, completed_at = CASE WHEN ? IN ('completed', 'partial_failed') THEN ? ELSE completed_at END
+            SET completed_count = ?, status = ?, stage = ?, result_keys = ?, error_message = NULL, updated_at = ?, completed_at = CASE WHEN ? IN ('completed', 'partial_failed') THEN ? ELSE completed_at END
             WHERE id = ?
-        `).bind(completedCount, status, JSON.stringify(resultKeys), nowIso(), status, nowIso(), itemId).run();
+        `).bind(completedCount, status, status === "completed" ? "completed" : "running", JSON.stringify(resultKeys), nowIso(), status, nowIso(), itemId).run();
     } catch (error) {
         const errorMessage = error.message || String(error);
         if (attempt < MAX_ATTEMPTS && await enqueueRetry(env, message, attempt)) {
             await env.DB.prepare(`
                 UPDATE planner_background_items
-                SET status = 'running', attempts = ?, error_message = ?, updated_at = ?
+                SET status = 'running', stage = 'running', attempts = ?, error_message = ?, updated_at = ?
                 WHERE id = ?
             `).bind(attempt, errorMessage.slice(0, 1000), nowIso(), itemId).run();
             await syncPlannerMetaToR2(env, jobId);
