@@ -497,9 +497,10 @@ function makeResultFileName(imageIndex) {
 }
 
 async function encodeWebP(env, imageBuffer) {
-    const transformed = await env.IMAGES.input(imageBuffer)
-        .output({ format: "image/webp", quality: 80 })
-        .response();
+    const imageStream = new Blob([imageBuffer]).stream();
+    const output = await env.IMAGES.input(imageStream)
+        .output({ format: "image/webp", quality: 80 });
+    const transformed = output.response();
     if (!transformed.ok) {
         throw new Error(`WebP conversion failed: ${transformed.status}`);
     }
