@@ -206,6 +206,39 @@ function getPlannerMetaKey(project) {
     return `${getPlannerPrefix(project)}_planner_meta.json`;
 }
 
+function getPlannerSettingsKey(project) {
+    return `${getPlannerPrefix(project)}_planner_settings.json`;
+}
+
+const DEFAULT_PLANNER_SETTINGS = {
+    steps: '28',
+    scale: '5.0',
+    sampler: 'k_euler_ancestral'
+};
+
+const PLANNER_MODEL_OPTIONS = [
+    ['nai-diffusion-4-5-full', 'NAI Diffusion Anime V4.5 (Full)'],
+    ['nai-diffusion-4-5-curated', 'NAI Diffusion Anime V4.5 (Curated)'],
+    ['nai-diffusion-4-full', 'NAI Diffusion Anime V4.0 (Full)'],
+    ['nai-diffusion-4-curated-preview', 'NAI Diffusion Anime V4.0 (Curated Preview)'],
+    ['nai-diffusion-3', 'NAI Diffusion Anime V3'],
+    ['nai-diffusion-furry-3', 'NAI Diffusion Furry V3']
+];
+
+const PLANNER_RESOLUTION_OPTIONS = [
+    ['832x1216', '세로형 832x1216'],
+    ['1024x1024', '정방형 1024x1024'],
+    ['1216x832', '가로형 1216x832']
+];
+
+const PLANNER_SAMPLER_OPTIONS = [
+    ['k_euler_ancestral', 'Euler Ancestral'],
+    ['k_euler', 'Euler'],
+    ['k_dpmpp_2s_ancestral', 'DPM++ 2S Ancestral'],
+    ['k_dpmpp_2m', 'DPM++ 2M'],
+    ['k_dpmpp_sde', 'DPM++ SDE']
+];
+
 function getCharacterById(project, characterId) {
     const decodedId = decodeURIComponent(characterId || '');
     return getProjectItems(project, 'characters').find(character =>
@@ -1028,6 +1061,7 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         await Promise.all([
             loadProjectSituations(project),
             loadProjectCharacters(project),
+            loadPlannerSettings(project).catch(() => normalizePlannerSettings()),
             loadPlannerMeta(project).then(meta => { window.PROJECT_PLANNER_META = meta; })
         ]).catch(err => {
             if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section, { error: err.message });
@@ -1803,8 +1837,10 @@ async function createSituation(project, situationId, alias) {
         alias,
         imageNumber,
         prompt: {
+            composition: '',
             expression: '',
-            action: ''
+            action: '',
+            background: ''
         },
         createdAt: Date.now()
     };
@@ -1888,6 +1924,73 @@ function getPlannerImagePrefix(project, imageNumber) {
     return `${getPlannerPrefix(project)}${imageNumber}/`;
 }
 
+function normalizePlannerSettings(settings = {}) {
+    return {
+        steps: String(settings.steps || DEFAULT_PLANNER_SETTINGS.steps),
+        scale: String(settings.scale || DEFAULT_PLANNER_SETTINGS.scale),
+        sampler: settings.sampler || DEFAULT_PLANNER_SETTINGS.sampler
+    };
+}
+
+async function loadPlannerSettings(project, force = false) {
+    if (!project?.prefix) return normalizePlannerSettings();
+    if (!force && window.PROJECT_PLANNER_SETTINGS?.projectId === project.id) return window.PROJECT_PLANNER_SETTINGS;
+
+    const res = await fetch(`${getAssetUrl(getPlannerSettingsKey(project))}?_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.status === 404) {
+        window.PROJECT_PLANNER_SETTINGS = { projectId: project.id, ...normalizePlannerSettings() };
+        return window.PROJECT_PLANNER_SETTINGS;
+    }
+    if (!res.ok) throw new Error('플래너 설정을 불러오지 못했습니다.');
+
+    const settings = normalizePlannerSettings(await res.json());
+    window.PROJECT_PLANNER_SETTINGS = { projectId: project.id, ...settings };
+    return window.PROJECT_PLANNER_SETTINGS;
+}
+
+async function savePlannerSettings(project, settings) {
+    const normalized = normalizePlannerSettings(settings);
+    const key = getPlannerSettingsKey(project);
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8',
+            'X-File-Name': encodeURIComponent('_planner_settings.json'),
+            'X-Absolute-Path': encodeURIComponent(key)
+        },
+        body: new Blob([JSON.stringify(normalized, null, 2)], { type: 'application/json; charset=utf-8' }),
+        cache: 'no-store'
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '플래너 설정 저장에 실패했습니다.');
+    }
+    window.PROJECT_PLANNER_SETTINGS = { projectId: project.id, ...normalized };
+    return window.PROJECT_PLANNER_SETTINGS;
+}
+
+function applyPlannerSettingsToGeneration(generation, settings) {
+    const normalized = normalizePlannerSettings(settings);
+    generation.steps = normalized.steps;
+    generation.scale = normalized.scale;
+    generation.sampler = normalized.sampler;
+    return generation;
+}
+
+async function loadPlannerReferenceFile(key) {
+    if (!key) return null;
+    const res = await fetch(`${getAssetUrl(key)}?_t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`참조 이미지를 불러오지 못했습니다: ${key}`);
+    const blob = await res.blob();
+    const fileName = getFileNameFromKey(key) || 'planner-reference.webp';
+    return new File([blob], fileName, { type: blob.type || 'image/webp', lastModified: Date.now() });
+}
+
+async function applyPlannerReferenceFiles(generation) {
+    window.VIBE_IMAGE_FILE = await loadPlannerReferenceFile(generation.vibeImageKey);
+    window.PRECISE_IMAGE_FILE = await loadPlannerReferenceFile(generation.preciseImageKey);
+}
+
 function getPlannerField(item, key) {
     return item?.generation?.fields?.[key] || '';
 }
@@ -1921,6 +2024,24 @@ function readPlannerEditsFromDom(meta) {
         });
         const countInput = document.getElementById(`planner-${item.imageNumber}-count`);
         if (countInput) item.count = Math.max(1, parseInt(countInput.value) || 1);
+        const generationInputs = {
+            model: document.getElementById(`planner-${item.imageNumber}-model`)?.value,
+            res: document.getElementById(`planner-${item.imageNumber}-res`)?.value,
+            vibeStrength: document.getElementById(`planner-${item.imageNumber}-vibe-strength`)?.value,
+            vibeInfo: document.getElementById(`planner-${item.imageNumber}-vibe-info`)?.value,
+            preciseType: document.getElementById(`planner-${item.imageNumber}-precise-type`)?.value,
+            preciseStrength: document.getElementById(`planner-${item.imageNumber}-precise-strength`)?.value,
+            preciseFidelity: document.getElementById(`planner-${item.imageNumber}-precise-fidelity`)?.value,
+            vibeImageKey: document.getElementById(`planner-${item.imageNumber}-vibe-key`)?.value.trim(),
+            preciseImageKey: document.getElementById(`planner-${item.imageNumber}-precise-key`)?.value.trim()
+        };
+        Object.entries(generationInputs).forEach(([key, value]) => {
+            if (value !== undefined) item.generation[key] = value;
+        });
+        const smInput = document.getElementById(`planner-${item.imageNumber}-sm`);
+        const smDynInput = document.getElementById(`planner-${item.imageNumber}-sm-dyn`);
+        if (smInput) item.generation.sm = smInput.checked;
+        if (smDynInput) item.generation.sm_dyn = smDynInput.checked;
         item.generation.batchCount = String(item.count);
         item.generation.negative = fields.negative;
         item.generation.prompts = {
@@ -1934,6 +2055,7 @@ function readPlannerEditsFromDom(meta) {
             'prompt-background': fields.background,
             'prompt-raw': ''
         };
+        applyPlannerSettingsToGeneration(item.generation, window.PROJECT_PLANNER_SETTINGS || DEFAULT_PLANNER_SETTINGS);
     });
     meta.updatedAt = Date.now();
     return meta;
@@ -1955,6 +2077,92 @@ function renderPlannerField(item, key, label, rows = 2) {
         </label>
     `;
 }
+
+function renderPlannerSelect(id, label, value, options) {
+    return `
+        <label class="block min-w-0">
+            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">${label}</span>
+            <select id="${escapeHtml(id)}" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
+                ${options.map(([optionValue, optionLabel]) => `<option value="${escapeHtml(optionValue)}" ${value === optionValue ? 'selected' : ''}>${escapeHtml(optionLabel)}</option>`).join('')}
+            </select>
+        </label>
+    `;
+}
+
+function renderPlannerNumberInput(id, label, value, attrs = '') {
+    return `
+        <label class="block min-w-0">
+            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">${label}</span>
+            <input id="${escapeHtml(id)}" value="${escapeHtml(value)}" ${attrs} class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
+        </label>
+    `;
+}
+
+function renderPlannerCheckbox(id, label, checked) {
+    return `
+        <label class="inline-flex items-center gap-1.5 text-[10px] font-bold text-gray-600 dark:text-gray-300">
+            <input id="${escapeHtml(id)}" type="checkbox" ${checked ? 'checked' : ''} class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
+            ${label}
+        </label>
+    `;
+}
+
+function renderPlannerGenerationFields(item) {
+    const generation = item.generation || {};
+    const id = `planner-${item.imageNumber}`;
+
+    return `
+        <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
+                ${renderPlannerSelect(`${id}-model`, '모델', generation.model || 'nai-diffusion-4-5-full', PLANNER_MODEL_OPTIONS)}
+                ${renderPlannerSelect(`${id}-res`, '해상도', generation.res || '832x1216', PLANNER_RESOLUTION_OPTIONS)}
+                ${renderPlannerSelect(`${id}-precise-type`, 'Reference 타입', generation.preciseType || 'character&style', [
+                    ['character&style', '캐릭터+그림체'],
+                    ['character', '캐릭터'],
+                    ['style', '그림체']
+                ])}
+                ${renderPlannerNumberInput(`${id}-vibe-strength`, 'Vibe Strength', generation.vibeStrength || '0.6', 'type="number" min="0" max="1" step="0.1"')}
+                ${renderPlannerNumberInput(`${id}-vibe-info`, 'Vibe Info', generation.vibeInfo || '1.0', 'type="number" min="0" max="1" step="0.1"')}
+                ${renderPlannerNumberInput(`${id}-precise-strength`, 'Reference Strength', generation.preciseStrength || '1.0', 'type="number" min="0" max="1" step="0.1"')}
+                ${renderPlannerNumberInput(`${id}-precise-fidelity`, 'Reference Fidelity', generation.preciseFidelity || '0.5', 'type="number" min="0" max="1" step="0.1"')}
+                ${renderPlannerNumberInput(`${id}-vibe-key`, 'Vibe 이미지 경로', generation.vibeImageKey || '', 'type="text" placeholder="예: project/ref/vibe.webp"')}
+                ${renderPlannerNumberInput(`${id}-precise-key`, 'Reference 이미지 경로', generation.preciseImageKey || '', 'type="text" placeholder="예: project/ref/reference.webp"')}
+            </div>
+            <div class="mt-2 flex flex-wrap gap-3">
+                ${renderPlannerCheckbox(`${id}-sm`, 'SMEA', !!generation.sm)}
+                ${renderPlannerCheckbox(`${id}-sm-dyn`, 'DYN', !!generation.sm_dyn)}
+                <span class="text-[10px] text-gray-400 dark:text-gray-500">V4 prompt는 플랜의 프롬프트 필드와 캐릭터 캡션을 기준으로 생성 시 적용됩니다.</span>
+            </div>
+        </div>
+    `;
+}
+
+function renderPlannerSettingsModal(settings) {
+    return `
+        <div id="planner-settings-modal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm items-center justify-center p-4" onclick="window.closePlannerSettingsModal(event)">
+            <div class="w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
+                <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                    <h3 class="text-sm font-bold text-gray-900 dark:text-white">플래너 공통 설정</h3>
+                    <button type="button" onclick="window.closePlannerSettingsModal()" class="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
+                        <i data-lucide="x" class="w-4 h-4"></i>
+                    </button>
+                </div>
+                <div class="p-4 space-y-3">
+                    ${renderPlannerNumberInput('planner-setting-steps', 'Steps', settings.steps, 'type="number" min="1" max="50"')}
+                    ${renderPlannerNumberInput('planner-setting-scale', 'CFG Scale', settings.scale, 'type="number" min="1" max="10" step="0.1"')}
+                    ${renderPlannerSelect('planner-setting-sampler', 'Sampler', settings.sampler, PLANNER_SAMPLER_OPTIONS)}
+                    <p id="planner-settings-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                </div>
+                <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
+                    <button type="button" onclick="window.closePlannerSettingsModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">취소</button>
+                    <button type="button" onclick="window.savePlannerSettingsFromModal()" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">저장</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+// TODO(planner): 각 플랜별 결과 확인 전용 화면은 별도 레이아웃 검토 후 구현한다.
 
 function renderPlannerImages(item) {
     if (!Array.isArray(item.images) || !item.images.length) {
@@ -1987,6 +2195,7 @@ function renderPlannerPanel(project, situations) {
     const activeCharacter = characters.find(character => character.id === meta?.characterId || character.prefix === meta?.characterId) || characters[0];
     const selectedSituationId = meta?.lastSituationId || situations[0]?.id || '';
     const view = window.PROJECT_PLANNER_VIEW || 'plan';
+    const settings = normalizePlannerSettings(window.PROJECT_PLANNER_SETTINGS || {});
 
     const modeButton = (mode, label, icon) => `
         <button type="button" onclick="window.setPlannerView('${mode}')" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${view === mode ? 'bg-indigo-600 text-white' : 'border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-400'}">
@@ -2021,6 +2230,7 @@ function renderPlannerPanel(project, situations) {
                         ${renderPlannerField(item, 'background', '배경', 1)}
                         ${renderPlannerField(item, 'negative', '부정 프롬프트', 1)}
                     </div>
+                    ${renderPlannerGenerationFields(item)}
                 </div>
             `).join('')}
         </div>
@@ -2120,9 +2330,14 @@ function renderPlannerPanel(project, situations) {
                     <h3 class="font-bold text-sm text-gray-900 dark:text-white">플래너 데모</h3>
                     <p id="planner-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(meta?.status))}</p>
                 </div>
-                <button type="button" onclick="window.refreshPlannerPanel()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="새로고침">
-                    <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-                </button>
+                <div class="flex items-center gap-1">
+                    <button type="button" onclick="window.openPlannerSettingsModal()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="플래너 설정">
+                        <i data-lucide="settings" class="w-4 h-4"></i>
+                    </button>
+                    <button type="button" onclick="window.refreshPlannerPanel()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="새로고침">
+                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                    </button>
+                </div>
             </div>
             <div class="flex flex-wrap gap-2 mb-4">
                 ${modeButton('plan', '플랜짜기', 'list-plus')}
@@ -2130,6 +2345,7 @@ function renderPlannerPanel(project, situations) {
                 ${modeButton('result', '결과 확인', 'images')}
             </div>
             ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
+            ${renderPlannerSettingsModal(settings)}
         </div>
     `;
 }
@@ -2137,13 +2353,62 @@ function renderPlannerPanel(project, situations) {
 export async function refreshPlannerPanel() {
     const project = getActiveProject();
     if (!project) return;
-    window.PROJECT_PLANNER_META = await loadPlannerMeta(project).catch(() => null);
+    const [meta] = await Promise.all([
+        loadPlannerMeta(project).catch(() => null),
+        loadPlannerSettings(project, true).catch(() => normalizePlannerSettings())
+    ]);
+    window.PROJECT_PLANNER_META = meta;
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
 export function setPlannerView(view = 'plan') {
     window.PROJECT_PLANNER_VIEW = ['plan', 'run', 'result'].includes(view) ? view : 'plan';
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export function openPlannerSettingsModal() {
+    const modal = document.getElementById('planner-settings-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    refreshProjectIcons();
+}
+
+export function closePlannerSettingsModal(event) {
+    if (event && event.target?.id !== 'planner-settings-modal') return;
+    const modal = document.getElementById('planner-settings-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+export async function savePlannerSettingsFromModal() {
+    const project = getActiveProject();
+    if (!project) return;
+    const status = document.getElementById('planner-settings-status');
+    if (status) status.textContent = '저장 중...';
+
+    try {
+        const settings = await savePlannerSettings(project, {
+            steps: document.getElementById('planner-setting-steps')?.value,
+            scale: document.getElementById('planner-setting-scale')?.value,
+            sampler: document.getElementById('planner-setting-sampler')?.value
+        });
+        let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+        if (meta?.items?.length) {
+            meta.items.forEach(item => applyPlannerSettingsToGeneration(item.generation, settings));
+            meta.updatedAt = Date.now();
+            await savePlannerMeta(project, meta);
+            window.PROJECT_PLANNER_META = meta;
+        }
+        if (status) status.textContent = '저장되었습니다.';
+        setTimeout(() => {
+            closePlannerSettingsModal();
+            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+        }, 250);
+    } catch (err) {
+        if (status) status.textContent = err.message || '저장에 실패했습니다.';
+    }
 }
 
 export async function addPlannerDraftItem() {
@@ -2171,6 +2436,7 @@ export async function addPlannerDraftItem() {
     const defaultCount = Math.max(1, parseInt(document.getElementById('planner-default-count')?.value) || 2);
     const characterMeta = await loadCharacterMeta(character).catch(() => ({}));
     const projectStyle = await loadProjectStylePrompt(project).catch(() => '');
+    const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
     const stylePrompt = projectStyle || currentSettings.prompts?.['prompt-style'] || '';
     const negativePrompt = characterMeta.parts?.negative || currentSettings.negative || '';
@@ -2187,7 +2453,7 @@ export async function addPlannerDraftItem() {
         background: prompt.background || currentSettings.prompts?.['prompt-background'] || 'white background',
         negative: negativePrompt
     };
-    const generation = {
+    const generation = applyPlannerSettingsToGeneration({
         ...currentSettings,
         simpleMode: false,
         batchCount: String(defaultCount),
@@ -2204,7 +2470,7 @@ export async function addPlannerDraftItem() {
             'prompt-raw': ''
         },
         fields
-    };
+    }, plannerSettings);
 
     let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!meta || meta.characterId !== character.id) {
@@ -2354,14 +2620,19 @@ export async function startPlannerGeneration() {
     window.PROJECT_PLANNER_META = meta;
 
     const previousSettings = window.readCraftSettings ? window.readCraftSettings() : null;
+    const previousVibeFile = window.VIBE_IMAGE_FILE || null;
+    const previousPreciseFile = window.PRECISE_IMAGE_FILE || null;
+    const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     try {
         for (const item of meta.items) {
             item.status = 'running';
             item.generation.batchCount = String(item.count || meta.defaultCount || 1);
+            applyPlannerSettingsToGeneration(item.generation, plannerSettings);
             await savePlannerMeta(project, meta);
             setPlannerStatus(`${item.imageNumber}.webp 생성 중...`);
 
             if (window.applyCraftSettings) window.applyCraftSettings(item.generation);
+            await applyPlannerReferenceFiles(item.generation);
             window.generateNaiImage({
                 outputPrefix: getPlannerImagePrefix(project, item.imageNumber),
                 planner: {
@@ -2388,6 +2659,8 @@ export async function startPlannerGeneration() {
         window.PROJECT_PLANNER_META = meta;
         setPlannerStatus(meta.status);
     } finally {
+        window.VIBE_IMAGE_FILE = previousVibeFile;
+        window.PRECISE_IMAGE_FILE = previousPreciseFile;
         if (previousSettings && window.applyCraftSettings) window.applyCraftSettings(previousSettings);
         renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
     }
@@ -2618,7 +2891,11 @@ function renderSituationDetailShell(project, situation, state = {}) {
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
             <section class="max-w-7xl mx-auto min-h-full">
                 <form id="situation-prompt-form" onsubmit="window.saveActiveSituationPrompt(event)" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                        <div>
+                            <label for="situation-composition-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구도</label>
+                            <textarea id="situation-composition-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="상황에 필요한 구도 프롬프트">${escapeHtml(prompt.composition)}</textarea>
+                        </div>
                         <div>
                             <label for="situation-expression-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">표정</label>
                             <textarea id="situation-expression-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="상황에 필요한 표정 프롬프트">${escapeHtml(prompt.expression)}</textarea>
@@ -2761,11 +3038,12 @@ export async function saveActiveSituationPrompt(event) {
 
     const project = getActiveProject();
     const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    const compositionInput = document.getElementById('situation-composition-input');
     const expressionInput = document.getElementById('situation-expression-input');
     const actionInput = document.getElementById('situation-action-input');
     const button = document.getElementById('situation-prompt-save-btn');
     const status = document.getElementById('situation-prompt-save-status');
-    if (!project || !situation || !expressionInput || !actionInput) return;
+    if (!project || !situation || !compositionInput || !expressionInput || !actionInput) return;
 
     const previousButtonHtml = button?.innerHTML || '';
     if (button) {
@@ -2778,6 +3056,7 @@ export async function saveActiveSituationPrompt(event) {
     try {
         situation.prompt = {
             ...(situation.prompt || {}),
+            composition: compositionInput.value.trim(),
             expression: expressionInput.value.trim(),
             action: actionInput.value.trim()
         };

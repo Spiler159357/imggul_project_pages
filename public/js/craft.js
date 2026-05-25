@@ -665,21 +665,31 @@ export async function processNextQueueItem() {
          */
         const pad = (n) => n.toString().padStart(2, '0');
         const dateString = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-        const newFileName = `nai_${dateString}_${Date.now().toString().slice(-4)}.png`;
-        const generatedFile = new File([fileData], newFileName, { type: "image/png" });
+        const rawFileName = `nai_${dateString}_${Date.now().toString().slice(-4)}.png`;
+        const generatedFile = new File([fileData], rawFileName, { type: "image/png" });
         
         updateProgress('최적화 및 임시 저장소 업로드 중...', 99);
         let extractedMetadata = await window.extractMetadata(generatedFile);
         if (extractedMetadata && task.splitPrompts && Object.keys(task.splitPrompts).length > 0) { extractedMetadata["Split Prompts"] = task.splitPrompts; delete extractedMetadata["Prompt"]; }
 
         const outputPrefix = task.outputPrefix || window.TEMP_FOLDER;
-        const tempKey = outputPrefix + newFileName;
-        const uploadHeaders = { 'X-File-Name': encodeURIComponent(newFileName), 'Content-Type': 'image/png', 'X-Absolute-Path': encodeURIComponent(tempKey) };
-        const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(generatedFile); });
+        let uploadFile = generatedFile;
+        let uploadFileName = rawFileName;
+        let uploadContentType = 'image/png';
+        if (task.planner) {
+            if (!window.convertToWebP) throw new Error('WebP 변환 함수를 찾을 수 없습니다.');
+            uploadFile = await window.convertToWebP(generatedFile);
+            uploadFileName = rawFileName.replace(/\.png$/i, '.webp');
+            if (uploadFile.name !== uploadFileName) uploadFile = new File([uploadFile], uploadFileName, { type: 'image/webp', lastModified: Date.now() });
+            uploadContentType = 'image/webp';
+        }
+        const tempKey = outputPrefix + uploadFileName;
+        const uploadHeaders = { 'X-File-Name': encodeURIComponent(uploadFileName), 'Content-Type': uploadContentType, 'X-Absolute-Path': encodeURIComponent(tempKey) };
+        const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(uploadFile); });
         const uploadRes = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: uploadHeaders, body: buffer, cache: 'no-store' });
         if (!uploadRes.ok) throw new Error("서버 임시 저장소 동기화에 실패했습니다.");
 
-        if (extractedMetadata) await window.saveMetadataToDB(outputPrefix, newFileName, extractedMetadata);
+        if (extractedMetadata) await window.saveMetadataToDB(outputPrefix, uploadFileName, extractedMetadata);
 
         updateProgress('완료!', 100);
         if (outputPrefix === window.TEMP_FOLDER) window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString() });
@@ -696,7 +706,7 @@ export async function processNextQueueItem() {
             window.CRAFT_ACTIVE_INDEX = 0;
             window.renderTempGallery();
         }
-        window.dispatchEvent(new CustomEvent('imggul:generation-task-complete', { detail: { task, key: tempKey, fileName: newFileName, metadata: extractedMetadata } }));
+        window.dispatchEvent(new CustomEvent('imggul:generation-task-complete', { detail: { task, key: tempKey, fileName: uploadFileName, metadata: extractedMetadata } }));
         window.processDelayedWebPConversion();
 
         window.GENERATION_QUEUE.shift();
