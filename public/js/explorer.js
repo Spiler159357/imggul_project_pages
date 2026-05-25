@@ -1,9 +1,15 @@
 // 4. explorer.js: 탐색기 화면 전용 로직
 const EXPLORER_HIDDEN_FOLDER_NAMES = new Set(['_planner_temp_image']);
+const EXPLORER_HIDDEN_FILE_NAMES = new Set(['prompt.md', 'style_prompt.md']);
 
 function isExplorerVisibleFolder(folderPrefix) {
     const folderName = String(folderPrefix || '').split('/').filter(Boolean).pop();
     return folderName && !EXPLORER_HIDDEN_FOLDER_NAMES.has(folderName);
+}
+
+function isExplorerVisibleFile(file) {
+    const fileName = String(file?.key || '').split('/').pop();
+    return fileName && !EXPLORER_HIDDEN_FILE_NAMES.has(fileName);
 }
 
 /**
@@ -53,10 +59,11 @@ export async function loadPath(prefix, skipHistory = false) {
 
         const data = await listRes.json();
         const visibleFolders = (data.folders || []).filter(isExplorerVisibleFolder);
-        window.FOLDER_DATA_CACHE[prefix] = { folders: visibleFolders, files: data.files, timestamp: Date.now(), scrollY: 0 };
+        const visibleFiles = (data.files || []).filter(isExplorerVisibleFile);
+        window.FOLDER_DATA_CACHE[prefix] = { folders: visibleFolders, files: visibleFiles, timestamp: Date.now(), scrollY: 0 };
         window.updateBreadcrumbs(prefix);
-        window.renderFiles(visibleFolders, data.files);
-        window.renderSidebarFoldersAndFiles(visibleFolders, data.files);
+        window.renderFiles(visibleFolders, visibleFiles);
+        window.renderSidebarFoldersAndFiles(visibleFolders, visibleFiles);
     } catch (err) {
         alert('파일 목록 로드 실패: ' + err.message);
     } finally {
@@ -95,7 +102,7 @@ export function renderFiles(folders, files) {
         grid.appendChild(div);
     });
 
-    files.forEach(file => {
+    files.filter(isExplorerVisibleFile).forEach(file => {
         const fileName = file.key.split('/').pop();
         if(fileName === '.keep' || fileName === '_meta.json') return;
 
@@ -148,7 +155,7 @@ export function renderSidebarFoldersAndFiles(folders, files) {
         list.appendChild(li);
     });
 
-    files.forEach(file => {
+    files.filter(isExplorerVisibleFile).forEach(file => {
         const fileName = file.key.split('/').pop();
         if(fileName === '.keep' || fileName === '_meta.json') return;
         const alias = window.getAliasOnly(file.key, false);
