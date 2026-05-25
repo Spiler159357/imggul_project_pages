@@ -22,6 +22,10 @@ This implementation adds the application code for server-side planner generation
 4. R2
    - Reuse the existing `imgBucket` binding and `imggul-storage` bucket.
 
+5. Images binding
+   - Binding name: `IMAGES`
+   - Used by the background Worker to encode NovelAI PNG output as WebP before saving to R2.
+
 ## Local Files
 
 - `src/planner-background.js`
@@ -49,7 +53,6 @@ Background mode is planner-only and intentionally excludes browser-only features
 - reference images
 - precise/vibe transfer images
 - inpaint
-- server-side WebP conversion
 
 Use browser mode for those workflows until the server-side image preprocessing path is added.
 

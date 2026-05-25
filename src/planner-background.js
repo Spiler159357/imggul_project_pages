@@ -24,6 +24,7 @@ function requireWorkerBindings(env) {
     if (!env.DB) missing.push("DB");
     if (!env.imgBucket) missing.push("imgBucket");
     if (!env.NOVELAI_TOKEN) missing.push("NOVELAI_TOKEN");
+    if (!env.IMAGES) missing.push("IMAGES");
     if (missing.length) {
         throw new Error(`Missing Cloudflare binding(s): ${missing.join(", ")}`);
     }
@@ -412,7 +413,17 @@ function makeResultFileName(imageIndex) {
     const d = new Date();
     const pad = value => String(value).padStart(2, "0");
     const dateString = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    return `nai_bg_${dateString}_${String(imageIndex + 1).padStart(2, "0")}_${crypto.randomUUID().slice(0, 8)}.png`;
+    return `nai_bg_${dateString}_${String(imageIndex + 1).padStart(2, "0")}_${crypto.randomUUID().slice(0, 8)}.webp`;
+}
+
+async function encodeWebP(env, imageBuffer) {
+    const transformed = await env.IMAGES.input(imageBuffer)
+        .output({ format: "image/webp", quality: 80 })
+        .response();
+    if (!transformed.ok) {
+        throw new Error(`WebP conversion failed: ${transformed.status}`);
+    }
+    return await transformed.arrayBuffer();
 }
 
 async function readJsonObject(bucket, key, fallback = {}) {
@@ -549,11 +560,12 @@ export async function processPlannerQueueMessage(env, message) {
         const request = buildNovelAiPayload(generation, seed);
         const zipBuffer = await callNovelAi(env, request.payload);
         const extracted = await extractFirstZipFile(zipBuffer);
+        const webpBuffer = await encodeWebP(env, extracted.data);
         const fileName = makeResultFileName(imageIndex);
         const key = `${item.output_prefix}${fileName}`;
 
-        await env.imgBucket.put(key, extracted.data, {
-            httpMetadata: { contentType: "image/png" },
+        await env.imgBucket.put(key, webpBuffer, {
+            httpMetadata: { contentType: "image/webp" },
             customMetadata: { ispublic: "false", backgroundjobid: jobId }
         });
 

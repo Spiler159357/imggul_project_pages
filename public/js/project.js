@@ -2395,9 +2395,9 @@ function renderPlannerResultModal(meta) {
                             ${images.map(key => {
                                 const selected = item.selectedImage === key;
                                 return `
-                                    <button type="button" onclick="window.openPlannerImagePreview('${escapeJsString(key)}')" class="relative aspect-square rounded-lg overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-800 hover:border-indigo-400 transition">
+                                    <button type="button" data-planner-image-key="${escapeHtml(key)}" onclick="window.openPlannerImagePreview('${escapeJsString(key)}')" class="relative aspect-square rounded-lg overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-800 hover:border-indigo-400 transition">
                                         <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="w-full h-full object-cover" loading="lazy">
-                                        ${selected ? '<span class="absolute left-2 top-2 px-2 py-1 rounded bg-indigo-600 text-white text-[10px] font-bold">선택됨</span>' : ''}
+                                        ${selected ? '<span data-planner-selected-badge class="absolute left-2 top-2 px-2 py-1 rounded bg-indigo-600 text-white text-[10px] font-bold">선택됨</span>' : ''}
                                     </button>
                                 `;
                             }).join('')}
@@ -2405,11 +2405,11 @@ function renderPlannerResultModal(meta) {
                     ` : renderEmptyState('아직 생성된 이미지가 없습니다.')}
                 </div>
                 <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
-                    <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.'}</p>
+                    <p id="planner-result-selected-label" class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.'}</p>
                     <div class="flex items-center gap-2">
                         <button type="button" onclick="window.closePlannerResultModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
                         <button type="button" onclick="window.startPlannerGeneration('${escapeJsString(item.situationId)}')" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">다시 생성</button>
-                        <button type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}')" ${item.selectedImage ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
+                        <button id="planner-result-confirm-button" type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}')" ${item.selectedImage ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
                     </div>
                 </div>
             </div>
@@ -2443,6 +2443,58 @@ function renderPlannerImagePreviewModal() {
             </div>
         </div>
     `;
+}
+
+function ensurePlannerOverlayRoot(id) {
+    let root = document.getElementById(id);
+    if (!root) {
+        root = document.createElement('div');
+        root.id = id;
+        document.body.appendChild(root);
+    }
+    return root;
+}
+
+function renderPlannerResultOverlay() {
+    const root = ensurePlannerOverlayRoot('planner-result-overlay-root');
+    root.innerHTML = renderPlannerResultModal(window.PROJECT_PLANNER_META || null);
+    if (window.lucide) lucide.createIcons();
+}
+
+function renderPlannerPreviewOverlay() {
+    const root = ensurePlannerOverlayRoot('planner-preview-overlay-root');
+    root.innerHTML = renderPlannerImagePreviewModal();
+    if (window.lucide) lucide.createIcons();
+}
+
+function syncPlannerResultModalSelection(item) {
+    const modal = document.getElementById('planner-result-modal');
+    if (!modal || !item) return;
+
+    modal.querySelectorAll('[data-planner-image-key]').forEach(button => {
+        const selected = button.dataset.plannerImageKey === item.selectedImage;
+        button.classList.toggle('border-indigo-500', selected);
+        button.classList.toggle('ring-2', selected);
+        button.classList.toggle('ring-indigo-500', selected);
+        button.classList.toggle('border-gray-200', !selected);
+        button.classList.toggle('dark:border-gray-700', !selected);
+
+        let badge = button.querySelector('[data-planner-selected-badge]');
+        if (selected && !badge) {
+            badge = document.createElement('span');
+            badge.dataset.plannerSelectedBadge = 'true';
+            badge.className = 'absolute left-2 top-2 px-2 py-1 rounded bg-indigo-600 text-white text-[10px] font-bold';
+            badge.textContent = '선택됨';
+            button.appendChild(badge);
+        } else if (!selected && badge) {
+            badge.remove();
+        }
+    });
+
+    const label = document.getElementById('planner-result-selected-label');
+    if (label) label.textContent = item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.';
+    const confirmButton = document.getElementById('planner-result-confirm-button');
+    if (confirmButton) confirmButton.disabled = !item.selectedImage;
 }
 
 function renderPlannerProgressPanel(meta) {
@@ -2666,8 +2718,6 @@ function renderPlannerPanel(project, situations) {
             </div>
             ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
             ${renderPlannerSettingsModal(settings)}
-            ${renderPlannerResultModal(meta)}
-            ${renderPlannerImagePreviewModal()}
         </div>
     `;
 }
@@ -2700,24 +2750,26 @@ export function setPlannerGenerationMode(mode = 'browser') {
 export function openPlannerResultModal(situationId) {
     window.PLANNER_RESULT_MODAL_SITUATION_ID = situationId;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerResultOverlay();
+    renderPlannerPreviewOverlay();
 }
 
 export function closePlannerResultModal() {
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerResultOverlay();
+    renderPlannerPreviewOverlay();
 }
 
 export function openPlannerImagePreview(key) {
     window.PLANNER_IMAGE_PREVIEW_KEY = key;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerPreviewOverlay();
 }
 
 export function closePlannerImagePreview(event) {
     if (event && event.target?.id !== 'planner-image-preview-modal') return;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerPreviewOverlay();
 }
 
 export function openPlannerSettingsModal() {
@@ -3321,8 +3373,18 @@ export async function selectPlannerImage(key) {
 }
 
 export async function selectPlannerImageFromPreview(key) {
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!project || !meta?.items) return;
+    const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
+    if (!item) return;
+    item.selectedImage = key;
+    meta.updatedAt = Date.now();
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    await selectPlannerImage(key);
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+    syncPlannerResultModalSelection(item);
+    renderPlannerPreviewOverlay();
 }
 
 export async function confirmPlannerSelection(situationId = null) {
