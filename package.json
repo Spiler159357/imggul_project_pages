@@ -1,3 +1,9 @@
 {
-  "type": "module"
+  "type": "module",
+  "scripts": {
+    "deploy:background": "wrangler deploy -c wrangler.background.toml"
+  },
+  "devDependencies": {
+    "wrangler": "latest"
+  }
 }

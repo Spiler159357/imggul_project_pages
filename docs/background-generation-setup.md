@@ -31,7 +31,9 @@ This implementation adds the application code for server-side planner generation
 - `wrangler.background.example.toml`
   - Example Worker config for the Queue consumer.
 - `wrangler.toml`
-  - Pages config with commented D1/Queue producer binding template.
+  - Pages config with D1/Queue producer bindings.
+- `wrangler.background.toml`
+  - Production Worker config for the Queue consumer.
 
 ## Current Known Resource Names
 
@@ -50,3 +52,20 @@ Background mode is planner-only and intentionally excludes browser-only features
 - server-side WebP conversion
 
 Use browser mode for those workflows until the server-side image preprocessing path is added.
+
+## Same Repository Deployment
+
+Use the current GitHub repository for both Cloudflare projects:
+
+1. Existing Pages project
+   - Keep the current Pages build/deploy settings.
+   - It uses `public/`, `functions/`, and `wrangler.toml`.
+
+2. New Worker project
+   - Connect it to the same GitHub repository.
+   - Root directory: repository root.
+   - Build command: leave empty unless Cloudflare requires one.
+   - Deploy command: `npx wrangler deploy -c wrangler.background.toml`
+   - Worker entrypoint: defined in `wrangler.background.toml` as `src/planner-background.js`.
+
+After deployment, verify that `imggul-queue` shows `imggul-background-worker` as a consumer.
