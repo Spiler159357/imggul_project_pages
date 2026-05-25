@@ -12,6 +12,14 @@ function isExplorerVisibleFile(file) {
     return fileName && !EXPLORER_HIDDEN_FILE_NAMES.has(fileName);
 }
 
+function updateLogToolsVisibility(prefix) {
+    const clearLogsButton = document.getElementById('clear-logs-btn');
+    if (!clearLogsButton) return;
+    const normalizedPrefix = String(prefix || '');
+    const isLogsPath = normalizedPrefix === 'logs/' || normalizedPrefix.startsWith('logs/');
+    clearLogsButton.classList.toggle('hidden', !isLogsPath);
+}
+
 /**
  * 역할: 지정한 폴더 prefix의 목록과 별칭을 불러와 갤러리/사이드바를 렌더링한다.
  * 매개변수: prefix - 로드할 폴더 경로, skipHistory - 브라우저 history push 생략 여부.
@@ -25,6 +33,7 @@ export async function loadPath(prefix, skipHistory = false) {
     }
 
     window.currentPrefix = prefix;
+    updateLogToolsVisibility(prefix);
     const grid = document.getElementById('file-grid');
     const loader = document.getElementById('gallery-loading');
     const emptyState = document.getElementById('gallery-empty');
@@ -107,7 +116,7 @@ export function renderFiles(folders, files) {
         if(fileName === '.keep' || fileName === '_meta.json') return;
 
         const alias = window.getAliasOnly(file.key, false);
-        const isText = fileName.toLowerCase().endsWith('.txt');
+        const isText = /\.(txt|log)$/i.test(fileName);
         const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
         const timestamp = file.uploaded ? new Date(file.uploaded).getTime() : Date.now();
         const fileUrl = window.location.origin + '/' + file.key + '?t=' + timestamp;
@@ -159,7 +168,7 @@ export function renderSidebarFoldersAndFiles(folders, files) {
         const fileName = file.key.split('/').pop();
         if(fileName === '.keep' || fileName === '_meta.json') return;
         const alias = window.getAliasOnly(file.key, false);
-        const isText = fileName.toLowerCase().endsWith('.txt');
+        const isText = /\.(txt|log)$/i.test(fileName);
         const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
         const fileUrl = window.location.origin + '/' + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
         const icon = isImage ? 'image' : (isText ? 'file-text' : 'file');
@@ -241,6 +250,13 @@ function clearFolderCache(...prefixes) {
     });
 }
 
+function clearFolderCacheByPrefix(prefix) {
+    if (!window.FOLDER_DATA_CACHE) return;
+    Object.keys(window.FOLDER_DATA_CACHE).forEach(cacheKey => {
+        if (cacheKey === prefix || cacheKey.startsWith(prefix)) delete window.FOLDER_DATA_CACHE[cacheKey];
+    });
+}
+
 function usesSameProjectAliasKey(oldKey, newKey) {
     const oldParts = oldKey.split('/').filter(Boolean);
     const newParts = newKey.split('/').filter(Boolean);
@@ -311,6 +327,34 @@ export async function deleteFolder(folderPrefix) {
     } catch (err) { alert(err.message); }
 }
 
+export async function clearLogs() {
+    if (!confirm('logs/ 폴더의 모든 로그 파일을 삭제할까요?\n이 작업은 되돌릴 수 없습니다.')) return;
+    try {
+        const res = await fetch('/api/manage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'clear_logs' })
+        });
+        if (!res.ok) {
+            let message = '로그 삭제에 실패했습니다.';
+            try {
+                const data = await res.json();
+                if (data && data.error) message = data.error;
+            } catch(e) {}
+            throw new Error(message);
+        }
+
+        clearFolderCacheByPrefix('logs/');
+        clearFolderCache(window.currentPrefix);
+        if (window.currentPrefix === 'logs/' || String(window.currentPrefix || '').startsWith('logs/')) {
+            await window.loadPath(window.currentPrefix, true);
+        }
+        alert('로그가 삭제되었습니다.');
+    } catch (err) {
+        alert(err.message || '로그 삭제에 실패했습니다.');
+    }
+}
+
 export async function setCurrentFolderAlias() {
     if (!window.currentPrefix && window.currentPrefix !== '') return;
 
@@ -345,7 +389,7 @@ export async function setModalFileAlias() {
         await window.loadPath(window.currentPrefix, true);
 
         const rawUrl = document.getElementById('modal-url')?.value || `/${window.currentFileKey}`;
-        const isText = fileName.toLowerCase().endsWith('.txt');
+        const isText = /\.(txt|log)$/i.test(fileName);
         const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
         const isPublic = document.getElementById('modal-public-check')?.checked || false;
         await window.openModal(window.currentFileKey, rawUrl.split('?')[0] + '?t=' + Date.now(), isImage, isText, isPublic, true);

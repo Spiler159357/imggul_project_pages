@@ -414,6 +414,9 @@
                         <button onclick="window.createNewFolder()" class="flex-shrink-0 flex items-center text-xs bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 px-3 py-1.5 rounded transition">
                             <i data-lucide="folder-plus" class="w-3.5 h-3.5 sm:mr-1"></i> <span class="hidden sm:inline">새 폴더</span>
                         </button>
+                        <button id="clear-logs-btn" onclick="window.clearLogs()" class="hidden flex-shrink-0 flex items-center text-xs bg-red-50 dark:bg-red-900/30 hover:bg-red-100 dark:hover:bg-red-900/50 text-red-700 dark:text-red-300 px-3 py-1.5 rounded transition" title="logs/ 폴더의 로그 파일을 모두 삭제">
+                            <i data-lucide="trash-2" class="w-3.5 h-3.5 sm:mr-1"></i> <span class="hidden sm:inline">로그 삭제</span>
+                        </button>
                         <button onclick="window.setCurrentFolderAlias()" class="flex-shrink-0 flex items-center text-xs bg-purple-50 dark:bg-purple-900/30 hover:bg-purple-100 dark:hover:bg-purple-900/50 text-purple-700 dark:text-purple-300 px-3 py-1.5 rounded transition">
                             <i data-lucide="tag" class="w-3.5 h-3.5 sm:mr-1"></i> <span class="hidden sm:inline">별칭 설정</span>
                         </button>

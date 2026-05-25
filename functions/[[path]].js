@@ -18,6 +18,11 @@ function isTextFile(key) {
     return key.toLowerCase().endsWith('.txt');
 }
 
+function isReadableTextFile(key) {
+    const lowerKey = key.toLowerCase();
+    return lowerKey.endsWith('.txt') || lowerKey.endsWith('.log');
+}
+
 /**
  * 역할: R2 object key를 폴더 prefix와 파일명으로 분리한다.
  * 매개변수: key - 분리할 전체 경로 문자열.
@@ -380,6 +385,20 @@ export async function onRequest(context) {
                 return new Response(JSON.stringify({ success: true }));
             }
 
+            if (action === 'clear_logs') {
+                const prefix = 'logs/';
+                let truncated = true;
+                let cursor = undefined;
+                while (truncated) {
+                    const list = await env.imgBucket.list({ prefix, cursor });
+                    truncated = list.truncated;
+                    cursor = list.cursor;
+                    const keysToDelete = list.objects.map(o => o.key);
+                    if (keysToDelete.length > 0) await env.imgBucket.delete(keysToDelete);
+                }
+                return new Response(JSON.stringify({ success: true }));
+            }
+
             if (action === 'rename_folder') {
                 if (!key || !newKey) throw new Error('Folder paths are required');
                 const oldPrefix = key.endsWith('/') ? key : key + '/';
@@ -576,7 +595,7 @@ export async function onRequest(context) {
             } catch(e){}
 
             if (!isAdmin) {
-                allFiles = allFiles.filter(f => !isTextFile(f.key) || f.isPublic);
+                allFiles = allFiles.filter(f => !isReadableTextFile(f.key) || f.isPublic);
             }
 
             return new Response(JSON.stringify({
@@ -689,7 +708,7 @@ export async function onRequest(context) {
 
                 if (!object) return new Response("Not found", { status: 404 });
 
-                if (isTextFile(objectKey)) {
+                if (isReadableTextFile(objectKey)) {
                     const isPublic = object.customMetadata?.ispublic === 'true';
                     if (!isPublic && !isAdmin) {
                         return new Response("Access Denied: Private Text File", { status: 403 });
@@ -700,6 +719,9 @@ export async function onRequest(context) {
                 object.writeHttpMetadata(headers);
                 headers.set('etag', object.httpEtag);
                 headers.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=86400');
+                if (isReadableTextFile(objectKey) && !headers.get('Content-Type')) {
+                    headers.set('Content-Type', 'text/plain; charset=UTF-8');
+                }
                 return new Response(object.body, { headers });
 
             } catch (e) { return new Response("Error", { status: 500 }); }

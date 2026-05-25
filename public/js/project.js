@@ -2104,6 +2104,20 @@ function setPlannerStatus(message) {
     if (el) el.textContent = message || '';
 }
 
+function isPlannerPanelVisible() {
+    const projectContent = document.getElementById('main-project-content');
+    return !!projectContent
+        && !projectContent.classList.contains('hidden')
+        && window.PROJECT_VIEW === 'section'
+        && window.PROJECT_ACTIVE_SECTION === 'situation';
+}
+
+function renderPlannerIfVisible() {
+    if (!isPlannerPanelVisible()) return false;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    return true;
+}
+
 function readPlannerEditsFromDom(meta) {
     if (!meta?.items) return meta;
     meta.items.forEach(item => {
@@ -3211,7 +3225,7 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
         window.PROJECT_PLANNER_META = nextMeta;
     }
     if (!['queued', 'running', 'cancel_requested'].includes(status.status)) stopPlannerBackgroundPolling();
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerIfVisible();
     return status;
 }
 

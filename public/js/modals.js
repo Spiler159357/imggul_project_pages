@@ -546,7 +546,7 @@ window.loadImportPath = async function(prefix) {
         }
 
         const data = await listRes.json();
-        let files = data.files.filter(f => !f.key.endsWith('.keep') && !f.key.endsWith('.txt') && !f.key.endsWith('_meta.json'));
+        let files = data.files.filter(f => !f.key.endsWith('.keep') && !/\.(txt|log)$/i.test(f.key) && !f.key.endsWith('_meta.json'));
         let folders = data.folders;
         
         files.sort((a, b) => { const nameA = a.key.split('/').pop(); const nameB = b.key.split('/').pop(); return nameB.localeCompare(nameA); });
