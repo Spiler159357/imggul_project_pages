@@ -1315,6 +1315,7 @@ function renderCharacterDetailShell(project, character, state = {}) {
     const promptParts = meta.parts || {};
     const characterPrompt = promptParts.character || meta.prompt || '';
     const clothingPrompt = promptParts.clothing || '';
+    const expressionPrompt = promptParts.expression || '';
     const negativePrompt = promptParts.negative || '';
 
     renderProjectShell(`
@@ -1400,6 +1401,10 @@ function renderCharacterDetailShell(project, character, state = {}) {
                                 <label class="block">
                                     <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">의상</span>
                                     <textarea id="character-prompt-clothing-input" class="w-full min-h-[100px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="기본 의상, 장신구, 소품 등">${escapeHtml(clothingPrompt)}</textarea>
+                                </label>
+                                <label class="block">
+                                    <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">표정</span>
+                                    <textarea id="character-prompt-expression-input" class="w-full min-h-[80px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="이 캐릭터의 기본 표정, 눈매, 분위기 등">${escapeHtml(expressionPrompt)}</textarea>
                                 </label>
                                 <label class="block">
                                     <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">부정 프롬프트</span>
@@ -1508,10 +1513,11 @@ export async function saveCharacterPrompt(event) {
     const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
     const characterInput = document.getElementById('character-prompt-character-input');
     const clothingInput = document.getElementById('character-prompt-clothing-input');
+    const expressionInput = document.getElementById('character-prompt-expression-input');
     const negativeInput = document.getElementById('character-prompt-negative-input');
     const button = document.getElementById('character-prompt-save-btn');
     const status = document.getElementById('character-prompt-save-status');
-    if (!project || !character || !characterInput || !clothingInput || !negativeInput) return;
+    if (!project || !character || !characterInput || !clothingInput || !expressionInput || !negativeInput) return;
 
     const previousButtonHtml = button?.innerHTML || '';
     if (button) {
@@ -1527,6 +1533,7 @@ export async function saveCharacterPrompt(event) {
             ...(meta.parts || {}),
             character: characterInput.value.trim(),
             clothing: clothingInput.value.trim(),
+            expression: expressionInput.value.trim(),
             negative: negativeInput.value.trim()
         };
         await saveCharacterMeta(character, {
@@ -1571,7 +1578,7 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
         'prompt-composition': situationPrompt.composition || '',
         'prompt-character': characterParts.character || meta.prompt || '',
         'prompt-clothing': characterParts.clothing || '',
-        'prompt-expression': situationPrompt.expression || '',
+        'prompt-expression': combinePromptParts(characterParts.expression, situationPrompt.expression),
         'prompt-action': situationPrompt.action || '',
         'prompt-background': situationPrompt.background || ''
     };
@@ -2866,13 +2873,14 @@ export async function addPlannerDraftItem() {
     const negativePrompt = characterMeta.parts?.negative || currentSettings.negative || '';
 
     const prompt = getSituationPrompt(situation);
+    const expressionPrompt = combinePromptParts(characterMeta.parts?.expression, prompt.expression) || currentSettings.prompts?.['prompt-expression'] || '';
     const imageNumber = getSituationImageNumber(project, situation);
     const fields = {
         style: stylePrompt,
         composition: prompt.composition || currentSettings.prompts?.['prompt-composition'] || 'straight-on',
         character: characterMeta.parts?.character || characterMeta.prompt || '',
         clothing: characterMeta.parts?.clothing || currentSettings.prompts?.['prompt-clothing'] || '',
-        expression: prompt.expression || currentSettings.prompts?.['prompt-expression'] || '',
+        expression: expressionPrompt,
         action: prompt.action || currentSettings.prompts?.['prompt-action'] || '',
         background: prompt.background || currentSettings.prompts?.['prompt-background'] || 'white background',
         negative: negativePrompt
@@ -3295,6 +3303,20 @@ function getSituationPrompt(situation) {
     };
 }
 
+function combinePromptParts(...values) {
+    const seen = new Set();
+    return values
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+        .filter(value => {
+            const key = value.toLowerCase();
+            if (seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
+        .join(', ');
+}
+
 function getSituationCharacterRows(project, situation) {
     const imageIndex = getProjectItems(project, 'situations').findIndex(item => item.id === situation?.id);
     return getProjectItems(project, 'characters').map(character => {
@@ -3639,6 +3661,7 @@ export async function saveCraftPromptToCharacterParts() {
             ...(meta.parts || {}),
             character: fields.character,
             clothing: fields.clothing,
+            expression: fields.expression,
             negative: fields.negative
         };
 
