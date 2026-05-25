@@ -1563,22 +1563,50 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
     const meta = await loadCharacterMeta(character).catch(() => ({}));
     const situations = getProjectItems(project, 'situations');
     const selectedSituation = Number.isInteger(situationIndex) ? situations[situationIndex] : null;
-    const situationText = selectedSituation ? getItemLabel(selectedSituation, `상황 ${situationIndex + 1}`) : '';
-    const promptParts = [meta.prompt, situationText].filter(Boolean);
+    const projectStyle = await loadProjectStylePrompt(project).catch(() => '');
+    const situationPrompt = getSituationPrompt(selectedSituation);
+    const characterParts = meta.parts || {};
+    const promptValues = {
+        'prompt-style': projectStyle,
+        'prompt-composition': situationPrompt.composition || '',
+        'prompt-character': characterParts.character || meta.prompt || '',
+        'prompt-clothing': characterParts.clothing || '',
+        'prompt-expression': situationPrompt.expression || '',
+        'prompt-action': situationPrompt.action || '',
+        'prompt-background': situationPrompt.background || ''
+    };
+    const resizePromptInput = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+    };
 
     window.switchTab('craft');
 
     const simpleToggle = document.getElementById('prompt-toggle-simple');
     if (simpleToggle) {
-        simpleToggle.checked = true;
+        simpleToggle.checked = false;
         if (window.togglePromptMode) window.togglePromptMode();
     }
 
     const rawPrompt = document.getElementById('prompt-raw');
     if (rawPrompt) {
-        rawPrompt.value = promptParts.join(', ');
-        rawPrompt.style.height = 'auto';
-        rawPrompt.style.height = rawPrompt.scrollHeight + 'px';
+        rawPrompt.value = '';
+        resizePromptInput('prompt-raw');
+    }
+
+    Object.entries(promptValues).forEach(([id, value]) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = value || '';
+        resizePromptInput(id);
+    });
+
+    const negativePrompt = document.getElementById('nai-negative');
+    if (negativePrompt) {
+        negativePrompt.value = characterParts.negative || '';
+        resizePromptInput('nai-negative');
     }
 
     if (window.saveCraftSettings) window.saveCraftSettings();
@@ -1592,6 +1620,9 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
 
     const characterSelect = document.getElementById('craft-char-select');
     if (characterSelect) characterSelect.value = character.prefix;
+
+    const situationSelect = document.getElementById('craft-situation-select');
+    if (situationSelect && selectedSituation) situationSelect.value = selectedSituation.id || selectedSituation.folderName || '';
 }
 
 export function openCharacterFolder(prefix) {
