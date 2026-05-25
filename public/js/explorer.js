@@ -1,4 +1,11 @@
 // 4. explorer.js: 탐색기 화면 전용 로직
+const EXPLORER_HIDDEN_FOLDER_NAMES = new Set(['_planner_temp_image']);
+
+function isExplorerVisibleFolder(folderPrefix) {
+    const folderName = String(folderPrefix || '').split('/').filter(Boolean).pop();
+    return folderName && !EXPLORER_HIDDEN_FOLDER_NAMES.has(folderName);
+}
+
 /**
  * 역할: 지정한 폴더 prefix의 목록과 별칭을 불러와 갤러리/사이드바를 렌더링한다.
  * 매개변수: prefix - 로드할 폴더 경로, skipHistory - 브라우저 history push 생략 여부.
@@ -45,10 +52,11 @@ export async function loadPath(prefix, skipHistory = false) {
         }
 
         const data = await listRes.json();
-        window.FOLDER_DATA_CACHE[prefix] = { folders: data.folders, files: data.files, timestamp: Date.now(), scrollY: 0 };
+        const visibleFolders = (data.folders || []).filter(isExplorerVisibleFolder);
+        window.FOLDER_DATA_CACHE[prefix] = { folders: visibleFolders, files: data.files, timestamp: Date.now(), scrollY: 0 };
         window.updateBreadcrumbs(prefix);
-        window.renderFiles(data.folders, data.files);
-        window.renderSidebarFoldersAndFiles(data.folders, data.files);
+        window.renderFiles(visibleFolders, data.files);
+        window.renderSidebarFoldersAndFiles(visibleFolders, data.files);
     } catch (err) {
         alert('파일 목록 로드 실패: ' + err.message);
     } finally {
@@ -69,7 +77,7 @@ export function renderFiles(folders, files) {
     if(!grid) return;
     grid.innerHTML = '';
 
-    folders.forEach(folderPrefix => {
+    folders.filter(isExplorerVisibleFolder).forEach(folderPrefix => {
         const parts = folderPrefix.split('/');
         const folderName = parts[parts.length - 2];
         const alias = window.getAliasOnly(folderPrefix, true);
@@ -131,7 +139,7 @@ export function renderSidebarFoldersAndFiles(folders, files) {
         list.appendChild(li);
     }
 
-    folders.forEach(folderPrefix => {
+    folders.filter(isExplorerVisibleFolder).forEach(folderPrefix => {
         const folderName = folderPrefix.split('/').filter(Boolean).pop();
         const alias = window.getAliasOnly(folderPrefix, true);
         const li = document.createElement('li');
