@@ -2293,6 +2293,115 @@ function renderPlannerImages(item) {
     `;
 }
 
+function getPlannerItemBySituationId(meta, situationId) {
+    const decodedId = decodeURIComponent(situationId || '');
+    return meta?.items?.find(item => item.situationId === decodedId) || null;
+}
+
+function renderPlannerResultList(meta) {
+    if (!meta?.items?.length) {
+        return renderEmptyState('실행 화면에서 이미지를 생성하면 결과가 표시됩니다.');
+    }
+
+    return `
+        <div class="space-y-2">
+            ${meta.items.map(item => {
+                const generatedCount = Array.isArray(item.images) ? item.images.length : 0;
+                const selected = !!item.selectedImage;
+                return `
+                    <div role="button" tabindex="0" onclick="window.openPlannerResultModal('${escapeJsString(item.situationId)}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openPlannerResultModal('${escapeJsString(item.situationId)}'); }" class="w-full cursor-pointer rounded-lg border ${selected ? 'border-indigo-300 dark:border-indigo-700 bg-indigo-50/60 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30'} p-3 text-left hover:border-indigo-400 transition">
+                        <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-center">
+                            <div class="min-w-0">
+                                <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.situationName || item.situationId)}</p>
+                                <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500 truncate">${escapeHtml(item.imageNumber)}.webp · ${selected ? '선택됨' : '미선택'}</p>
+                            </div>
+                            <div class="flex items-center gap-2 flex-shrink-0">
+                                <span class="px-2 py-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-600 dark:text-gray-300">목표 ${escapeHtml(item.count || 1)}</span>
+                                <span class="px-2 py-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-600 dark:text-gray-300">생성 ${generatedCount}</span>
+                                <button type="button" onclick="event.stopPropagation(); window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="inline-flex p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
+function renderPlannerResultModal(meta) {
+    const item = getPlannerItemBySituationId(meta, window.PLANNER_RESULT_MODAL_SITUATION_ID);
+    if (!item) return '';
+
+    const images = Array.isArray(item.images) ? item.images : [];
+    return `
+        <div id="planner-result-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div class="w-full max-w-5xl max-h-[88vh] rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden flex flex-col">
+                <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                    <div class="min-w-0">
+                        <h3 class="text-sm font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.situationName || item.situationId)}</h3>
+                        <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">목표 ${escapeHtml(item.count || 1)}장 · 생성 ${images.length}장 · ${item.selectedImage ? '선택됨' : '미선택'}</p>
+                    </div>
+                    <button type="button" onclick="window.closePlannerResultModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" title="닫기" aria-label="닫기">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                <div class="flex-1 min-h-0 overflow-y-auto p-4">
+                    ${images.length ? `
+                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
+                            ${images.map(key => {
+                                const selected = item.selectedImage === key;
+                                return `
+                                    <button type="button" onclick="window.openPlannerImagePreview('${escapeJsString(key)}')" class="relative aspect-square rounded-lg overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-800 hover:border-indigo-400 transition">
+                                        <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="w-full h-full object-cover" loading="lazy">
+                                        ${selected ? '<span class="absolute left-2 top-2 px-2 py-1 rounded bg-indigo-600 text-white text-[10px] font-bold">선택됨</span>' : ''}
+                                    </button>
+                                `;
+                            }).join('')}
+                        </div>
+                    ` : renderEmptyState('아직 생성된 이미지가 없습니다.')}
+                </div>
+                <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
+                    <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.'}</p>
+                    <div class="flex items-center gap-2">
+                        <button type="button" onclick="window.closePlannerResultModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
+                        <button type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}')" ${item.selectedImage ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function renderPlannerImagePreviewModal() {
+    const key = window.PLANNER_IMAGE_PREVIEW_KEY;
+    if (!key) return '';
+
+    return `
+        <div id="planner-image-preview-modal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4" onclick="window.closePlannerImagePreview(event)">
+            <div class="w-full max-w-4xl max-h-[90vh] rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden flex flex-col" onclick="event.stopPropagation()">
+                <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                    <h3 class="text-sm font-bold text-gray-900 dark:text-white truncate">${escapeHtml(getFileNameFromKey(key))}</h3>
+                    <button type="button" onclick="window.closePlannerImagePreview()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" title="닫기" aria-label="닫기">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                <div class="flex-1 min-h-0 bg-gray-100 dark:bg-gray-950 flex items-center justify-center p-4">
+                    <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="max-w-full max-h-[68vh] object-contain rounded-lg shadow">
+                </div>
+                <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <p class="text-xs font-bold text-gray-700 dark:text-gray-200">이 이미지를 선택하시겠습니까?</p>
+                    <div class="flex items-center gap-2 justify-end">
+                        <button type="button" onclick="window.closePlannerImagePreview()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">취소</button>
+                        <button type="button" onclick="window.selectPlannerImageFromPreview('${escapeJsString(key)}')" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">선택</button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 function renderPlannerPanel(project, situations) {
     const characters = getProjectItems(project, 'characters');
     const meta = window.PROJECT_PLANNER_META || null;
@@ -2407,30 +2516,10 @@ function renderPlannerPanel(project, situations) {
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
                 <p class="text-xs font-bold text-gray-900 dark:text-white">결과 확인</p>
-                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">상황별 후보 이미지 중 실제 반영할 이미지를 선택합니다.</p>
+                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">상황별 결과 목록을 열어 이미지를 확인하고 선택합니다.</p>
             </div>
-            <button type="button" onclick="window.confirmPlannerSelection()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-emerald-400">
-                <i data-lucide="check" class="w-4 h-4"></i> 선택 확정
-            </button>
         </div>
-        ${meta?.items?.length ? `
-            <div class="space-y-3 overflow-y-auto pr-1">
-                ${meta.items.map(item => `
-                    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
-                        <div class="mb-3 flex items-start justify-between gap-3">
-                            <div class="min-w-0">
-                                <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
-                                <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</p>
-                            </div>
-                            <button type="button" onclick="window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition flex-shrink-0" title="플랜 삭제" aria-label="플랜 삭제">
-                                <i data-lucide="trash-2" class="w-4 h-4"></i>
-                            </button>
-                        </div>
-                        ${renderPlannerImages(item)}
-                    </div>
-                `).join('')}
-            </div>
-        ` : renderEmptyState('실행 화면에서 이미지를 생성하면 결과가 표시됩니다.')}
+        ${renderPlannerResultList(meta)}
     `;
 
     return `
@@ -2460,6 +2549,8 @@ function renderPlannerPanel(project, situations) {
             </div>
             ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
             ${renderPlannerSettingsModal(settings)}
+            ${renderPlannerResultModal(meta)}
+            ${renderPlannerImagePreviewModal()}
         </div>
     `;
 }
@@ -2477,6 +2568,29 @@ export async function refreshPlannerPanel() {
 
 export function setPlannerView(view = 'plan') {
     window.PROJECT_PLANNER_VIEW = ['plan', 'run', 'result'].includes(view) ? view : 'plan';
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export function openPlannerResultModal(situationId) {
+    window.PLANNER_RESULT_MODAL_SITUATION_ID = situationId;
+    window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export function closePlannerResultModal() {
+    window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+    window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export function openPlannerImagePreview(key) {
+    window.PLANNER_IMAGE_PREVIEW_KEY = key;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export function closePlannerImagePreview(event) {
+    if (event && event.target?.id !== 'planner-image-preview-modal') return;
+    window.PLANNER_IMAGE_PREVIEW_KEY = null;
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
@@ -2764,6 +2878,11 @@ export async function deletePlannerItem(situationId) {
     if (!item) return;
     if (!confirm(`'${item.situationName || item.situationId}' 플랜을 삭제하시겠습니까?\n이 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
 
+    if (window.PLANNER_RESULT_MODAL_SITUATION_ID === situationId) {
+        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+        window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    }
+
     await fetch('/api/manage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -2906,7 +3025,12 @@ export async function selectPlannerImage(key) {
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
-export async function confirmPlannerSelection() {
+export async function selectPlannerImageFromPreview(key) {
+    window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    await selectPlannerImage(key);
+}
+
+export async function confirmPlannerSelection(situationId = null) {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!project || !meta?.items?.length) return;
@@ -2917,7 +3041,9 @@ export async function confirmPlannerSelection() {
         return;
     }
 
-    const selectedItems = meta.items.filter(item => item.selectedImage);
+    const selectedItems = meta.items.filter(item =>
+        item.selectedImage && (!situationId || item.situationId === situationId)
+    );
     if (!selectedItems.length) {
         setPlannerStatus('확정 전에 상황별 이미지를 하나 이상 선택하세요.');
         return;
@@ -2964,6 +3090,10 @@ export async function confirmPlannerSelection() {
     meta.items = meta.items.filter(item => !selectedIds.has(item.situationId));
     meta.status = meta.items.length ? 'draft' : 'confirmed';
     meta.updatedAt = Date.now();
+    if (situationId) {
+        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+        window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    }
     if (meta.items.length) {
         await savePlannerMeta(project, meta);
         window.PROJECT_PLANNER_META = meta;
