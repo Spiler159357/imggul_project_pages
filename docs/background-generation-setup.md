@@ -21,6 +21,7 @@ This implementation adds the application code for server-side planner generation
 
 4. R2
    - Reuse the existing `imgBucket` binding and `imggul-storage` bucket.
+   - Background errors are written under `logs/background-generation/YYYYMMDD/`.
 
 5. Images binding
    - Binding name: `IMAGES`

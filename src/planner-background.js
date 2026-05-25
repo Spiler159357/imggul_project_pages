@@ -52,6 +52,38 @@ function makeId(prefix) {
     return `${prefix}_${crypto.randomUUID()}`;
 }
 
+function makeLogKey(jobId = "unknown") {
+    const d = new Date();
+    const pad = value => String(value).padStart(2, "0");
+    const day = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
+    const stamp = `${day}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}_${crypto.randomUUID().slice(0, 8)}`;
+    return `logs/background-generation/${day}/${stamp}_${jobId}.json`;
+}
+
+async function writeBackgroundErrorLog(env, error, context = {}) {
+    if (!env?.imgBucket) return;
+    try {
+        const message = error?.message || String(error || "Unknown error");
+        const log = {
+            type: "background-generation-error",
+            message,
+            stack: error?.stack || "",
+            context,
+            createdAt: nowIso()
+        };
+        await env.imgBucket.put(makeLogKey(context.jobId), JSON.stringify(log, null, 2), {
+            httpMetadata: { contentType: "application/json; charset=utf-8" },
+            customMetadata: {
+                ispublic: "false",
+                kind: "background-generation-error",
+                jobid: String(context.jobId || "")
+            }
+        });
+    } catch {
+        // Avoid masking the original failure if logging itself fails.
+    }
+}
+
 function getPlannerPrefix(projectPrefix) {
     return `${projectPrefix}_planner_temp_image/`;
 }
@@ -638,6 +670,14 @@ export async function processPlannerQueueMessage(env, message) {
         `).bind(completedCount, status, status === "completed" ? "completed" : "running", JSON.stringify(resultKeys), nowIso(), status, nowIso(), itemId).run();
     } catch (error) {
         const errorMessage = error.message || String(error);
+        await writeBackgroundErrorLog(env, error, {
+            jobId,
+            itemId,
+            imageIndex,
+            attempt,
+            stage: item.stage || job.stage || "unknown",
+            outputPrefix: item.output_prefix
+        });
         if (attempt < MAX_ATTEMPTS && await enqueueRetry(env, message, attempt)) {
             await env.DB.prepare(`
                 UPDATE planner_background_items
@@ -660,7 +700,19 @@ export async function processPlannerQueueMessage(env, message) {
 export default {
     async queue(batch, env) {
         for (const message of batch.messages) {
-            await processPlannerQueueMessage(env, message.body);
+            try {
+                await processPlannerQueueMessage(env, message.body);
+            } catch (error) {
+                await writeBackgroundErrorLog(env, error, {
+                    jobId: message.body?.jobId || "",
+                    itemId: message.body?.itemId || "",
+                    imageIndex: message.body?.imageIndex,
+                    attempt: message.body?.attempt,
+                    stage: "queue_handler_uncaught",
+                    messageBody: message.body
+                });
+                throw error;
+            }
         }
     }
 };
