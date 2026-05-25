@@ -2297,6 +2297,7 @@ function renderPlannerPanel(project, situations) {
     const characters = getProjectItems(project, 'characters');
     const meta = window.PROJECT_PLANNER_META || null;
     const activeCharacter = characters.find(character => character.id === meta?.characterId || character.prefix === meta?.characterId) || characters[0];
+    const activeCharacterName = activeCharacter ? (activeCharacter.name || activeCharacter.alias || activeCharacter.folderName || activeCharacter.id) : '선택된 캐릭터 없음';
     const selectedSituationId = meta?.lastSituationId || situations[0]?.id || '';
     const view = window.PROJECT_PLANNER_VIEW || 'plan';
     const settings = normalizePlannerSettings(window.PROJECT_PLANNER_SETTINGS || {});
@@ -2438,6 +2439,10 @@ function renderPlannerPanel(project, situations) {
                 <div>
                     <h3 class="font-bold text-sm text-gray-900 dark:text-white">플래너 데모</h3>
                     <p id="planner-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(meta?.status))}</p>
+                    <p class="mt-1 inline-flex items-center gap-1.5 max-w-full rounded-full border border-indigo-100 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/30 px-2 py-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
+                        <i data-lucide="user" class="w-3.5 h-3.5 flex-shrink-0"></i>
+                        <span class="truncate">대상 캐릭터: ${escapeHtml(activeCharacterName)}</span>
+                    </p>
                 </div>
                 <div class="flex items-center gap-1">
                     <button type="button" onclick="window.openPlannerSettingsModal()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="플래너 설정">
