@@ -57,22 +57,32 @@ function makeLogKey(jobId = "unknown") {
     const pad = value => String(value).padStart(2, "0");
     const day = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
     const stamp = `${day}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}_${crypto.randomUUID().slice(0, 8)}`;
-    return `logs/background-generation/${day}/${stamp}_${jobId}.json`;
+    return `logs/background-generation/${day}/${stamp}_${jobId}.log`;
 }
 
 export async function writeBackgroundErrorLog(env, error, context = {}) {
     if (!env?.imgBucket) return;
     try {
         const message = error?.message || String(error || "Unknown error");
-        const log = {
-            type: "background-generation-error",
+        const stack = error?.stack || message;
+        const contextText = Object.entries(context || {})
+            .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
+            .join("\n");
+        const logText = [
+            `[${nowIso()}] background-generation-error`,
+            "",
+            "Message:",
             message,
-            stack: error?.stack || "",
-            context,
-            createdAt: nowIso()
-        };
-        await env.imgBucket.put(makeLogKey(context.jobId), JSON.stringify(log, null, 2), {
-            httpMetadata: { contentType: "application/json; charset=utf-8" },
+            "",
+            "StackTrace:",
+            stack,
+            "",
+            "Context:",
+            contextText || "(none)",
+            ""
+        ].join("\n");
+        await env.imgBucket.put(makeLogKey(context.jobId), logText, {
+            httpMetadata: { contentType: "text/plain; charset=utf-8" },
             customMetadata: {
                 ispublic: "false",
                 kind: "background-generation-error",
@@ -216,8 +226,24 @@ async function queryFirst(db, sql, ...params) {
     return params.length ? await statement.bind(...params).first() : await statement.first();
 }
 
+async function ensurePlannerBackgroundSchema(env) {
+    const columns = await queryAll(env.DB, "PRAGMA table_info(planner_background_jobs)");
+    if (!columns.length) return;
+    const hasJobStage = columns.some(column => column.name === "stage");
+    if (!hasJobStage) {
+        await env.DB.prepare("ALTER TABLE planner_background_jobs ADD COLUMN stage TEXT").run();
+    }
+
+    const itemColumns = await queryAll(env.DB, "PRAGMA table_info(planner_background_items)");
+    const hasItemStage = itemColumns.some(column => column.name === "stage");
+    if (itemColumns.length && !hasItemStage) {
+        await env.DB.prepare("ALTER TABLE planner_background_items ADD COLUMN stage TEXT").run();
+    }
+}
+
 export async function startPlannerBackgroundJob(env, body) {
     requireBackgroundBindings(env);
+    await ensurePlannerBackgroundSchema(env);
     const plannerMeta = normalizePlannerMeta(body?.plannerMeta);
     const projectId = String(body.projectId || plannerMeta.projectId || "").trim();
     const projectPrefix = String(body.projectPrefix || "").trim();
