@@ -211,9 +211,19 @@ function getPlannerSettingsKey(project) {
 }
 
 const DEFAULT_PLANNER_SETTINGS = {
+    model: 'nai-diffusion-4-5-full',
     steps: '28',
     scale: '5.0',
-    sampler: 'k_euler_ancestral'
+    sampler: 'k_euler_ancestral',
+    sm: false,
+    sm_dyn: false,
+    vibeStrength: '0.6',
+    vibeInfo: '1.0',
+    preciseStrength: '1.0',
+    preciseFidelity: '0.5',
+    preciseType: 'character&style',
+    vibeImageKey: '',
+    preciseImageKey: ''
 };
 
 const PLANNER_MODEL_OPTIONS = [
@@ -1926,9 +1936,19 @@ function getPlannerImagePrefix(project, imageNumber) {
 
 function normalizePlannerSettings(settings = {}) {
     return {
+        model: settings.model || DEFAULT_PLANNER_SETTINGS.model,
         steps: String(settings.steps || DEFAULT_PLANNER_SETTINGS.steps),
         scale: String(settings.scale || DEFAULT_PLANNER_SETTINGS.scale),
-        sampler: settings.sampler || DEFAULT_PLANNER_SETTINGS.sampler
+        sampler: settings.sampler || DEFAULT_PLANNER_SETTINGS.sampler,
+        sm: !!settings.sm,
+        sm_dyn: !!settings.sm_dyn,
+        vibeStrength: String(settings.vibeStrength || DEFAULT_PLANNER_SETTINGS.vibeStrength),
+        vibeInfo: String(settings.vibeInfo || DEFAULT_PLANNER_SETTINGS.vibeInfo),
+        preciseStrength: String(settings.preciseStrength || DEFAULT_PLANNER_SETTINGS.preciseStrength),
+        preciseFidelity: String(settings.preciseFidelity || DEFAULT_PLANNER_SETTINGS.preciseFidelity),
+        preciseType: settings.preciseType || DEFAULT_PLANNER_SETTINGS.preciseType,
+        vibeImageKey: settings.vibeImageKey || '',
+        preciseImageKey: settings.preciseImageKey || ''
     };
 }
 
@@ -1971,9 +1991,19 @@ async function savePlannerSettings(project, settings) {
 
 function applyPlannerSettingsToGeneration(generation, settings) {
     const normalized = normalizePlannerSettings(settings);
+    generation.model = normalized.model;
     generation.steps = normalized.steps;
     generation.scale = normalized.scale;
     generation.sampler = normalized.sampler;
+    generation.sm = normalized.sm;
+    generation.sm_dyn = normalized.sm_dyn;
+    generation.vibeStrength = normalized.vibeStrength;
+    generation.vibeInfo = normalized.vibeInfo;
+    generation.preciseStrength = normalized.preciseStrength;
+    generation.preciseFidelity = normalized.preciseFidelity;
+    generation.preciseType = normalized.preciseType;
+    generation.vibeImageKey = normalized.vibeImageKey;
+    generation.preciseImageKey = normalized.preciseImageKey;
     return generation;
 }
 
@@ -2025,23 +2055,12 @@ function readPlannerEditsFromDom(meta) {
         const countInput = document.getElementById(`planner-${item.imageNumber}-count`);
         if (countInput) item.count = Math.max(1, parseInt(countInput.value) || 1);
         const generationInputs = {
-            model: document.getElementById(`planner-${item.imageNumber}-model`)?.value,
-            res: document.getElementById(`planner-${item.imageNumber}-res`)?.value,
-            vibeStrength: document.getElementById(`planner-${item.imageNumber}-vibe-strength`)?.value,
-            vibeInfo: document.getElementById(`planner-${item.imageNumber}-vibe-info`)?.value,
-            preciseType: document.getElementById(`planner-${item.imageNumber}-precise-type`)?.value,
-            preciseStrength: document.getElementById(`planner-${item.imageNumber}-precise-strength`)?.value,
-            preciseFidelity: document.getElementById(`planner-${item.imageNumber}-precise-fidelity`)?.value,
-            vibeImageKey: document.getElementById(`planner-${item.imageNumber}-vibe-key`)?.value.trim(),
-            preciseImageKey: document.getElementById(`planner-${item.imageNumber}-precise-key`)?.value.trim()
+            res: document.getElementById(`planner-${item.imageNumber}-res`)?.value
         };
         Object.entries(generationInputs).forEach(([key, value]) => {
             if (value !== undefined) item.generation[key] = value;
         });
-        const smInput = document.getElementById(`planner-${item.imageNumber}-sm`);
-        const smDynInput = document.getElementById(`planner-${item.imageNumber}-sm-dyn`);
-        if (smInput) item.generation.sm = smInput.checked;
-        if (smDynInput) item.generation.sm_dyn = smDynInput.checked;
+        item.generation.v4PromptCharacters = readPlannerV4PromptRows(item.imageNumber);
         item.generation.batchCount = String(item.count);
         item.generation.negative = fields.negative;
         item.generation.prompts = {
@@ -2107,50 +2126,135 @@ function renderPlannerCheckbox(id, label, checked) {
     `;
 }
 
+function getPlannerV4PromptRows(item) {
+    return Array.isArray(item?.generation?.v4PromptCharacters) ? item.generation.v4PromptCharacters : [];
+}
+
+function readPlannerV4PromptRows(imageNumber) {
+    const container = document.getElementById(`planner-${imageNumber}-v4-rows`);
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('[data-planner-v4-row]')).map(row => {
+        const rowId = row.getAttribute('data-planner-v4-row');
+        return {
+            subject: document.getElementById(`planner-${imageNumber}-v4-${rowId}-subject`)?.value.trim() || '',
+            clothing: document.getElementById(`planner-${imageNumber}-v4-${rowId}-clothing`)?.value.trim() || '',
+            expression: document.getElementById(`planner-${imageNumber}-v4-${rowId}-expression`)?.value.trim() || '',
+            action: document.getElementById(`planner-${imageNumber}-v4-${rowId}-action`)?.value.trim() || '',
+            negative: document.getElementById(`planner-${imageNumber}-v4-${rowId}-negative`)?.value.trim() || ''
+        };
+    }).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean));
+}
+
+function renderPlannerV4PromptRow(imageNumber, row, index) {
+    const rowId = index;
+    const inputClass = 'w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
+    return `
+        <div data-planner-v4-row="${rowId}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/70 p-2">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 캐릭터 ${index + 1}</span>
+                <button type="button" onclick="window.removePlannerV4Prompt('${escapeJsString(imageNumber)}', ${index})" class="p-1 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="V4 캐릭터 삭제">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-subject" value="${escapeHtml(row.subject || '')}" class="${inputClass}" placeholder="캐릭터">
+                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-clothing" value="${escapeHtml(row.clothing || '')}" class="${inputClass}" placeholder="의상">
+                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-expression" value="${escapeHtml(row.expression || '')}" class="${inputClass}" placeholder="표정">
+                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-action" value="${escapeHtml(row.action || '')}" class="${inputClass}" placeholder="행위">
+                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-negative" value="${escapeHtml(row.negative || '')}" class="${inputClass} md:col-span-2" placeholder="부정 프롬프트">
+            </div>
+        </div>
+    `;
+}
+
+function renderPlannerV4PromptSection(item) {
+    const rows = getPlannerV4PromptRows(item);
+    return `
+        <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <div>
+                    <p class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 Prompt</p>
+                    <p class="text-[10px] text-gray-400 dark:text-gray-500">필요할 때 캐릭터를 추가해 v4_prompt char_captions로 전달합니다.</p>
+                </div>
+                <button type="button" onclick="window.addPlannerV4Prompt('${escapeJsString(item.imageNumber)}')" class="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
+                    <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> 캐릭터 추가
+                </button>
+            </div>
+            <div id="planner-${escapeHtml(item.imageNumber)}-v4-rows" class="space-y-2">
+                ${rows.map((row, index) => renderPlannerV4PromptRow(item.imageNumber, row, index)).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function renderPlannerReferencePicker(target, label, key) {
+    const inputId = `planner-setting-${target}-key`;
+    const fileId = `planner-setting-${target}-file`;
+    return `
+        <div>
+            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">${label}</span>
+            <div class="rounded-lg border border-dashed border-gray-300 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/60 p-3"
+                ondragover="event.preventDefault(); this.classList.add('border-indigo-400')"
+                ondragleave="this.classList.remove('border-indigo-400')"
+                ondrop="window.handlePlannerReferenceDrop(event, '${target}')">
+                <input id="${fileId}" type="file" accept="image/*" class="hidden" onchange="window.handlePlannerReferenceFileInput(event, '${target}')">
+                <div class="flex flex-col sm:flex-row sm:items-center gap-2">
+                    <input id="${inputId}" value="${escapeHtml(key || '')}" class="flex-1 min-w-0 p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="이미지를 드롭하거나 선택하세요">
+                    <button type="button" onclick="document.getElementById('${fileId}')?.click()" class="px-2.5 py-2 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">업로드</button>
+                    <button type="button" onclick="window.openPlannerReferenceLibrary('${target}')" class="px-2.5 py-2 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">보관함</button>
+                </div>
+                <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">로컬 이미지는 _planner_temp_image/references/에 저장됩니다.</p>
+            </div>
+        </div>
+    `;
+}
+
 function renderPlannerGenerationFields(item) {
     const generation = item.generation || {};
     const id = `planner-${item.imageNumber}`;
 
     return `
         <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-2">
-                ${renderPlannerSelect(`${id}-model`, '모델', generation.model || 'nai-diffusion-4-5-full', PLANNER_MODEL_OPTIONS)}
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
                 ${renderPlannerSelect(`${id}-res`, '해상도', generation.res || '832x1216', PLANNER_RESOLUTION_OPTIONS)}
-                ${renderPlannerSelect(`${id}-precise-type`, 'Reference 타입', generation.preciseType || 'character&style', [
-                    ['character&style', '캐릭터+그림체'],
-                    ['character', '캐릭터'],
-                    ['style', '그림체']
-                ])}
-                ${renderPlannerNumberInput(`${id}-vibe-strength`, 'Vibe Strength', generation.vibeStrength || '0.6', 'type="number" min="0" max="1" step="0.1"')}
-                ${renderPlannerNumberInput(`${id}-vibe-info`, 'Vibe Info', generation.vibeInfo || '1.0', 'type="number" min="0" max="1" step="0.1"')}
-                ${renderPlannerNumberInput(`${id}-precise-strength`, 'Reference Strength', generation.preciseStrength || '1.0', 'type="number" min="0" max="1" step="0.1"')}
-                ${renderPlannerNumberInput(`${id}-precise-fidelity`, 'Reference Fidelity', generation.preciseFidelity || '0.5', 'type="number" min="0" max="1" step="0.1"')}
-                ${renderPlannerNumberInput(`${id}-vibe-key`, 'Vibe 이미지 경로', generation.vibeImageKey || '', 'type="text" placeholder="예: project/ref/vibe.webp"')}
-                ${renderPlannerNumberInput(`${id}-precise-key`, 'Reference 이미지 경로', generation.preciseImageKey || '', 'type="text" placeholder="예: project/ref/reference.webp"')}
-            </div>
-            <div class="mt-2 flex flex-wrap gap-3">
-                ${renderPlannerCheckbox(`${id}-sm`, 'SMEA', !!generation.sm)}
-                ${renderPlannerCheckbox(`${id}-sm-dyn`, 'DYN', !!generation.sm_dyn)}
-                <span class="text-[10px] text-gray-400 dark:text-gray-500">V4 prompt는 플랜의 프롬프트 필드와 캐릭터 캡션을 기준으로 생성 시 적용됩니다.</span>
             </div>
         </div>
+        ${renderPlannerV4PromptSection(item)}
     `;
 }
 
 function renderPlannerSettingsModal(settings) {
     return `
         <div id="planner-settings-modal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm items-center justify-center p-4" onclick="window.closePlannerSettingsModal(event)">
-            <div class="w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
+            <div class="w-full max-w-2xl rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
                 <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                     <h3 class="text-sm font-bold text-gray-900 dark:text-white">플래너 공통 설정</h3>
                     <button type="button" onclick="window.closePlannerSettingsModal()" class="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
                         <i data-lucide="x" class="w-4 h-4"></i>
                     </button>
                 </div>
-                <div class="p-4 space-y-3">
+                <div class="p-4 space-y-3 max-h-[76vh] overflow-y-auto">
+                    ${renderPlannerSelect('planner-setting-model', 'Model', settings.model, PLANNER_MODEL_OPTIONS)}
                     ${renderPlannerNumberInput('planner-setting-steps', 'Steps', settings.steps, 'type="number" min="1" max="50"')}
                     ${renderPlannerNumberInput('planner-setting-scale', 'CFG Scale', settings.scale, 'type="number" min="1" max="10" step="0.1"')}
                     ${renderPlannerSelect('planner-setting-sampler', 'Sampler', settings.sampler, PLANNER_SAMPLER_OPTIONS)}
+                    <div class="flex flex-wrap gap-3">
+                        ${renderPlannerCheckbox('planner-setting-sm', 'SMEA', settings.sm)}
+                        ${renderPlannerCheckbox('planner-setting-sm-dyn', 'DYN', settings.sm_dyn)}
+                    </div>
+                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        ${renderPlannerNumberInput('planner-setting-vibe-strength', 'Vibe Strength', settings.vibeStrength, 'type="number" min="0" max="1" step="0.1"')}
+                        ${renderPlannerNumberInput('planner-setting-vibe-info', 'Vibe Info', settings.vibeInfo, 'type="number" min="0" max="1" step="0.1"')}
+                        ${renderPlannerNumberInput('planner-setting-precise-strength', 'Reference Strength', settings.preciseStrength, 'type="number" min="0" max="1" step="0.1"')}
+                        ${renderPlannerNumberInput('planner-setting-precise-fidelity', 'Reference Fidelity', settings.preciseFidelity, 'type="number" min="0" max="1" step="0.1"')}
+                    </div>
+                    ${renderPlannerSelect('planner-setting-precise-type', 'Reference 타입', settings.preciseType, [
+                        ['character&style', '캐릭터+그림체'],
+                        ['character', '캐릭터'],
+                        ['style', '그림체']
+                    ])}
+                    ${renderPlannerReferencePicker('vibe', 'Vibe 이미지', settings.vibeImageKey)}
+                    ${renderPlannerReferencePicker('precise', 'Reference 이미지', settings.preciseImageKey)}
                     <p id="planner-settings-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                 </div>
                 <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
@@ -2312,9 +2416,14 @@ function renderPlannerPanel(project, situations) {
             <div class="space-y-3 overflow-y-auto pr-1">
                 ${meta.items.map(item => `
                     <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
-                        <div class="mb-3">
-                            <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
-                            <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</p>
+                        <div class="mb-3 flex items-start justify-between gap-3">
+                            <div class="min-w-0">
+                                <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
+                                <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</p>
+                            </div>
+                            <button type="button" onclick="window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition flex-shrink-0" title="플랜 삭제" aria-label="플랜 삭제">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i>
+                            </button>
                         </div>
                         ${renderPlannerImages(item)}
                     </div>
@@ -2390,9 +2499,19 @@ export async function savePlannerSettingsFromModal() {
 
     try {
         const settings = await savePlannerSettings(project, {
+            model: document.getElementById('planner-setting-model')?.value,
             steps: document.getElementById('planner-setting-steps')?.value,
             scale: document.getElementById('planner-setting-scale')?.value,
-            sampler: document.getElementById('planner-setting-sampler')?.value
+            sampler: document.getElementById('planner-setting-sampler')?.value,
+            sm: document.getElementById('planner-setting-sm')?.checked,
+            sm_dyn: document.getElementById('planner-setting-sm-dyn')?.checked,
+            vibeStrength: document.getElementById('planner-setting-vibe-strength')?.value,
+            vibeInfo: document.getElementById('planner-setting-vibe-info')?.value,
+            preciseStrength: document.getElementById('planner-setting-precise-strength')?.value,
+            preciseFidelity: document.getElementById('planner-setting-precise-fidelity')?.value,
+            preciseType: document.getElementById('planner-setting-precise-type')?.value,
+            vibeImageKey: document.getElementById('planner-setting-vibe-key')?.value.trim(),
+            preciseImageKey: document.getElementById('planner-setting-precise-key')?.value.trim()
         });
         let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
         if (meta?.items?.length) {
@@ -2409,6 +2528,108 @@ export async function savePlannerSettingsFromModal() {
     } catch (err) {
         if (status) status.textContent = err.message || '저장에 실패했습니다.';
     }
+}
+
+export function openPlannerReferenceLibrary(target) {
+    window.PLANNER_REFERENCE_TARGET = target === 'precise' ? 'precise' : 'vibe';
+    if (window.openInpaintLibraryModal) window.openInpaintLibraryModal('main');
+}
+
+export function setPlannerReferenceImageFromKey(key) {
+    const target = window.PLANNER_REFERENCE_TARGET === 'precise' ? 'precise' : 'vibe';
+    const input = document.getElementById(`planner-setting-${target}-key`);
+    if (input) input.value = key || '';
+    window.PLANNER_REFERENCE_TARGET = null;
+}
+
+async function uploadPlannerReferenceFile(target, file) {
+    const project = getActiveProject();
+    if (!project || !file) return;
+    const normalizedTarget = target === 'precise' ? 'precise' : 'vibe';
+    const status = document.getElementById('planner-settings-status');
+    if (status) status.textContent = '참조 이미지 업로드 중...';
+
+    let uploadFile = file;
+    if (window.convertToWebP && file.type !== 'image/webp') uploadFile = await window.convertToWebP(file);
+    const ext = uploadFile.name.split('.').pop() || 'webp';
+    const fileName = `${normalizedTarget}_${Date.now()}.${ext}`;
+    const key = `${getPlannerPrefix(project)}references/${fileName}`;
+    const buffer = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(new Error('참조 이미지 읽기에 실패했습니다.'));
+        reader.readAsArrayBuffer(uploadFile);
+    });
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': uploadFile.type || 'image/webp',
+            'X-File-Name': encodeURIComponent(fileName),
+            'X-Absolute-Path': encodeURIComponent(key)
+        },
+        body: buffer,
+        cache: 'no-store'
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '참조 이미지 업로드에 실패했습니다.');
+    }
+    const input = document.getElementById(`planner-setting-${normalizedTarget}-key`);
+    if (input) input.value = key;
+    if (status) status.textContent = '참조 이미지가 업로드되었습니다.';
+}
+
+export async function handlePlannerReferenceFileInput(event, target) {
+    const file = event?.target?.files?.[0];
+    if (!file) return;
+    try {
+        await uploadPlannerReferenceFile(target, file);
+    } catch (err) {
+        const status = document.getElementById('planner-settings-status');
+        if (status) status.textContent = err.message || '참조 이미지 업로드에 실패했습니다.';
+    } finally {
+        if (event?.target) event.target.value = '';
+    }
+}
+
+export async function handlePlannerReferenceDrop(event, target) {
+    event.preventDefault();
+    event.currentTarget?.classList.remove('border-indigo-400');
+    const file = event.dataTransfer?.files?.[0];
+    if (!file) return;
+    try {
+        await uploadPlannerReferenceFile(target, file);
+    } catch (err) {
+        const status = document.getElementById('planner-settings-status');
+        if (status) status.textContent = err.message || '참조 이미지 업로드에 실패했습니다.';
+    }
+}
+
+export async function addPlannerV4Prompt(imageNumber) {
+    const project = getActiveProject();
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!meta?.items?.length) return;
+    meta = readPlannerEditsFromDom(meta);
+    const item = meta.items.find(entry => String(entry.imageNumber) === String(imageNumber));
+    if (!item) return;
+    item.generation.v4PromptCharacters = [
+        ...(item.generation.v4PromptCharacters || []),
+        { subject: '', clothing: '', expression: '', action: '', negative: '' }
+    ];
+    window.PROJECT_PLANNER_META = meta;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+}
+
+export async function removePlannerV4Prompt(imageNumber, index) {
+    const project = getActiveProject();
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!meta?.items?.length) return;
+    meta = readPlannerEditsFromDom(meta);
+    const item = meta.items.find(entry => String(entry.imageNumber) === String(imageNumber));
+    if (!item) return;
+    item.generation.v4PromptCharacters = (item.generation.v4PromptCharacters || []).filter((_, rowIndex) => rowIndex !== index);
+    window.PROJECT_PLANNER_META = meta;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
 export async function addPlannerDraftItem() {
@@ -2635,6 +2856,7 @@ export async function startPlannerGeneration() {
             await applyPlannerReferenceFiles(item.generation);
             window.generateNaiImage({
                 outputPrefix: getPlannerImagePrefix(project, item.imageNumber),
+                v4PromptCharacters: item.generation.v4PromptCharacters || [],
                 planner: {
                     projectId: project.id,
                     situationId: item.situationId,
@@ -2727,15 +2949,29 @@ export async function confirmPlannerSelection() {
         item.status = 'confirmed';
     }
 
-    await fetch('/api/manage', {
+    await Promise.all(selectedItems.map(item => fetch('/api/manage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'delete_folder', key: getPlannerPrefix(project) })
-    });
+        body: JSON.stringify({ action: 'delete_folder', key: getPlannerImagePrefix(project, item.imageNumber) })
+    }).catch(() => null)));
 
-    meta.status = 'confirmed';
+    const selectedIds = new Set(selectedItems.map(item => item.situationId));
+    meta.items = meta.items.filter(item => !selectedIds.has(item.situationId));
+    meta.status = meta.items.length ? 'draft' : 'confirmed';
     meta.updatedAt = Date.now();
-    window.PROJECT_PLANNER_META = null;
+    if (meta.items.length) {
+        await savePlannerMeta(project, meta);
+        window.PROJECT_PLANNER_META = meta;
+        setPlannerStatus(`${selectedItems.length}개 플랜을 확정했습니다. 선택하지 않은 플랜은 남아 있습니다.`);
+    } else {
+        await fetch('/api/manage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'delete_folder', key: getPlannerPrefix(project) })
+        }).catch(() => null);
+        window.PROJECT_PLANNER_META = null;
+        setPlannerStatus('선택한 플랜이 모두 확정되었습니다.');
+    }
     clearProjectCaches(project.prefix, character.prefix, getPlannerPrefix(project));
     character.filesLoaded = false;
     await loadCharacterFiles(character, true).catch(() => []);

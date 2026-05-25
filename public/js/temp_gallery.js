@@ -345,6 +345,7 @@ export function closeInpaintLibraryModal(e, skipHistory = false) {
     if (modal && !modal.classList.contains('hidden')) {
         modal.classList.add('hidden');
         modal.classList.remove('flex');
+        if (window.PLANNER_REFERENCE_TARGET) window.PLANNER_REFERENCE_TARGET = null;
         if (!skipHistory) history.back();
     }
 }
@@ -444,6 +445,11 @@ export async function loadInpaintLibraryPath(prefix) {
 }
 
 export function setInpaintImageFromKey(key, uploaded) {
+    if (window.PLANNER_REFERENCE_TARGET && window.setPlannerReferenceImageFromKey) {
+        window.setPlannerReferenceImageFromKey(key);
+        closeInpaintLibraryModal(null, true);
+        return;
+    }
     const fileName = key.split('/').pop();
     const url = '/' + key + '?t=' + (uploaded ? new Date(uploaded).getTime() : Date.now());
     closeInpaintLibraryModal(null, true);

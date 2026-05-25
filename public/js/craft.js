@@ -543,6 +543,16 @@ export async function generateNaiImage(options = {}) {
         if (mergedCharPrompt) charCaptionsArray.push({ char_caption: mergedCharPrompt, centers: [{"x": 0.5, "y": 0.5}] });
         if (c_neg) negCharCaptionsArray.push({ char_caption: c_neg, centers: [{"x": 0.5, "y": 0.5}] });
     });
+    if (Array.isArray(options.v4PromptCharacters)) {
+        charCaptionsArray = [];
+        negCharCaptionsArray = [];
+        options.v4PromptCharacters.forEach(row => {
+            const mergedCharPrompt = [row.subject, row.clothing, row.expression, row.action].map(value => String(value || '').trim()).filter(Boolean).join(', ');
+            const negativePrompt = String(row.negative || '').trim();
+            if (mergedCharPrompt) charCaptionsArray.push({ char_caption: mergedCharPrompt, centers: [{ x: 0.5, y: 0.5 }] });
+            if (negativePrompt) negCharCaptionsArray.push({ char_caption: negativePrompt, centers: [{ x: 0.5, y: 0.5 }] });
+        });
+    }
 
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < batchCount; i++) {
