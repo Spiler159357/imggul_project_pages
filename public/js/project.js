@@ -2403,6 +2403,57 @@ function renderPlannerImagePreviewModal() {
     `;
 }
 
+function renderPlannerProgressPanel(meta) {
+    if (!meta?.items?.length || meta.status !== 'running') return '';
+
+    const activeIds = Array.isArray(meta.runningSituationIds) && meta.runningSituationIds.length
+        ? new Set(meta.runningSituationIds)
+        : null;
+    const progressItems = activeIds ? meta.items.filter(item => activeIds.has(item.situationId)) : meta.items;
+    const total = progressItems.length;
+    const doneCount = progressItems.filter(item => ['done', 'confirmed'].includes(item.status)).length;
+    const failedCount = progressItems.filter(item => item.status === 'failed').length;
+    const runningItem = progressItems.find(item => item.status === 'running');
+    const runningIndex = runningItem ? progressItems.findIndex(item => item.situationId === runningItem.situationId) + 1 : doneCount + failedCount + 1;
+    const progressCount = Math.min(total, doneCount + failedCount);
+    const percent = total ? Math.round((progressCount / total) * 100) : 0;
+
+    return `
+        <div class="mb-4 rounded-xl border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="min-w-0">
+                    <p class="inline-flex items-center gap-2 text-sm font-bold text-indigo-800 dark:text-indigo-200">
+                        <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
+                        생성 진행 중
+                    </p>
+                    <p class="mt-1 text-xs text-indigo-700/80 dark:text-indigo-300/80 truncate">
+                        ${runningItem ? `${escapeHtml(runningItem.imageNumber)}.webp / ${escapeHtml(runningItem.situationName || runningItem.situationId)} 생성 중` : '다음 플랜을 준비 중입니다.'}
+                    </p>
+                </div>
+                <div class="flex items-center gap-2 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
+                    <span>${Math.min(runningIndex, total)} / ${total}</span>
+                    <span>완료 ${doneCount}</span>
+                    <span>실패 ${failedCount}</span>
+                </div>
+            </div>
+            <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
+                <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
+            </div>
+            <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+                ${progressItems.map(item => `
+                    <div class="rounded-lg border ${item.status === 'running' ? 'border-indigo-400 bg-white dark:bg-indigo-950/50' : 'border-indigo-100 dark:border-indigo-900/50 bg-white/70 dark:bg-gray-900/50'} px-3 py-2">
+                        <div class="flex items-center justify-between gap-2">
+                            <p class="min-w-0 truncate text-[11px] font-bold text-gray-800 dark:text-gray-100">${escapeHtml(item.situationName || item.situationId)}</p>
+                            <span class="flex-shrink-0 text-[10px] font-bold ${item.status === 'running' ? 'text-indigo-600 dark:text-indigo-300' : 'text-gray-500 dark:text-gray-400'}">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>
+                        </div>
+                        <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">후보 ${item.images?.length || 0}장 / 목표 ${escapeHtml(item.count || 1)}장</p>
+                    </div>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
 function renderPlannerPanel(project, situations) {
     const characters = getProjectItems(project, 'characters');
     const meta = window.PROJECT_PLANNER_META || null;
@@ -2493,6 +2544,7 @@ function renderPlannerPanel(project, situations) {
                 <i data-lucide="play" class="w-4 h-4"></i> 실행 시작
             </button>
         </div>
+        ${renderPlannerProgressPanel(meta)}
         ${meta?.items?.length ? `
             <div class="space-y-2">
                 ${meta.items.map(item => `
@@ -2985,12 +3037,15 @@ export async function startPlannerGeneration(situationId = null) {
         return;
     }
     meta.status = 'running';
+    meta.runningSituationIds = targetItems.map(item => item.situationId);
+    window.PROJECT_PLANNER_VIEW = 'run';
     if (situationId) {
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
         window.PLANNER_IMAGE_PREVIEW_KEY = null;
     }
     await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
+    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 
     const previousSettings = window.readCraftSettings ? window.readCraftSettings() : null;
     const previousVibeFile = window.VIBE_IMAGE_FILE || null;
@@ -3005,6 +3060,8 @@ export async function startPlannerGeneration(situationId = null) {
             item.generation.batchCount = String(item.count || meta.defaultCount || 1);
             applyPlannerSettingsToGeneration(item.generation, plannerSettings);
             await savePlannerMeta(project, meta);
+            window.PROJECT_PLANNER_META = meta;
+            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
             setPlannerStatus(`${item.imageNumber}.webp 생성 중...`);
 
             if (window.applyCraftSettings) window.applyCraftSettings(item.generation);
@@ -3024,6 +3081,8 @@ export async function startPlannerGeneration(situationId = null) {
             item.status = result.cancelled ? 'paused' : (item.images.length ? 'done' : 'failed');
             meta.updatedAt = Date.now();
             await savePlannerMeta(project, meta);
+            window.PROJECT_PLANNER_META = meta;
+            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
             if (result.cancelled) {
                 meta.status = 'paused';
                 break;
@@ -3031,6 +3090,7 @@ export async function startPlannerGeneration(situationId = null) {
         }
 
         if (meta.status !== 'paused') meta.status = targetItems.every(item => item.status === 'done') ? 'completed' : 'failed';
+        delete meta.runningSituationIds;
         meta.updatedAt = Date.now();
         await savePlannerMeta(project, meta);
         window.PROJECT_PLANNER_META = meta;
