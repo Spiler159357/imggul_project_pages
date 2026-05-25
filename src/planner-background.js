@@ -1,5 +1,5 @@
 const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
-const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text"; 
+const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
 const MAX_BACKGROUND_IMAGES = 100;
 const MAX_ATTEMPTS = 2;
 
