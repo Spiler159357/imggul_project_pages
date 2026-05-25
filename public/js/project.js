@@ -3288,6 +3288,7 @@ async function startPlannerBackgroundGeneration(situationId = null) {
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
+        console.error('Background planner start failed', data);
         setPlannerStatus(data.error || '백그라운드 생성 등록에 실패했습니다.');
         meta.status = 'failed';
         meta.updatedAt = Date.now();

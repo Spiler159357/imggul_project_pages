@@ -3,7 +3,8 @@ import {
     cancelPlannerBackgroundJob,
     getPlannerBackgroundStatus,
     jsonResponse,
-    startPlannerBackgroundJob
+    startPlannerBackgroundJob,
+    writeBackgroundErrorLog
 } from "../src/planner-background.js";
 // Cloudflare Pages Functions - Catch-all 라우터 및 API 서버리스 핸들러
 
@@ -100,6 +101,11 @@ export async function onRequest(context) {
             const result = await startPlannerBackgroundJob(env, body);
             return jsonResponse(result);
         } catch (e) {
+            await writeBackgroundErrorLog(env, e, {
+                route: path,
+                method,
+                stage: "background_start_api"
+            });
             return jsonResponse({ error: e.message }, { status: 500 });
         }
     }
@@ -112,6 +118,12 @@ export async function onRequest(context) {
             const result = await getPlannerBackgroundStatus(env, jobId);
             return jsonResponse(result);
         } catch (e) {
+            await writeBackgroundErrorLog(env, e, {
+                route: path,
+                method,
+                jobId: url.searchParams.get('jobId') || "",
+                stage: "background_status_api"
+            });
             return jsonResponse({ error: e.message }, { status: 500 });
         }
     }
@@ -124,6 +136,11 @@ export async function onRequest(context) {
             const result = await cancelPlannerBackgroundJob(env, body.jobId);
             return jsonResponse(result);
         } catch (e) {
+            await writeBackgroundErrorLog(env, e, {
+                route: path,
+                method,
+                stage: "background_cancel_api"
+            });
             return jsonResponse({ error: e.message }, { status: 500 });
         }
     }

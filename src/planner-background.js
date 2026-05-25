@@ -60,7 +60,7 @@ function makeLogKey(jobId = "unknown") {
     return `logs/background-generation/${day}/${stamp}_${jobId}.json`;
 }
 
-async function writeBackgroundErrorLog(env, error, context = {}) {
+export async function writeBackgroundErrorLog(env, error, context = {}) {
     if (!env?.imgBucket) return;
     try {
         const message = error?.message || String(error || "Unknown error");
