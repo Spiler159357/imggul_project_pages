@@ -715,6 +715,36 @@ export async function removeActiveTempImage() {
     window.renderTempGallery();
 }
 
+function normalizeUploadPath(path) {
+    return path && !path.endsWith('/') ? path + '/' : path;
+}
+
+function getCraftUploadSelectedContext() {
+    return {
+        projectPath: normalizeUploadPath(document.getElementById('craft-project-select')?.value || ''),
+        characterPath: normalizeUploadPath(document.getElementById('craft-char-select')?.value || ''),
+        situationId: document.getElementById('craft-situation-select')?.value || ''
+    };
+}
+
+async function getCraftUploadSituation(projectPath, situationId) {
+    if (!projectPath || !situationId) return null;
+    const res = await fetch(`/${encodeURI(`${projectPath}_situations_meta.json`)}?_t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) return null;
+
+    const data = await res.json().catch(() => ({}));
+    const situations = Array.isArray(data.situations) ? data.situations : [];
+    return situations.find(situation => situation?.id === situationId || situation?.folderName === situationId) || null;
+}
+
+function getCraftUploadSituationImageNumber(situation, fallbackId) {
+    const imageNumber = Number(situation?.imageNumber);
+    if (Number.isFinite(imageNumber)) return String(imageNumber);
+
+    const fallbackNumber = Number(fallbackId);
+    return Number.isFinite(fallbackNumber) ? String(fallbackNumber) : '';
+}
+
 /**
  * 역할: 현재 선택된 임시 이미지를 프로젝트 폴더로 업로드하기 위한 모달을 준비한다.
  * 매개변수: 없음.
@@ -729,10 +759,22 @@ export async function prepareUploadActiveTempImage() {
     const selectedProject = selectedProjectEl ? selectedProjectEl.value : '';
     if (!selectedProject) return alert('상단에서 업로드할 프로젝트를 먼저 선택해주세요.');
 
-    let projectPath = selectedProject;
+    const uploadContext = getCraftUploadSelectedContext();
+    let projectPath = uploadContext.projectPath || selectedProject;
     if (projectPath && !projectPath.endsWith('/')) projectPath += '/';
+    const selectedSituation = uploadContext.situationId
+        ? await getCraftUploadSituation(projectPath, uploadContext.situationId)
+        : null;
+    const selectedSituationImageNumber = getCraftUploadSituationImageNumber(selectedSituation, uploadContext.situationId);
+    const defaultTargetPath = uploadContext.characterPath && selectedSituationImageNumber
+        ? uploadContext.characterPath
+        : projectPath;
     window.CRAFT_UPLOAD_ACTIVE_INDEX = index;
-    window.CRAFT_UPLOAD_TARGET_PATH = projectPath;
+    window.CRAFT_UPLOAD_TARGET_PATH = defaultTargetPath;
+    window.CRAFT_UPLOAD_SELECTED_SITUATION = selectedSituation ? {
+        ...selectedSituation,
+        imageNumber: selectedSituationImageNumber
+    } : null;
 
     const modal = document.getElementById('craft-upload-modal');
     const preview = document.getElementById('craft-upload-preview');
@@ -741,8 +783,8 @@ export async function prepareUploadActiveTempImage() {
     if (!modal || !uploadFileNameInput) return;
 
     if (preview) preview.src = `/${imgData.key}?t=${new Date(imgData.uploaded).getTime()}`;
-    if (projectLabel) projectLabel.textContent = window.getDisplayName(projectPath, true);
-    uploadFileNameInput.value = 'nai_' + Date.now();
+    if (projectLabel) projectLabel.textContent = window.getDisplayName(defaultTargetPath, true);
+    uploadFileNameInput.value = selectedSituationImageNumber || ('nai_' + Date.now());
     modal.classList.remove('hidden');
     await window.loadCraftUploadTargets(projectPath);
     if (window.lucide) window.lucide.createIcons();
@@ -781,6 +823,18 @@ export async function loadCraftUploadTargets(projectPath) {
     const targets = [{ path: normalizedProjectPath, label: '프로젝트 루트', subLabel: window.getDisplayName(normalizedProjectPath, true), icon: 'folder' }];
 
     try {
+        const uploadContext = getCraftUploadSelectedContext();
+        const selectedSituation = window.CRAFT_UPLOAD_SELECTED_SITUATION;
+        if (uploadContext.characterPath && selectedSituation?.imageNumber) {
+            const situationName = selectedSituation.alias || selectedSituation.name || selectedSituation.id || uploadContext.situationId;
+            targets.push({
+                path: uploadContext.characterPath,
+                label: `${selectedSituation.imageNumber}.webp / ${situationName}`,
+                subLabel: `${window.getDisplayName(uploadContext.characterPath, true)} 상황 이미지`,
+                icon: 'image'
+            });
+        }
+
         const res = await fetch(`/api/list?prefix=${encodeURIComponent(normalizedProjectPath)}&_t=${Date.now()}`);
         if (res.ok) {
             const data = await res.json();

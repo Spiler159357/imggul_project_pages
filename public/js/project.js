@@ -1064,7 +1064,7 @@ function renderProjectManageShell(projects, state = {}) {
                     <h2 class="text-center text-lg font-bold text-gray-900 dark:text-white">프로젝트 목록</h2>
                     <button type="button" onclick="window.openProjectCreateModal()" class="p-1.5 rounded-lg text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="프로젝트 추가" aria-label="프로젝트 추가">
                         <i data-lucide="plus" class="w-6 h-6"></i>
-                    </button>
+                    </div>
                 </div>
 
                 <div class="max-h-[62vh] overflow-y-auto pr-2 space-y-3">
@@ -1096,7 +1096,7 @@ function renderProjectCreateModal() {
                     <h3 class="text-sm font-bold text-gray-900 dark:text-white">프로젝트 추가</h3>
                     <button type="button" onclick="window.closeProjectCreateModal()" class="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition" aria-label="닫기">
                         <i data-lucide="x" class="w-5 h-5"></i>
-                    </button>
+                    </div>
                 </div>
 
                 <form id="project-create-form" class="p-4 sm:p-5 space-y-4" onsubmit="window.submitProjectCreate(event)">
@@ -1594,7 +1594,7 @@ function renderCharacterImageRows(project, character, rows) {
                     ? `window.openModal('${escapeJsString(row.image.key)}', '${escapeJsString(row.imageUrl)}', true, false, ${row.image.isPublic ? 'true' : 'false'})`
                     : `window.prepareCharacterGeneration('${escapeJsString(project.id)}', '${escapeJsString(character.id)}', ${row.index})`;
                 return `
-                    <button type="button" onclick="${clickAction}" class="w-full text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2.5 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 items-center">
+                    <div role="button" tabindex="0" onclick="${clickAction}" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); ${clickAction}; }" class="w-full cursor-pointer text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-2.5 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition grid grid-cols-[4.5rem_minmax(0,1fr)] gap-3 items-center">
                         <span class="aspect-square rounded-md overflow-hidden bg-gray-100 dark:bg-gray-900/60 flex items-center justify-center">
                             ${row.image ? `
                                 <img src="${escapeHtml(row.imageUrl)}" alt="${escapeHtml(row.label)}" class="w-full h-full object-cover" loading="lazy">
@@ -1609,8 +1609,12 @@ function renderCharacterImageRows(project, character, rows) {
                             </span>
                             <span class="block mt-1 text-[11px] text-gray-500 dark:text-gray-400 truncate">이름: ${escapeHtml(row.characterName)}</span>
                             <span class="block mt-1 text-[10px] text-gray-400 dark:text-gray-500 truncate">${row.image ? escapeHtml(getFileNameFromKey(row.image.key)) : '클릭하면 생성 화면에 프롬프트를 준비합니다.'}</span>
+                            <button type="button" onclick="event.stopPropagation(); window.openCharacterImageUploadPicker('${escapeJsString(project.id)}', '${escapeJsString(character.id)}', ${row.index})" class="mt-2 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[11px] font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-400 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                                <i data-lucide="upload" class="w-3.5 h-3.5"></i>
+                                <span>업로드</span>
+                            </button>
                         </span>
-                    </button>
+                    </div>
                 `;
             }).join('')}
         </div>
@@ -1767,6 +1771,78 @@ function renderCharacterDetailShell(project, character, state = {}) {
             ` : ''}
         </div>
     `);
+}
+
+export function openCharacterImageUploadPicker(projectId = window.PROJECT_ACTIVE_PROJECT_ID, characterId = window.PROJECT_ACTIVE_CHARACTER_ID, situationIndex = 0) {
+    let input = document.getElementById('character-image-upload-input');
+    if (!input) {
+        input = document.createElement('input');
+        input.id = 'character-image-upload-input';
+        input.type = 'file';
+        input.accept = 'image/*';
+        input.className = 'hidden';
+        input.addEventListener('change', () => {
+            const file = input.files?.[0];
+            const payload = input.dataset.payload ? JSON.parse(input.dataset.payload) : {};
+            input.value = '';
+            input.dataset.payload = '';
+            if (file) window.uploadCharacterSituationImage(file, payload.projectId, payload.characterId, Number(payload.situationIndex));
+        });
+        document.body.appendChild(input);
+    }
+
+    input.dataset.payload = JSON.stringify({ projectId, characterId, situationIndex });
+    input.click();
+}
+
+export async function uploadCharacterSituationImage(file, projectId = window.PROJECT_ACTIVE_PROJECT_ID, characterId = window.PROJECT_ACTIVE_CHARACTER_ID, situationIndex = 0) {
+    if (!file || !file.type?.startsWith('image/')) return alert('이미지 파일을 선택해주세요.');
+
+    const project = getProjectById(projectId);
+    const character = getCharacterById(project, characterId);
+    const situation = getProjectItems(project, 'situations')[situationIndex];
+    if (!project || !character || !situation) return alert('업로드할 캐릭터 또는 상황을 찾지 못했습니다.');
+
+    const imageNumber = getSituationImageNumber(project, situation);
+    const fileName = `${imageNumber}.webp`;
+    const finalPath = `${character.prefix}${fileName}`;
+
+    try {
+        let uploadFile = file;
+        let metadata = null;
+        if (window.extractMetadata) metadata = await window.extractMetadata(file).catch(() => null);
+        if (file.type !== 'image/webp') {
+            if (!window.convertToWebP) throw new Error('WebP 변환 함수를 찾을 수 없습니다.');
+            uploadFile = await window.convertToWebP(file);
+        }
+
+        const buffer = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = () => resolve(reader.result);
+            reader.onerror = () => reject(new Error('파일을 읽지 못했습니다.'));
+            reader.readAsArrayBuffer(uploadFile);
+        });
+        const res = await fetch('/api/upload?_t=' + Date.now(), {
+            method: 'PUT',
+            headers: {
+                'X-File-Name': encodeURIComponent(fileName),
+                'Content-Type': 'image/webp',
+                'X-Absolute-Path': encodeURIComponent(finalPath)
+            },
+            body: buffer,
+            cache: 'no-store'
+        });
+        if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
+        if (metadata && window.saveMetadataToDB) await window.saveMetadataToDB(character.prefix, fileName, metadata);
+
+        clearProjectCaches(character.prefix);
+        character.filesLoaded = false;
+        await loadCharacterFiles(character, true).catch(() => []);
+        alert(`${fileName}로 업로드했습니다.`);
+        await openCharacterDetail(project.id, character.id, true);
+    } catch (err) {
+        alert('업로드 실패: ' + (err.message || err));
+    }
 }
 
 export async function openCharacterDetail(projectId = window.PROJECT_ACTIVE_PROJECT_ID, characterId = '', skipHistory = false) {
