@@ -3235,6 +3235,20 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
     const targetJobId = jobId || meta?.backgroundJobId;
     if (!targetJobId) return;
 
+    if (meta) {
+        meta.status = 'cancel_requested';
+        meta.stage = 'cancelled';
+        meta.stageLabel = getPlannerStageLabel('cancelled');
+        if (Array.isArray(meta.items)) {
+            meta.items = meta.items.map(item => ['queued', 'running', 'cancel_requested'].includes(item.status)
+                ? { ...item, status: 'cancel_requested', stage: 'cancelled', stageLabel: getPlannerStageLabel('cancelled') }
+                : item
+            );
+        }
+        window.PROJECT_PLANNER_META = meta;
+        renderPlannerIfVisible();
+    }
+
     const res = await fetch('/api/planner/background/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3246,6 +3260,25 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
         return;
     }
     setPlannerStatus('백그라운드 취소를 요청했습니다.');
+    const result = await res.json().catch(() => ({}));
+    if (meta) {
+        meta.status = result.status || 'cancelled';
+        meta.stage = 'cancelled';
+        meta.stageLabel = getPlannerStageLabel('cancelled');
+        delete meta.runningSituationIds;
+        if (Array.isArray(meta.items)) {
+            meta.items = meta.items.map(item => ['queued', 'running', 'cancel_requested'].includes(item.status)
+                ? { ...item, status: 'cancelled', stage: 'cancelled', stageLabel: getPlannerStageLabel('cancelled') }
+                : item
+            );
+        }
+        meta.updatedAt = Date.now();
+        await savePlannerMeta(project, meta).catch(() => null);
+        window.PROJECT_PLANNER_META = meta;
+    }
+    setPlannerStatus('취소되었습니다.');
+    stopPlannerBackgroundPolling();
+    renderPlannerIfVisible();
     await refreshPlannerBackgroundStatus(targetJobId);
 }
 
