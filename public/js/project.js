@@ -1064,7 +1064,7 @@ function renderProjectManageShell(projects, state = {}) {
                     <h2 class="text-center text-lg font-bold text-gray-900 dark:text-white">프로젝트 목록</h2>
                     <button type="button" onclick="window.openProjectCreateModal()" class="p-1.5 rounded-lg text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="프로젝트 추가" aria-label="프로젝트 추가">
                         <i data-lucide="plus" class="w-6 h-6"></i>
-                    </div>
+                    </button>
                 </div>
 
                 <div class="max-h-[62vh] overflow-y-auto pr-2 space-y-3">
@@ -1096,7 +1096,7 @@ function renderProjectCreateModal() {
                     <h3 class="text-sm font-bold text-gray-900 dark:text-white">프로젝트 추가</h3>
                     <button type="button" onclick="window.closeProjectCreateModal()" class="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition" aria-label="닫기">
                         <i data-lucide="x" class="w-5 h-5"></i>
-                    </div>
+                    </button>
                 </div>
 
                 <form id="project-create-form" class="p-4 sm:p-5 space-y-4" onsubmit="window.submitProjectCreate(event)">
