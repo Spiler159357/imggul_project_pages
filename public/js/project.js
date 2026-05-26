@@ -3047,8 +3047,8 @@ function renderPlannerPanel(project, situations) {
     `;
 
     return `
-        <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 min-h-[360px] flex flex-col">
-            <div class="flex items-start justify-between gap-3 mb-4">
+        <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 min-h-0 overflow-hidden flex flex-col">
+            <div class="flex items-start justify-between gap-3 mb-4 flex-shrink-0">
                 <div>
                     <h3 class="font-bold text-sm text-gray-900 dark:text-white">플래너 데모</h3>
                     <p id="planner-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(meta?.status))}</p>
@@ -3066,12 +3066,14 @@ function renderPlannerPanel(project, situations) {
                     </button>
                 </div>
             </div>
-            <div class="flex flex-wrap gap-2 mb-4">
+            <div class="flex flex-wrap gap-2 mb-4 flex-shrink-0">
                 ${modeButton('plan', '플랜짜기', 'list-plus')}
                 ${modeButton('run', '실행 화면', 'play')}
                 ${modeButton('result', '결과 확인', 'images')}
             </div>
-            ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
+            <div class="min-h-0 flex-1 overflow-y-auto pr-1">
+                ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
+            </div>
             ${renderPlannerSettingsModal(settings)}
         </div>
     `;
@@ -3892,10 +3894,10 @@ function renderSituationSection(section, state = {}) {
 
     renderProjectShell(`
         ${renderSectionHeader(section.title)}
-        <div class="flex-1 overflow-y-auto p-4 sm:p-6">
-            <section class="grid grid-cols-1 xl:grid-cols-2 gap-4 sm:gap-6 min-h-full">
-                <div class="min-h-[360px]">
-                    <div class="flex items-center justify-between mb-4">
+        <div class="flex-1 overflow-hidden p-4 sm:p-6 min-h-0">
+            <section class="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] xl:grid-cols-2 xl:grid-rows-none gap-4 sm:gap-6">
+                <div class="min-h-0 flex flex-col">
+                    <div class="flex items-center justify-between mb-4 flex-shrink-0">
                         <h3 class="font-bold text-base text-gray-900 dark:text-white">상황 목록</h3>
                         <button type="button" onclick="window.openProjectItemCreateModal('situation')" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="상황 추가" aria-label="상황 추가">
                             <i data-lucide="plus" class="w-5 h-5"></i>
@@ -3904,9 +3906,9 @@ function renderSituationSection(section, state = {}) {
                     ${state.loading ? renderEmptyState('상황을 불러오는 중입니다.') : ''}
                     ${state.error ? renderEmptyState(state.error) : ''}
                     ${!state.loading && !state.error && situations.length ? `
-                        <div class="flex flex-col gap-2.5">
+                        <div class="grid min-h-0 flex-1 grid-cols-2 gap-2.5 overflow-y-auto pr-1">
                             ${situations.map(situation => `
-                                <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group w-full min-h-[74px] text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 flex items-center gap-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
+                                <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group w-full min-h-[74px] self-start text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 flex items-center gap-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
                                     <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationImageNumber(project, situation))}</span>
                                     <span class="min-w-0 flex-1">
                                         <span class="block text-sm font-bold text-gray-800 dark:text-gray-100 truncate">${escapeHtml(getSituationDisplayName(situation))}</span>
