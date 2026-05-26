@@ -24,6 +24,30 @@ const PROJECT_SECTIONS = [
     }
 ];
 
+const PROJECT_PROMPT_FIELDS = [
+    {
+        key: 'system',
+        title: '시스템 프롬프트',
+        fileName: 'prompt.md',
+        icon: 'square-terminal',
+        placeholder: '프로젝트 전체에 적용할 시스템 프롬프트를 입력하세요.'
+    },
+    {
+        key: 'start',
+        title: '시작 상황',
+        fileName: 'start_situation.md',
+        icon: 'circle-play',
+        placeholder: '이 프로젝트의 시작 상황을 입력하세요.'
+    },
+    {
+        key: 'description',
+        title: '프로젝트 설명',
+        fileName: 'project_description.md',
+        icon: 'info',
+        placeholder: '프로젝트 설명, 배경, 목표 등을 입력하세요.'
+    }
+];
+
 const CHARACTER_IMAGE_EXTENSIONS = new Set(['webp', 'png', 'jpg', 'jpeg']);
 
 function getProjectRoot() {
@@ -549,76 +573,262 @@ function initPromptSectionInput() {
         count.textContent = `${Array.from(input.value).length.toLocaleString()}자`;
     };
 
-    input.addEventListener('input', updateCount);
+    input.addEventListener('input', () => {
+        const values = getProjectPromptFieldValues();
+        values[getProjectPromptFieldConfig().key] = input.value;
+        updateCount();
+    });
     updateCount();
 }
 
 async function loadProjectPromptMarkdown(project) {
-    if (!project?.prefix) return '';
-
-    const key = `${project.prefix}prompt.md`;
-    const res = await fetch(`${getAssetUrl(key)}?_t=${Date.now()}`, { cache: 'no-store' });
-    if (res.status === 404) return '';
-    if (!res.ok) throw new Error('prompt.md를 불러오지 못했습니다.');
-
-    return await res.text();
+    return await loadProjectMarkdownFile(project, 'prompt.md');
 }
 
 async function loadProjectStylePrompt(project) {
+    return await loadProjectMarkdownFile(project, 'style_prompt.md');
+}
+
+async function loadProjectMarkdownFile(project, fileName) {
     if (!project?.prefix) return '';
 
-    const key = `${project.prefix}style_prompt.md`;
+    const key = `${project.prefix}${fileName}`;
     const res = await fetch(`${getAssetUrl(key)}?_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) return '';
-    if (!res.ok) throw new Error('그림체 프롬프트를 불러오지 못했습니다.');
+    if (!res.ok) throw new Error(`${fileName}를 불러오지 못했습니다.`);
 
     return await res.text();
 }
 
+function getProjectPromptFieldConfig(fieldKey = window.PROJECT_ACTIVE_PROMPT_FIELD) {
+    return PROJECT_PROMPT_FIELDS.find(field => field.key === fieldKey) || PROJECT_PROMPT_FIELDS[0];
+}
+
+function getProjectPromptFieldValues() {
+    if (!window.PROJECT_PROMPT_FIELD_VALUES || typeof window.PROJECT_PROMPT_FIELD_VALUES !== 'object') {
+        window.PROJECT_PROMPT_FIELD_VALUES = {};
+    }
+    return window.PROJECT_PROMPT_FIELD_VALUES;
+}
+
+function isSafeMarkdownUrl(value) {
+    const url = String(value || '').trim();
+    if (!url) return false;
+    return /^(https?:\/\/|\/(?!\/)|\.{0,2}\/|#|[^:]+$)/i.test(url);
+}
+
 function renderInlineMarkdown(value) {
-    return escapeHtml(value)
-        .replace(/`([^`]+)`/g, '<code>$1</code>')
-        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*([^*]+)\*/g, '<em>$1</em>');
+    const placeholders = [];
+    const stash = (html) => {
+        placeholders.push(html);
+        return `\u0000${placeholders.length - 1}\u0000`;
+    };
+
+    let html = escapeHtml(value);
+    html = html.replace(/`([^`]+)`/g, (_, code) => stash(`<code>${code}</code>`));
+    html = html
+        .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt, src) => {
+            if (!isSafeMarkdownUrl(src)) return match;
+            return `<img src="${src}" alt="${alt}" loading="lazy">`;
+        })
+        .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, label, href) => {
+            if (!isSafeMarkdownUrl(href)) return match;
+            return `<a href="${href}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+        })
+        .replace(/(\*\*|__)(.+?)\1/g, '<strong>$2</strong>')
+        .replace(/(\*|_)([^*_]+?)\1/g, '<em>$2</em>')
+        .replace(/~~(.+?)~~/g, '<del>$1</del>');
+
+    return html.replace(/\u0000(\d+)\u0000/g, (_, index) => placeholders[Number(index)] || '');
+}
+
+function splitMarkdownTableRow(line) {
+    const trimmed = String(line || '').trim();
+    const content = trimmed.startsWith('|') ? trimmed.slice(1) : trimmed;
+    const withoutTrailingPipe = content.endsWith('|') ? content.slice(0, -1) : content;
+    const cells = [];
+    let cell = '';
+    let escaped = false;
+
+    for (const char of withoutTrailingPipe) {
+        if (escaped) {
+            cell += char;
+            escaped = false;
+            continue;
+        }
+        if (char === '\\') {
+            escaped = true;
+            continue;
+        }
+        if (char === '|') {
+            cells.push(cell.trim());
+            cell = '';
+            continue;
+        }
+        cell += char;
+    }
+    cells.push(cell.trim());
+    return cells;
+}
+
+function parseMarkdownTableSeparator(line) {
+    const cells = splitMarkdownTableRow(line);
+    if (cells.length < 2 || cells.some(cell => !/^:?-{3,}:?$/.test(cell))) return null;
+    return cells.map(cell => {
+        const left = cell.startsWith(':');
+        const right = cell.endsWith(':');
+        if (left && right) return 'center';
+        if (right) return 'right';
+        return 'left';
+    });
+}
+
+function isMarkdownTableStart(lines, index) {
+    if (!lines[index] || !lines[index + 1] || !lines[index].includes('|')) return false;
+    const headers = splitMarkdownTableRow(lines[index]);
+    const alignments = parseMarkdownTableSeparator(lines[index + 1]);
+    return Boolean(alignments && headers.length === alignments.length);
+}
+
+function renderMarkdownTable(lines, startIndex) {
+    const headers = splitMarkdownTableRow(lines[startIndex]);
+    const alignments = parseMarkdownTableSeparator(lines[startIndex + 1]);
+    const rows = [];
+    let index = startIndex + 2;
+
+    while (index < lines.length && lines[index].trim() && lines[index].includes('|')) {
+        const cells = splitMarkdownTableRow(lines[index]);
+        rows.push(cells);
+        index += 1;
+    }
+
+    const alignAttr = (cellIndex) => ` style="text-align:${alignments[cellIndex] || 'left'}"`;
+    const head = headers
+        .map((cell, cellIndex) => `<th${alignAttr(cellIndex)}>${renderInlineMarkdown(cell)}</th>`)
+        .join('');
+    const body = rows
+        .map(row => `<tr>${headers.map((_, cellIndex) => `<td${alignAttr(cellIndex)}>${renderInlineMarkdown(row[cellIndex] || '')}</td>`).join('')}</tr>`)
+        .join('');
+
+    return {
+        html: `<div class="markdown-table-wrap"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`,
+        nextIndex: index
+    };
 }
 
 function renderMarkdownPreview(markdown) {
     const lines = String(markdown || '').split(/\r?\n/);
     const html = [];
-    let listOpen = false;
+    let unorderedListOpen = false;
+    let orderedListOpen = false;
+    let blockquoteOpen = false;
 
-    const closeList = () => {
-        if (listOpen) {
+    const closeBlocks = () => {
+        if (unorderedListOpen) {
             html.push('</ul>');
-            listOpen = false;
+            unorderedListOpen = false;
+        }
+        if (orderedListOpen) {
+            html.push('</ol>');
+            orderedListOpen = false;
+        }
+        if (blockquoteOpen) {
+            html.push('</blockquote>');
+            blockquoteOpen = false;
         }
     };
 
-    lines.forEach(line => {
+    for (let index = 0; index < lines.length; index += 1) {
+        const line = lines[index];
+        const fencedCode = line.match(/^```(.*)$/);
+        if (fencedCode) {
+            closeBlocks();
+            const language = escapeHtml(fencedCode[1].trim());
+            const codeLines = [];
+            index += 1;
+            while (index < lines.length && !/^```$/.test(lines[index].trim())) {
+                codeLines.push(lines[index]);
+                index += 1;
+            }
+            const languageClass = language ? ` class="language-${language}"` : '';
+            html.push(`<pre><code${languageClass}>${escapeHtml(codeLines.join('\n'))}</code></pre>`);
+            continue;
+        }
+
         const heading = line.match(/^(#{1,6})\s+(.+)$/);
         const listItem = line.match(/^\s*[-*]\s+(.+)$/);
+        const orderedListItem = line.match(/^\s*\d+[.)]\s+(.+)$/);
+        const blockquote = line.match(/^\s*>\s?(.*)$/);
+
+        if (/^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/.test(line)) {
+            closeBlocks();
+            html.push('<hr>');
+            continue;
+        }
+
+        if (isMarkdownTableStart(lines, index)) {
+            closeBlocks();
+            const table = renderMarkdownTable(lines, index);
+            html.push(table.html);
+            index = table.nextIndex - 1;
+            continue;
+        }
 
         if (heading) {
-            closeList();
+            closeBlocks();
             const level = heading[1].length;
             html.push(`<h${level}>${renderInlineMarkdown(heading[2])}</h${level}>`);
-            return;
+            continue;
         }
 
         if (listItem) {
-            if (!listOpen) {
+            if (orderedListOpen) {
+                html.push('</ol>');
+                orderedListOpen = false;
+            }
+            if (!unorderedListOpen) {
                 html.push('<ul>');
-                listOpen = true;
+                unorderedListOpen = true;
             }
             html.push(`<li>${renderInlineMarkdown(listItem[1])}</li>`);
-            return;
+            continue;
         }
 
-        closeList();
-        html.push(line.trim() ? `<p>${renderInlineMarkdown(line)}</p>` : '<br>');
-    });
+        if (orderedListItem) {
+            if (unorderedListOpen) {
+                html.push('</ul>');
+                unorderedListOpen = false;
+            }
+            if (!orderedListOpen) {
+                html.push('<ol>');
+                orderedListOpen = true;
+            }
+            html.push(`<li>${renderInlineMarkdown(orderedListItem[1])}</li>`);
+            continue;
+        }
 
-    closeList();
+        if (blockquote) {
+            if (unorderedListOpen) {
+                html.push('</ul>');
+                unorderedListOpen = false;
+            }
+            if (orderedListOpen) {
+                html.push('</ol>');
+                orderedListOpen = false;
+            }
+            if (!blockquoteOpen) {
+                html.push('<blockquote>');
+                blockquoteOpen = true;
+            }
+            html.push(blockquote[1] ? `<p>${renderInlineMarkdown(blockquote[1])}</p>` : '<br>');
+            continue;
+        }
+
+        closeBlocks();
+        html.push(line.trim() ? `<p>${renderInlineMarkdown(line)}</p>` : '<br>');
+    }
+
+    closeBlocks();
     return html.join('');
 }
 
@@ -630,21 +840,73 @@ function syncProjectPromptPreview() {
     preview.innerHTML = renderMarkdownPreview(input.value);
 }
 
+function updateProjectPromptFieldTabs() {
+    const activeField = getProjectPromptFieldConfig();
+    PROJECT_PROMPT_FIELDS.forEach(field => {
+        const tab = document.querySelector(`[data-project-prompt-field="${field.key}"]`);
+        if (!tab) return;
+
+        const active = field.key === activeField.key;
+        tab.setAttribute('aria-selected', String(active));
+        tab.classList.toggle('bg-indigo-600', active);
+        tab.classList.toggle('text-white', active);
+        tab.classList.toggle('border-indigo-600', active);
+        tab.classList.toggle('border-gray-200', !active);
+        tab.classList.toggle('dark:border-gray-700', !active);
+        tab.classList.toggle('text-gray-600', !active);
+        tab.classList.toggle('dark:text-gray-300', !active);
+    });
+}
+
+function renderActiveProjectPromptField() {
+    const input = document.getElementById('project-prompt-input');
+    const title = document.getElementById('project-prompt-field-title');
+    const file = document.getElementById('project-prompt-field-file');
+    const saveLabel = document.getElementById('project-prompt-save-label');
+    if (!input) return;
+
+    const field = getProjectPromptFieldConfig();
+    const values = getProjectPromptFieldValues();
+    input.value = values[field.key] || '';
+    input.placeholder = field.placeholder || '';
+    input.setAttribute('aria-label', `${field.title} 입력`);
+    if (title) title.textContent = field.title;
+    if (file) file.textContent = field.fileName;
+    if (saveLabel) saveLabel.textContent = `${field.title} 저장`;
+    input.dispatchEvent(new Event('input'));
+    syncProjectPromptPreview();
+    updateProjectPromptFieldTabs();
+}
+
+export function switchProjectPromptField(fieldKey) {
+    const input = document.getElementById('project-prompt-input');
+    const values = getProjectPromptFieldValues();
+    if (input) values[getProjectPromptFieldConfig().key] = input.value;
+
+    window.PROJECT_ACTIVE_PROMPT_FIELD = getProjectPromptFieldConfig(fieldKey).key;
+    renderActiveProjectPromptField();
+}
+
 async function hydrateProjectPromptInput() {
     const project = getActiveProject();
     const input = document.getElementById('project-prompt-input');
     const status = document.getElementById('project-prompt-load-status');
+    window.PROJECT_ACTIVE_PROMPT_FIELD = getProjectPromptFieldConfig(window.PROJECT_ACTIVE_PROMPT_FIELD).key;
+    window.PROJECT_PROMPT_FIELD_VALUES = {};
     if (!project || !input) return;
 
-    if (status) status.textContent = 'prompt.md를 불러오는 중입니다.';
+    if (status) status.textContent = '프로젝트 프롬프트를 불러오는 중입니다.';
 
     try {
-        input.value = await loadProjectPromptMarkdown(project);
-        input.dispatchEvent(new Event('input'));
-        syncProjectPromptPreview();
-        if (status) status.textContent = input.value ? 'prompt.md를 불러왔습니다.' : '';
+        const entries = await Promise.all(PROJECT_PROMPT_FIELDS.map(async field => {
+            const value = await loadProjectMarkdownFile(project, field.fileName);
+            return [field.key, value];
+        }));
+        window.PROJECT_PROMPT_FIELD_VALUES = Object.fromEntries(entries);
+        renderActiveProjectPromptField();
+        if (status) status.textContent = entries.some(([, value]) => value) ? '프로젝트 프롬프트를 불러왔습니다.' : '';
     } catch (err) {
-        if (status) status.textContent = err.message || 'prompt.md를 불러오지 못했습니다.';
+        if (status) status.textContent = err.message || '프로젝트 프롬프트를 불러오지 못했습니다.';
     }
 }
 
@@ -733,6 +995,29 @@ async function uploadProjectStylePrompt(project, content) {
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || '그림체 프롬프트 저장에 실패했습니다.');
+    }
+
+    return key;
+}
+
+async function uploadProjectMarkdownFile(project, fileName, content) {
+    if (!project?.prefix) throw new Error('프로젝트 경로를 찾을 수 없습니다.');
+
+    const key = `${project.prefix}${fileName}`;
+    const res = await fetch('/api/upload?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'text/markdown; charset=utf-8',
+            'X-File-Name': encodeURIComponent(fileName),
+            'X-Absolute-Path': encodeURIComponent(key)
+        },
+        body: new Blob([content], { type: 'text/markdown; charset=utf-8' }),
+        cache: 'no-store'
+    });
+
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || `${fileName} 저장에 실패했습니다.`);
     }
 
     return key;
@@ -1111,7 +1396,8 @@ function renderPromptSection(section) {
                 <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex flex-col min-h-[360px]">
                     <div class="flex items-start justify-between gap-3 mb-3">
                         <div>
-                            <h3 class="font-bold text-sm text-gray-900 dark:text-white">입력 공간</h3>
+                            <h3 id="project-prompt-field-title" class="font-bold text-sm text-gray-900 dark:text-white">시스템 프롬프트</h3>
+                            <p id="project-prompt-field-file" class="mt-0.5 text-[11px] font-mono text-gray-400 dark:text-gray-500">prompt.md</p>
                             <p id="project-prompt-load-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                         </div>
                         <button id="project-prompt-preview-toggle" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition" aria-pressed="false">
@@ -1119,7 +1405,15 @@ function renderPromptSection(section) {
                             <span>마크다운 보기</span>
                         </button>
                     </div>
-                    <textarea id="project-prompt-input" class="flex-1 resize-none outline-none bg-transparent text-sm leading-6 text-gray-700 dark:text-gray-200" aria-label="프롬프트 입력"></textarea>
+                    <div class="mb-3 flex flex-wrap gap-2" role="tablist" aria-label="프로젝트 프롬프트 입력 종류">
+                        ${PROJECT_PROMPT_FIELDS.map(field => `
+                            <button type="button" role="tab" data-project-prompt-field="${escapeHtml(field.key)}" onclick="window.switchProjectPromptField('${escapeJsString(field.key)}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 transition" aria-selected="false">
+                                <i data-lucide="${field.icon}" class="w-4 h-4"></i>
+                                <span>${escapeHtml(field.title)}</span>
+                            </button>
+                        `).join('')}
+                    </div>
+                    <textarea id="project-prompt-input" class="flex-1 resize-none outline-none bg-transparent text-sm leading-6 text-gray-700 dark:text-gray-200" aria-label="시스템 프롬프트 입력"></textarea>
                     <div id="project-prompt-preview" class="hidden flex-1 overflow-y-auto text-sm leading-6 text-gray-700 dark:text-gray-200 prose-like" aria-label="마크다운 미리보기"></div>
                 </div>
 
@@ -1154,7 +1448,7 @@ function renderPromptSection(section) {
                             <p id="project-prompt-save-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                             <button id="project-prompt-save-btn" type="button" onclick="window.saveProjectPromptMarkdown()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
                                 <i data-lucide="save" class="w-4 h-4"></i>
-                                <span>저장</span>
+                                <span id="project-prompt-save-label">시스템 프롬프트 저장</span>
                             </button>
                         </div>
                     </div>
@@ -1174,6 +1468,8 @@ export async function saveProjectPromptMarkdown() {
     const button = document.getElementById('project-prompt-save-btn');
     const status = document.getElementById('project-prompt-save-status');
     if (!project || !input) return;
+    const field = getProjectPromptFieldConfig();
+    getProjectPromptFieldValues()[field.key] = input.value;
 
     const previousButtonHtml = button?.innerHTML || '';
     if (button) {
@@ -1184,8 +1480,8 @@ export async function saveProjectPromptMarkdown() {
     if (status) status.textContent = '';
 
     try {
-        await uploadProjectPromptMarkdown(project, input.value);
-        if (status) status.textContent = 'prompt.md로 저장되었습니다.';
+        await uploadProjectMarkdownFile(project, field.fileName, input.value);
+        if (status) status.textContent = `${field.fileName}로 저장되었습니다.`;
         if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
     } catch (err) {
         if (status) status.textContent = err.message || '저장에 실패했습니다.';
