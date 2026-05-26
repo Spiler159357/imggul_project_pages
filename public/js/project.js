@@ -3559,6 +3559,12 @@ export async function confirmPlannerSelection(situationId = null) {
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
+function getSituationPromptIndicator(situation) {
+    const prompt = getSituationPrompt(situation);
+    const summary = combinePromptParts(prompt.composition, prompt.expression, prompt.action, prompt.background);
+    return summary || '프롬프트가 아직 없습니다.';
+}
+
 function renderSituationSection(section, state = {}) {
     const project = getActiveProject();
     const situations = getProjectItems(project, 'situations');
@@ -3577,11 +3583,15 @@ function renderSituationSection(section, state = {}) {
                     ${state.loading ? renderEmptyState('상황을 불러오는 중입니다.') : ''}
                     ${state.error ? renderEmptyState(state.error) : ''}
                     ${!state.loading && !state.error && situations.length ? `
-                        <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-3 gap-3 sm:gap-4">
+                        <div class="flex flex-col gap-2.5">
                             ${situations.map(situation => `
-                                <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="aspect-square text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-3 flex flex-col justify-between hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
-                                    <span class="text-[11px] font-bold text-gray-400 dark:text-gray-500">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
-                                    <span class="text-xs font-bold text-gray-700 dark:text-gray-200 truncate">${escapeHtml(getSituationDisplayName(situation))}</span>
+                                <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group w-full min-h-[74px] text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 flex items-center gap-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
+                                    <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationImageNumber(project, situation))}</span>
+                                    <span class="min-w-0 flex-1">
+                                        <span class="block text-sm font-bold text-gray-800 dark:text-gray-100 truncate">${escapeHtml(getSituationDisplayName(situation))}</span>
+                                        <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400 line-clamp-2">${escapeHtml(getSituationPromptIndicator(situation))}</span>
+                                    </span>
+                                    <span class="hidden sm:inline-flex flex-shrink-0 items-center text-[11px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
                                 </button>
                             `).join('')}
                         </div>
