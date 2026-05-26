@@ -1409,7 +1409,7 @@ function renderCharacterDetailShell(project, character, state = {}) {
                                 </label>
                                 <label class="block">
                                     <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">부정 프롬프트</span>
-                                    <textarea id="character-prompt-negative-input" class="w-full min-h-[80px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="이 캐릭터에 반복 적용할 제외 태그">${escapeHtml(negativePrompt)}</textarea>
+                                    <textarea id="character-prompt-negative-input" class="w-full min-h-[80px] resize-y p-3 rounded-lg border border-red-300 dark:border-red-800 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-red-400" placeholder="이 캐릭터에 반복 적용할 제외 태그">${escapeHtml(negativePrompt)}</textarea>
                                 </label>
                             </div>
                             <p id="character-prompt-save-status" class="mt-2 min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
@@ -3752,7 +3752,7 @@ function renderSituationDetailShell(project, situation, state = {}) {
                         </div>
                         <div>
                             <label for="situation-negative-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">부정 프롬프트</label>
-                            <textarea id="situation-negative-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="이 상황에서 제외할 태그">${escapeHtml(prompt.negative)}</textarea>
+                            <textarea id="situation-negative-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-red-300 dark:border-red-800 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-red-400" placeholder="이 상황에서 제외할 태그">${escapeHtml(prompt.negative)}</textarea>
                         </div>
                     </div>
                     <div class="mt-3 flex items-center justify-end gap-3">
