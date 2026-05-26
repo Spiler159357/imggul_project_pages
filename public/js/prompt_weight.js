@@ -146,6 +146,8 @@ function syncOverlayMetrics(input, overlay) {
     overlay.style.backgroundColor = overlay.dataset.naiWeightBackground || style.backgroundColor;
     overlay.style.color = overlay.dataset.naiWeightColor || style.color;
     overlay.style.minHeight = style.minHeight;
+    overlay.style.width = `${input.offsetWidth}px`;
+    overlay.style.height = `${input.offsetHeight}px`;
     overlay.style.borderRadius = style.borderRadius;
 }
 
