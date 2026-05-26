@@ -3,10 +3,11 @@ import './state.js?v=planner-demo-20260525a';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=project-return-20260525a';
 import * as Explorer from './explorer.js';
-import * as Craft from './craft.js?v=planner-settings-20260525b';
+import * as Craft from './craft.js?v=nai-weight-preview-20260526a';
 import * as TempGallery from './temp_gallery.js?v=planner-reference-20260525a';
 import * as Modals from './modals.js';
-import * as Project from './project.js?v=planner-settings-20260525b';
+import * as Project from './project.js?v=nai-weight-preview-20260526a';
+import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=nai-weight-preview-20260526a';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals, Project);
@@ -16,6 +17,7 @@ window.initSidebarControls();
 lucide.createIcons();
 window.initDarkMode();
 window.loadCraftSettings();
+initNaiPromptWeightPreviews();
 window.initGenerationQueue();
 
 if (typeof window.ROOT_PATH === 'undefined') window.ROOT_PATH = '';

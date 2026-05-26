@@ -1618,6 +1618,7 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
         resizePromptInput('nai-negative');
     }
 
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
     if (window.saveCraftSettings) window.saveCraftSettings();
 
     if (window.updateCraftFolderList) await window.updateCraftFolderList();

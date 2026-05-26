@@ -156,6 +156,7 @@ export function clearPrompts() {
     });
     const rawEl = document.getElementById('prompt-raw');
     if (rawEl) { rawEl.value = ''; rawEl.style.height = 'auto'; }
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
     window.saveCraftSettings();
 }
 
@@ -305,6 +306,7 @@ export function applyCraftSettings(settings = {}) {
         document.getElementById('inpaint-strength-val').innerText = parseFloat(document.getElementById('inpaint-strength').value || '1').toFixed(2);
     }
     window.updateModelSpecificUI();
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
     window.saveCraftSettings();
 }
 

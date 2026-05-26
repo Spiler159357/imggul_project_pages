@@ -72,6 +72,96 @@ body {
     min-height: 38px;
 }
 
+.nai-weight-editor {
+    position: relative;
+    min-width: 0;
+}
+
+.nai-weight-overlay,
+.nai-weight-textarea {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+}
+
+.nai-weight-overlay {
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    overflow: hidden;
+    pointer-events: none;
+    color: #374151;
+    border-color: transparent;
+}
+
+.dark .nai-weight-overlay {
+    color: #f3f4f6;
+}
+
+.nai-weight-textarea {
+    position: relative;
+    z-index: 1;
+    background-color: transparent !important;
+    color: transparent !important;
+    -webkit-text-fill-color: transparent;
+    caret-color: #4f46e5;
+}
+
+.nai-weight-textarea::placeholder {
+    color: #9ca3af;
+    -webkit-text-fill-color: #9ca3af;
+}
+
+.dark .nai-weight-textarea::placeholder {
+    color: #6b7280;
+    -webkit-text-fill-color: #6b7280;
+}
+
+.nai-weight-token {
+    display: inline;
+    position: relative;
+    padding: 0.07rem 0.24rem;
+    margin: 0 0.05rem;
+    border-radius: 0.28rem;
+    border: 1px solid transparent;
+    font-weight: 700;
+    transform: scale(var(--nai-weight-scale));
+    transform-origin: center;
+}
+
+.nai-weight-strong {
+    border-color: rgba(79, 70, 229, 0.28);
+    background: rgba(79, 70, 229, var(--nai-weight-alpha));
+    color: #312e81;
+}
+
+.nai-weight-weak {
+    border-color: rgba(107, 114, 128, 0.24);
+    background: rgba(107, 114, 128, var(--nai-weight-alpha));
+    color: #4b5563;
+    font-weight: 500;
+}
+
+.dark .nai-weight-strong {
+    border-color: rgba(129, 140, 248, 0.38);
+    background: rgba(129, 140, 248, var(--nai-weight-alpha));
+    color: #c7d2fe;
+}
+
+.dark .nai-weight-weak {
+    border-color: rgba(156, 163, 175, 0.28);
+    background: rgba(156, 163, 175, var(--nai-weight-alpha));
+    color: #d1d5db;
+}
+
+.nai-weight-label {
+    display: inline-block;
+    margin-left: 0.24rem;
+    font-size: 0.62rem;
+    line-height: 1;
+    vertical-align: 0.08em;
+    opacity: 0.72;
+}
+
 .prose-like h1,
 .prose-like h2,
 .prose-like h3,
