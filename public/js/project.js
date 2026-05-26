@@ -544,6 +544,16 @@ function getNextSituationImageNumber(project) {
     return usedNumbers.length ? Math.max(...usedNumbers) + 1 : getProjectItems(project, 'situations').length;
 }
 
+function getNextSituationFolderName(project) {
+    const usedNumbers = getProjectItems(project, 'situations')
+        .map(situation => String(situation.folderName || situation.id || '').trim())
+        .filter(value => /^\d+$/.test(value))
+        .map(value => Number.parseInt(value, 10))
+        .filter(number => Number.isFinite(number));
+    const nextNumber = usedNumbers.length ? Math.max(...usedNumbers) + 1 : getProjectItems(project, 'situations').length;
+    return String(nextNumber);
+}
+
 function renderCharacterName(character) {
     if (character.alias) {
         return `
@@ -2068,10 +2078,12 @@ function renderProjectItemCreateModal() {
     `;
 }
 
-export function openProjectItemCreateModal(type) {
+export async function openProjectItemCreateModal(type) {
+    const project = getActiveProject();
     const modal = document.getElementById('project-item-create-modal');
     const form = document.getElementById('project-item-create-form');
     const typeInput = document.getElementById('project-item-create-type');
+    const nameInput = document.getElementById('project-item-create-name');
     const title = document.getElementById('project-item-create-title');
     const help = document.getElementById('project-item-create-help');
     const error = document.getElementById('project-item-create-error');
@@ -2091,9 +2103,18 @@ export function openProjectItemCreateModal(type) {
             : '프로젝트 상황 메타데이터에 저장됩니다.';
     }
 
+    if (type === 'situation' && project) {
+        if (!project.situationsLoaded) await loadProjectSituations(project).catch(() => []);
+        if (nameInput) nameInput.value = getNextSituationFolderName(project);
+    }
+
     modal.classList.remove('hidden');
     modal.classList.add('flex');
-    setTimeout(() => document.getElementById('project-item-create-name')?.focus(), 0);
+    setTimeout(() => {
+        const input = document.getElementById('project-item-create-name');
+        input?.focus();
+        if (type === 'situation') input?.select();
+    }, 0);
 }
 
 export function closeProjectItemCreateModal(event) {
