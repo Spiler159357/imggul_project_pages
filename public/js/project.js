@@ -3912,7 +3912,6 @@ function renderSituationSection(section, state = {}) {
                                     <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationImageNumber(project, situation))}</span>
                                     <span class="min-w-0 flex-1">
                                         <span class="block text-sm font-bold text-gray-800 dark:text-gray-100 truncate">${escapeHtml(getSituationDisplayName(situation))}</span>
-                                        <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400 line-clamp-2">${escapeHtml(getSituationPromptIndicator(situation))}</span>
                                     </span>
                                     <span class="hidden sm:inline-flex flex-shrink-0 items-center text-[11px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
                                 </button>
