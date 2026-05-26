@@ -23,6 +23,7 @@ queue = "imggul-queue"
 max_batch_size = 1
 max_batch_timeout = 30
 max_retries = 2
+max_concurrency = 1
 # Uncomment after creating a DLQ.
 # dead_letter_queue = "imggul-generation-dlq"
 

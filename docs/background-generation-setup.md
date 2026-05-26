@@ -40,6 +40,7 @@ This implementation adds the application code for server-side planner generation
 - `wrangler.background.toml`
   - Production Worker config for the Queue consumer.
   - Sets `[limits].cpu_ms = 300_000` for paid-plan queue processing.
+  - Sets Queue `max_concurrency = 1` so NovelAI requests are processed one at a time.
 
 ## Current Known Resource Names
 
@@ -74,3 +75,7 @@ Use the current GitHub repository for both Cloudflare projects:
    - Worker entrypoint: defined in `wrangler.background.toml` as `src/planner-background.js`.
 
 After deployment, verify that `imggul-queue` shows `imggul-background-worker` as a consumer.
+
+The background worker also keeps a small D1 rate-limit row for NovelAI requests. Apply all migrations, including `migrations/0003_planner_background_rate_limits.sql`, before relying on background generation in production.
+
+Completed, failed, partially failed, and cancelled background job rows are kept briefly so the planner UI can finish polling, then the worker automatically deletes their `planner_background_jobs` and `planner_background_items` rows on subsequent status/start/queue activity.

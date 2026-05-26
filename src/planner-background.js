@@ -1,10 +1,15 @@
 const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
 const MAX_BACKGROUND_IMAGES = 100;
-const MAX_ATTEMPTS = 2;
+const MAX_ATTEMPTS = 5;
+const NAI_MIN_REQUEST_INTERVAL_MS = 15000;
+const MAX_INLINE_COOLDOWN_MS = 30000;
+const TERMINAL_JOB_RETENTION_MS = 10 * 60 * 1000;
+const TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "cancelled"];
 const STAGE_LABELS = {
     queued: "Queue waiting",
     running: "Preparing generation",
+    rate_limited: "Waiting after NovelAI rate limit",
     novelai_request: "Calling NovelAI",
     novelai_response: "NovelAI response received",
     zip_extract: "Extracting generated image",
@@ -46,6 +51,14 @@ function requireWorkerBindings(env) {
 
 function nowIso() {
     return new Date().toISOString();
+}
+
+function isoBeforeNow(ms) {
+    return new Date(Date.now() - ms).toISOString();
+}
+
+function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function makeId(prefix) {
@@ -227,6 +240,14 @@ async function queryFirst(db, sql, ...params) {
 }
 
 async function ensurePlannerBackgroundSchema(env) {
+    await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS planner_background_rate_limits (
+            key TEXT PRIMARY KEY,
+            available_at INTEGER NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    `).run();
+
     const columns = await queryAll(env.DB, "PRAGMA table_info(planner_background_jobs)");
     if (!columns.length) return;
     const hasJobStage = columns.some(column => column.name === "stage");
@@ -241,9 +262,30 @@ async function ensurePlannerBackgroundSchema(env) {
     }
 }
 
+async function cleanupFinishedBackgroundJobs(env) {
+    const cutoff = isoBeforeNow(TERMINAL_JOB_RETENTION_MS);
+    const placeholders = TERMINAL_JOB_STATUSES.map(() => "?").join(", ");
+    const oldJobs = await queryAll(
+        env.DB,
+        `SELECT id FROM planner_background_jobs WHERE status IN (${placeholders}) AND updated_at <= ? LIMIT 50`,
+        ...TERMINAL_JOB_STATUSES,
+        cutoff
+    );
+    const jobIds = oldJobs.map(job => job.id).filter(Boolean);
+    if (!jobIds.length) return 0;
+
+    const jobPlaceholders = jobIds.map(() => "?").join(", ");
+    await env.DB.batch([
+        env.DB.prepare(`DELETE FROM planner_background_items WHERE job_id IN (${jobPlaceholders})`).bind(...jobIds),
+        env.DB.prepare(`DELETE FROM planner_background_jobs WHERE id IN (${jobPlaceholders})`).bind(...jobIds)
+    ]);
+    return jobIds.length;
+}
+
 export async function startPlannerBackgroundJob(env, body) {
     requireBackgroundBindings(env);
     await ensurePlannerBackgroundSchema(env);
+    await cleanupFinishedBackgroundJobs(env).catch(() => null);
     const plannerMeta = normalizePlannerMeta(body?.plannerMeta);
     const projectId = String(body.projectId || plannerMeta.projectId || "").trim();
     const projectPrefix = String(body.projectPrefix || "").trim();
@@ -351,6 +393,8 @@ export async function startPlannerBackgroundJob(env, body) {
 
 export async function getPlannerBackgroundStatus(env, jobId) {
     if (!env.DB) throw new Error("Missing Cloudflare binding: DB");
+    await ensurePlannerBackgroundSchema(env);
+    await cleanupFinishedBackgroundJobs(env).catch(() => null);
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
     if (!job) throw new Error("Background job not found");
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ? ORDER BY image_number", jobId);
@@ -388,6 +432,7 @@ export async function getPlannerBackgroundStatus(env, jobId) {
 
 export async function cancelPlannerBackgroundJob(env, jobId) {
     if (!env.DB) throw new Error("Missing Cloudflare binding: DB");
+    await ensurePlannerBackgroundSchema(env);
     const updatedAt = nowIso();
     await env.DB.batch([
         env.DB.prepare(`
@@ -406,6 +451,7 @@ export async function cancelPlannerBackgroundJob(env, jobId) {
         `).bind(updatedAt, jobId)
     ]);
     await syncPlannerMetaToR2(env, jobId).catch(() => null);
+    await cleanupFinishedBackgroundJobs(env).catch(() => null);
     return { jobId, status: "cancel_requested" };
 }
 
@@ -424,9 +470,71 @@ async function callNovelAi(env, payload) {
     });
     if (!res.ok) {
         const text = await res.text();
-        throw new Error(`[NovelAI ${res.status}] ${text}`);
+        const error = new Error(`[NovelAI ${res.status}] ${text}`);
+        error.status = res.status;
+        const retryAfter = Number.parseInt(res.headers.get("Retry-After") || "", 10);
+        if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfterSeconds = retryAfter;
+        throw error;
     }
     return await res.arrayBuffer();
+}
+
+function isNovelAiRateLimitError(error) {
+    const message = error?.message || String(error || "");
+    return error?.status === 429
+        || message.includes("[NovelAI 429]")
+        || message.includes("error code: 1015")
+        || message.includes("Concurrent generation is locked");
+}
+
+function isNovelAiCooldownError(error) {
+    return error?.code === "NOVELAI_COOLDOWN";
+}
+
+function getRetryDelaySeconds(error, attempt) {
+    if (isNovelAiCooldownError(error)) {
+        return Math.max(30, Number(error.retryAfterSeconds || 60));
+    }
+    if (isNovelAiRateLimitError(error)) {
+        const fallbackDelays = [120, 300, 900, 1800];
+        const fallback = fallbackDelays[Math.min(Math.max(attempt - 1, 0), fallbackDelays.length - 1)];
+        return Math.max(Number(error.retryAfterSeconds || 0), fallback);
+    }
+    return Math.min(60 * attempt, 300);
+}
+
+async function setNovelAiCooldown(env, delaySeconds) {
+    const delayMs = Math.max(0, Number(delaySeconds || 0) * 1000);
+    const availableAt = Date.now() + delayMs;
+    await env.DB.prepare(`
+        INSERT INTO planner_background_rate_limits (key, available_at, updated_at)
+        VALUES ('novelai', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            available_at = MAX(available_at, excluded.available_at),
+            updated_at = excluded.updated_at
+    `).bind(availableAt, nowIso()).run();
+}
+
+async function waitForNovelAiSlot(env) {
+    const row = await queryFirst(env.DB, "SELECT available_at FROM planner_background_rate_limits WHERE key = 'novelai'");
+    const availableAt = Number(row?.available_at || 0);
+    const waitMs = Math.max(0, availableAt - Date.now());
+    if (waitMs > MAX_INLINE_COOLDOWN_MS) {
+        const error = new Error(`NovelAI cooldown active for ${Math.ceil(waitMs / 1000)} seconds`);
+        error.code = "NOVELAI_COOLDOWN";
+        error.retryAfterSeconds = Math.ceil(waitMs / 1000);
+        throw error;
+    }
+    if (waitMs > 0) await sleep(waitMs);
+
+    const nextAvailableAt = Date.now() + NAI_MIN_REQUEST_INTERVAL_MS;
+    await env.DB.prepare(`
+        INSERT INTO planner_background_rate_limits (key, available_at, updated_at)
+        VALUES ('novelai', ?, ?)
+        ON CONFLICT(key) DO UPDATE SET
+            available_at = excluded.available_at,
+            updated_at = excluded.updated_at
+    `).bind(nextAvailableAt, nowIso()).run();
 }
 
 function readString(view, offset, length) {
@@ -610,17 +718,18 @@ async function markItemFailure(env, item, errorMessage) {
     `).bind(failedCount, status, errorMessage.slice(0, 1000), nowIso(), item.id).run();
 }
 
-async function enqueueRetry(env, message, attempt) {
+async function enqueueRetry(env, message, attempt, delaySeconds) {
     if (!env.GENERATION_QUEUE || attempt >= MAX_ATTEMPTS) return false;
     await env.GENERATION_QUEUE.send({
         ...message,
         attempt: attempt + 1
-    }, { delaySeconds: Math.min(60 * attempt, 300) });
+    }, { delaySeconds });
     return true;
 }
 
 export async function processPlannerQueueMessage(env, message) {
     requireWorkerBindings(env);
+    await ensurePlannerBackgroundSchema(env);
     const jobId = message?.jobId;
     const itemId = message?.itemId;
     const imageIndex = Number(message?.imageIndex || 0);
@@ -629,7 +738,7 @@ export async function processPlannerQueueMessage(env, message) {
 
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
     const item = await queryFirst(env.DB, "SELECT * FROM planner_background_items WHERE id = ?", itemId);
-    if (!job || !item) throw new Error("Background job item not found");
+    if (!job || !item) return;
 
     if (["cancel_requested", "cancelled"].includes(job.status) || ["cancel_requested", "cancelled"].includes(item.status)) {
         await env.DB.prepare("UPDATE planner_background_items SET status = 'cancelled', stage = 'cancelled', updated_at = ? WHERE id = ?")
@@ -637,6 +746,7 @@ export async function processPlannerQueueMessage(env, message) {
             .run();
         await refreshJobRollup(env, jobId);
         await syncPlannerMetaToR2(env, jobId);
+        await cleanupFinishedBackgroundJobs(env).catch(() => null);
         return;
     }
 
@@ -655,6 +765,7 @@ export async function processPlannerQueueMessage(env, message) {
         const generatedAt = nowIso();
         const request = buildNovelAiPayload(generation, seed);
         await updateProgressStage(env, jobId, itemId, "novelai_request");
+        await waitForNovelAiSlot(env);
         const zipBuffer = await callNovelAi(env, request.payload);
         await updateProgressStage(env, jobId, itemId, "novelai_response");
         await updateProgressStage(env, jobId, itemId, "zip_extract");
@@ -697,31 +808,49 @@ export async function processPlannerQueueMessage(env, message) {
         `).bind(completedCount, status, status === "completed" ? "completed" : "running", JSON.stringify(resultKeys), nowIso(), status, nowIso(), itemId).run();
     } catch (error) {
         const errorMessage = error.message || String(error);
-        await writeBackgroundErrorLog(env, error, {
-            jobId,
-            itemId,
-            imageIndex,
-            attempt,
-            stage: item.stage || job.stage || "unknown",
-            outputPrefix: item.output_prefix
-        });
-        if (attempt < MAX_ATTEMPTS && await enqueueRetry(env, message, attempt)) {
-            await env.DB.prepare(`
-                UPDATE planner_background_items
-                SET status = 'running', stage = 'running', attempts = ?, error_message = ?, updated_at = ?
-                WHERE id = ?
-            `).bind(attempt, errorMessage.slice(0, 1000), nowIso(), itemId).run();
+        const retryDelaySeconds = getRetryDelaySeconds(error, attempt);
+        const isRateLimited = isNovelAiRateLimitError(error) || isNovelAiCooldownError(error);
+        if (!isNovelAiCooldownError(error)) {
+            await writeBackgroundErrorLog(env, error, {
+                jobId,
+                itemId,
+                imageIndex,
+                attempt,
+                stage: item.stage || job.stage || "unknown",
+                outputPrefix: item.output_prefix,
+                retryDelaySeconds
+            });
+        }
+        if (isRateLimited) {
+            await setNovelAiCooldown(env, retryDelaySeconds);
+        }
+        if (attempt < MAX_ATTEMPTS && await enqueueRetry(env, message, attempt, retryDelaySeconds)) {
+            const retryStage = isRateLimited ? "rate_limited" : "running";
+            await env.DB.batch([
+                env.DB.prepare(`
+                    UPDATE planner_background_jobs
+                    SET stage = ?, updated_at = ?
+                    WHERE id = ?
+                `).bind(retryStage, nowIso(), jobId),
+                env.DB.prepare(`
+                    UPDATE planner_background_items
+                    SET status = 'queued', stage = ?, attempts = ?, error_message = ?, updated_at = ?
+                    WHERE id = ?
+                `).bind(retryStage, attempt, errorMessage.slice(0, 1000), nowIso(), itemId)
+            ]);
             await syncPlannerMetaToR2(env, jobId);
             return;
         }
         await markItemFailure(env, item, errorMessage);
         await refreshJobRollup(env, jobId);
         await syncPlannerMetaToR2(env, jobId);
+        await cleanupFinishedBackgroundJobs(env).catch(() => null);
         return;
     }
 
     await refreshJobRollup(env, jobId);
     await syncPlannerMetaToR2(env, jobId);
+    await cleanupFinishedBackgroundJobs(env).catch(() => null);
 }
 
 export default {
