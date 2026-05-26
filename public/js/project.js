@@ -439,7 +439,8 @@ function normalizeProjectSituations(situations) {
                 composition: situation?.prompt?.composition || situation?.composition || '',
                 expression: situation?.prompt?.expression || situation?.expression || '',
                 action: situation?.prompt?.action || situation?.action || '',
-                background: situation?.prompt?.background || situation?.background || ''
+                background: situation?.prompt?.background || situation?.background || '',
+                negative: situation?.prompt?.negative || situation?.negative || ''
             },
             createdAt: situation?.createdAt || Date.now()
         };
@@ -1573,6 +1574,7 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
     const projectStyle = await loadProjectStylePrompt(project).catch(() => '');
     const situationPrompt = getSituationPrompt(selectedSituation);
     const characterParts = meta.parts || {};
+    const combinedNegativePrompt = combinePromptParts(characterParts.negative, situationPrompt.negative);
     const promptValues = {
         'prompt-style': projectStyle,
         'prompt-composition': situationPrompt.composition || '',
@@ -1612,7 +1614,7 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
 
     const negativePrompt = document.getElementById('nai-negative');
     if (negativePrompt) {
-        negativePrompt.value = characterParts.negative || '';
+        negativePrompt.value = combinedNegativePrompt;
         resizePromptInput('nai-negative');
     }
 
@@ -1888,7 +1890,8 @@ async function createSituation(project, situationId, alias) {
             composition: '',
             expression: '',
             action: '',
-            background: ''
+            background: '',
+            negative: ''
         },
         createdAt: Date.now()
     };
@@ -2991,10 +2994,10 @@ export async function addPlannerDraftItem() {
     const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
     const stylePrompt = projectStyle || currentSettings.prompts?.['prompt-style'] || '';
-    const negativePrompt = characterMeta.parts?.negative || currentSettings.negative || '';
 
     const prompt = getSituationPrompt(situation);
     const expressionPrompt = combinePromptParts(characterMeta.parts?.expression, prompt.expression) || currentSettings.prompts?.['prompt-expression'] || '';
+    const negativePrompt = combinePromptParts(characterMeta.parts?.negative, prompt.negative) || currentSettings.negative || '';
     const imageNumber = getSituationImageNumber(project, situation);
     const fields = {
         style: stylePrompt,
@@ -3561,7 +3564,7 @@ export async function confirmPlannerSelection(situationId = null) {
 
 function getSituationPromptIndicator(situation) {
     const prompt = getSituationPrompt(situation);
-    const summary = combinePromptParts(prompt.composition, prompt.expression, prompt.action, prompt.background);
+    const summary = combinePromptParts(prompt.composition, prompt.expression, prompt.action, prompt.background, prompt.negative);
     return summary || '프롬프트가 아직 없습니다.';
 }
 
@@ -3625,7 +3628,8 @@ function getSituationPrompt(situation) {
         composition: situation?.prompt?.composition || '',
         expression: situation?.prompt?.expression || '',
         action: situation?.prompt?.action || '',
-        background: situation?.prompt?.background || ''
+        background: situation?.prompt?.background || '',
+        negative: situation?.prompt?.negative || ''
     };
 }
 
@@ -3732,7 +3736,7 @@ function renderSituationDetailShell(project, situation, state = {}) {
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
             <section class="max-w-7xl mx-auto min-h-full">
                 <form id="situation-prompt-form" onsubmit="window.saveActiveSituationPrompt(event)" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                    <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
                         <div>
                             <label for="situation-composition-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구도</label>
                             <textarea id="situation-composition-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="상황에 필요한 구도 프롬프트">${escapeHtml(prompt.composition)}</textarea>
@@ -3744,6 +3748,10 @@ function renderSituationDetailShell(project, situation, state = {}) {
                         <div>
                             <label for="situation-action-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">행위</label>
                             <textarea id="situation-action-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="상황에 필요한 행위 프롬프트">${escapeHtml(prompt.action)}</textarea>
+                        </div>
+                        <div>
+                            <label for="situation-negative-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">부정 프롬프트</label>
+                            <textarea id="situation-negative-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-red-200 dark:border-red-900 bg-red-50/60 dark:bg-red-900/10 text-sm leading-6 text-red-700 dark:text-red-200 focus:outline-none focus:ring-2 focus:ring-red-400" placeholder="이 상황에서 제외할 태그">${escapeHtml(prompt.negative)}</textarea>
                         </div>
                     </div>
                     <div class="mt-3 flex items-center justify-end gap-3">
@@ -3882,9 +3890,10 @@ export async function saveActiveSituationPrompt(event) {
     const compositionInput = document.getElementById('situation-composition-input');
     const expressionInput = document.getElementById('situation-expression-input');
     const actionInput = document.getElementById('situation-action-input');
+    const negativeInput = document.getElementById('situation-negative-input');
     const button = document.getElementById('situation-prompt-save-btn');
     const status = document.getElementById('situation-prompt-save-status');
-    if (!project || !situation || !compositionInput || !expressionInput || !actionInput) return;
+    if (!project || !situation || !compositionInput || !expressionInput || !actionInput || !negativeInput) return;
 
     const previousButtonHtml = button?.innerHTML || '';
     if (button) {
@@ -3899,7 +3908,8 @@ export async function saveActiveSituationPrompt(event) {
             ...(situation.prompt || {}),
             composition: compositionInput.value.trim(),
             expression: expressionInput.value.trim(),
-            action: actionInput.value.trim()
+            action: actionInput.value.trim(),
+            negative: negativeInput.value.trim()
         };
         situation.updatedAt = Date.now();
         await saveProjectSituations(project);
@@ -4021,7 +4031,8 @@ export async function saveCraftPromptToSituation() {
             composition: fields.composition,
             expression: fields.expression,
             action: fields.action,
-            background: fields.background
+            background: fields.background,
+            negative: fields.negative
         };
         situation.updatedAt = Date.now();
 
