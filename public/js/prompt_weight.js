@@ -39,10 +39,6 @@ function findClosingToken(text, start, openToken, closeToken) {
     return -1;
 }
 
-function findClosingWeight(text, start) {
-    return text.indexOf('::', start);
-}
-
 function renderWeightedChunk(html, weight) {
     if (!html) return '';
 
@@ -55,6 +51,10 @@ function renderWeightedChunk(html, weight) {
     return `<span class="nai-weight-token ${className}" style="--nai-weight-alpha:${alpha};--nai-weight-outline-alpha:${outlineAlpha}" title="weight ${label}">${html}</span>`;
 }
 
+function findStrictNumericWeightClose(text, start) {
+    return text.indexOf('::', start);
+}
+
 function parsePromptSegment(text, baseWeight = 1) {
     let html = '';
     let weighted = false;
@@ -64,13 +64,16 @@ function parsePromptSegment(text, baseWeight = 1) {
         if (numericMatch) {
             const weight = Number(numericMatch[1]);
             const bodyStart = i + numericMatch[0].length;
-            const bodyEnd = findClosingWeight(text, bodyStart);
-            if (Number.isFinite(weight) && bodyEnd !== -1) {
-                const child = parsePromptSegment(text.slice(bodyStart, bodyEnd), baseWeight * weight);
-                html += renderWeightedChunk(`${escapeHtml(numericMatch[0])}${child.html}${escapeHtml('::')}`, baseWeight * weight);
-                weighted = true;
-                i = bodyEnd + 2;
-                continue;
+            if (Number.isFinite(weight)) {
+                const bodyEnd = findStrictNumericWeightClose(text, bodyStart);
+                if (bodyEnd !== -1 && bodyEnd > bodyStart) {
+                    const rawBody = text.slice(bodyStart, bodyEnd);
+                    const chunkHtml = `${escapeHtml(numericMatch[0])}${escapeHtml(rawBody)}${escapeHtml('::')}`.replace(/\n/g, '<br>');
+                    html += renderWeightedChunk(chunkHtml, baseWeight * weight);
+                    weighted = true;
+                    i = bodyEnd + 2;
+                    continue;
+                }
             }
         }
 
@@ -118,6 +121,7 @@ function getOverlayElement(input) {
     overlay.className = 'nai-weight-overlay';
     overlay.setAttribute('aria-hidden', 'true');
     overlay.dataset.naiWeightBackground = initialStyle.backgroundColor;
+    overlay.dataset.naiWeightColor = initialStyle.color;
 
     input.parentNode.insertBefore(wrapper, input);
     wrapper.appendChild(overlay);
@@ -140,7 +144,7 @@ function syncOverlayMetrics(input, overlay) {
     overlay.style.borderWidth = style.borderWidth;
     overlay.style.borderStyle = 'solid';
     overlay.style.backgroundColor = overlay.dataset.naiWeightBackground || style.backgroundColor;
-    overlay.style.color = style.color;
+    overlay.style.color = overlay.dataset.naiWeightColor || style.color;
     overlay.style.minHeight = style.minHeight;
     overlay.style.borderRadius = style.borderRadius;
 }
