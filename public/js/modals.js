@@ -334,6 +334,37 @@ window.closeMemoCreateModal = function(e, skipHistory = false) {
     if (modal && !modal.classList.contains('hidden')) { modal.classList.add('hidden'); if (!skipHistory) history.back(); }
 };
 
+function capturePreviewModalScrollState() {
+    const projectRoot = document.getElementById('main-project-content');
+    const scrollables = projectRoot
+        ? Array.from(projectRoot.querySelectorAll('.overflow-y-auto, [class*="overflow-y-auto"]'))
+        : [];
+
+    window.PREVIEW_MODAL_SCROLL_STATE = {
+        windowX: window.scrollX,
+        windowY: window.scrollY,
+        entries: scrollables.map(el => ({ el, top: el.scrollTop, left: el.scrollLeft }))
+    };
+}
+
+function restorePreviewModalScrollState() {
+    const state = window.PREVIEW_MODAL_SCROLL_STATE;
+    if (!state) return;
+
+    const restore = () => {
+        window.scrollTo(state.windowX || 0, state.windowY || 0);
+        (state.entries || []).forEach(entry => {
+            if (!entry.el?.isConnected) return;
+            entry.el.scrollTop = entry.top || 0;
+            entry.el.scrollLeft = entry.left || 0;
+        });
+    };
+
+    restore();
+    requestAnimationFrame(restore);
+    setTimeout(restore, 0);
+}
+
 /**
  * 역할: 파일 종류에 맞춰 미리보기 모달을 열고 이미지/텍스트/기타 파일 UI를 구성한다.
  * 매개변수: key - 파일 경로, url - 파일 URL, isImage - 이미지 여부, isText - 텍스트 여부, isPublic - 공개 여부, skipHistory - history push 생략 여부.
@@ -341,6 +372,7 @@ window.closeMemoCreateModal = function(e, skipHistory = false) {
  * 반환값: 명시 반환 없음.
  */
 window.openModal = async function(key, url, isImage, isText, isPublic, skipHistory = false) {
+    capturePreviewModalScrollState();
     window.currentFileKey = key;
     const fileName = key.split('/').pop(); const alias = window.getAliasOnly(key, false);
     document.getElementById('modal-title').innerHTML = alias ? `${alias} <span class="text-xs sm:text-sm font-normal text-gray-500 dark:text-gray-400 ml-1 sm:ml-2">(${fileName})</span>` : fileName;
@@ -405,6 +437,7 @@ window.closeModal = function(e, skipHistory = false) {
         const textEl = document.getElementById('modal-text-editor'); if(textEl) textEl.value = '';
         const replaceInput = document.getElementById('replace-input'); if(replaceInput) replaceInput.value = '';
         window.currentFileKey = '';
+        restorePreviewModalScrollState();
         if (!skipHistory) history.back();
     }
 };
