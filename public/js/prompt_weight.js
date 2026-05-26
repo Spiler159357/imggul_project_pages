@@ -47,13 +47,12 @@ function renderWeightedChunk(html, weight) {
     if (!html) return '';
 
     const delta = Math.abs(weight - 1);
-    const strength = clamp(delta / 0.7, 0.08, 1);
-    const scale = clamp(0.96 + (weight * 0.04), 0.92, 1.08);
-    const alpha = clamp(0.08 + strength * 0.22, 0.08, 0.34).toFixed(3);
+    const alpha = clamp(0.08 + (delta / 0.8) * 0.24, 0.08, 0.32).toFixed(3);
+    const outlineAlpha = clamp(0.12 + (delta / 0.8) * 0.2, 0.12, 0.32).toFixed(3);
     const label = weight.toFixed(2).replace(/\.?0+$/, '');
     const className = weight >= 1 ? 'nai-weight-strong' : 'nai-weight-weak';
 
-    return `<span class="nai-weight-token ${className}" style="--nai-weight-alpha:${alpha};--nai-weight-scale:${scale.toFixed(3)}" title="weight ${label}">${html}<span class="nai-weight-label">${label}x</span></span>`;
+    return `<span class="nai-weight-token ${className}" style="--nai-weight-alpha:${alpha};--nai-weight-outline-alpha:${outlineAlpha}" title="weight ${label}">${html}</span>`;
 }
 
 function parsePromptSegment(text, baseWeight = 1) {
@@ -68,7 +67,7 @@ function parsePromptSegment(text, baseWeight = 1) {
             const bodyEnd = findClosingWeight(text, bodyStart);
             if (Number.isFinite(weight) && bodyEnd !== -1) {
                 const child = parsePromptSegment(text.slice(bodyStart, bodyEnd), baseWeight * weight);
-                html += renderWeightedChunk(child.html, baseWeight * weight);
+                html += renderWeightedChunk(`${escapeHtml(numericMatch[0])}${child.html}${escapeHtml('::')}`, baseWeight * weight);
                 weighted = true;
                 i = bodyEnd + 2;
                 continue;
@@ -82,7 +81,7 @@ function parsePromptSegment(text, baseWeight = 1) {
             if (end !== -1) {
                 const nextWeight = baseWeight * (char === '{' ? EMPHASIS_STEP : 1 / EMPHASIS_STEP);
                 const child = parsePromptSegment(text.slice(i + 1, end), nextWeight);
-                html += renderWeightedChunk(child.html, nextWeight);
+                html += renderWeightedChunk(`${escapeHtml(char)}${child.html}${escapeHtml(closeToken)}`, nextWeight);
                 weighted = true;
                 i = end + 1;
                 continue;
@@ -131,6 +130,9 @@ function getOverlayElement(input) {
 
 function syncOverlayMetrics(input, overlay) {
     const style = window.getComputedStyle(input);
+    const wrapper = input.closest('.nai-weight-editor');
+    if (wrapper) wrapper.classList.toggle('hidden', input.classList.contains('hidden'));
+
     overlay.style.padding = style.padding;
     overlay.style.font = style.font;
     overlay.style.lineHeight = style.lineHeight;
@@ -138,6 +140,7 @@ function syncOverlayMetrics(input, overlay) {
     overlay.style.borderWidth = style.borderWidth;
     overlay.style.borderStyle = 'solid';
     overlay.style.backgroundColor = overlay.dataset.naiWeightBackground || style.backgroundColor;
+    overlay.style.color = style.color;
     overlay.style.minHeight = style.minHeight;
     overlay.style.borderRadius = style.borderRadius;
 }

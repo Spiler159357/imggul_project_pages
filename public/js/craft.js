@@ -177,6 +177,7 @@ export function togglePromptMode() {
         if (rawEl) { rawEl.classList.add('hidden'); rawEl.classList.remove('block'); }
         if (detailedEl) { detailedEl.classList.remove('hidden'); detailedEl.classList.add('block'); }
     }
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
     window.saveCraftSettings();
 }
 
