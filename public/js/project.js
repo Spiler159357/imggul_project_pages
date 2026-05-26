@@ -554,6 +554,11 @@ function getNextSituationFolderName(project) {
     return String(nextNumber);
 }
 
+function getSituationFolderNumber(value) {
+    const normalized = String(value || '').trim();
+    return /^\d+$/.test(normalized) ? Number.parseInt(normalized, 10) : null;
+}
+
 function renderCharacterName(character) {
     if (character.alias) {
         return `
@@ -2196,7 +2201,8 @@ async function createSituation(project, situationId, alias) {
         throw new Error('이미 존재하는 상황 이름입니다.');
     }
 
-    const imageNumber = getNextSituationImageNumber(project);
+    const folderNumber = getSituationFolderNumber(situationId);
+    const imageNumber = Number.isFinite(folderNumber) ? folderNumber : getNextSituationImageNumber(project);
     const name = alias || situationId;
     const situation = {
         id: situationId,
