@@ -660,7 +660,22 @@ export function renderTempGallery() {
         const url = `/${imgData.key}?t=${new Date(imgData.uploaded).getTime()}`;
         const div = document.createElement('div');
         div.className = `relative w-full aspect-[3/4] bg-gray-100 dark:bg-gray-900 group rounded-lg overflow-hidden shadow-sm border-2 cursor-pointer transition-all ${isActive ? 'border-indigo-500 scale-[0.98] ring-2 ring-indigo-500/50' : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-700'}`;
-        div.onclick = () => { window.CRAFT_ACTIVE_INDEX = index; window.renderTempGallery(); };
+        div.tabIndex = 0;
+        div.setAttribute('role', 'button');
+        div.setAttribute('aria-label', `Temporary image ${index + 1}`);
+        div.onclick = () => {
+            window.CRAFT_ACTIVE_INDEX = index;
+            window.renderTempGallery();
+            document.getElementById('craft-temp-grid')?.children[index]?.focus({ preventScroll: true });
+        };
+        div.onkeydown = (event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+                event.preventDefault();
+                window.CRAFT_ACTIVE_INDEX = index;
+                window.renderTempGallery();
+                document.getElementById('craft-temp-grid')?.children[index]?.focus({ preventScroll: true });
+            }
+        };
         div.innerHTML = `<img src="${url}" class="absolute inset-0 object-cover w-full h-full transition-opacity duration-200 ${isActive ? 'opacity-100' : 'opacity-70 group-hover:opacity-100'}">${isActive ? `<div class="absolute inset-0 border-4 border-indigo-500 rounded-lg pointer-events-none"></div>` : ''}`;
         grid.appendChild(div);
     });

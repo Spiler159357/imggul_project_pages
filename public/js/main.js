@@ -4,7 +4,7 @@ import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=project-return-20260525a';
 import * as Explorer from './explorer.js';
 import * as Craft from './craft.js?v=nai-weight-preview-20260526a';
-import * as TempGallery from './temp_gallery.js?v=planner-reference-20260525a';
+import * as TempGallery from './temp_gallery.js?v=temp-focus-keys-20260527a';
 import * as Modals from './modals.js';
 import * as Project from './project.js?v=nai-weight-preview-20260526a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=nai-weight-preview-20260526a';
@@ -65,7 +65,10 @@ if (window.loadAliases) {
 document.addEventListener('keydown', (e) => {
     const craftTab = document.getElementById('main-craft-content');
     if (!craftTab || craftTab.classList.contains('hidden')) return;
-    if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
+    const activeElement = document.activeElement;
+    const historyPanel = document.getElementById('craft-history-panel');
+    const isEditableFocus = activeElement?.closest?.('input, textarea, select, [contenteditable="true"], .nai-weight-editor');
+    if (isEditableFocus || !historyPanel || !historyPanel.contains(activeElement)) return;
 
     if (window.TEMP_IMAGES && window.TEMP_IMAGES.length > 0) {
         let currentIndex = window.CRAFT_ACTIVE_INDEX !== null ? window.CRAFT_ACTIVE_INDEX : 0;
@@ -91,6 +94,7 @@ document.addEventListener('keydown', (e) => {
                 window.CRAFT_ACTIVE_INDEX = newIndex;
                 window.renderTempGallery();
                 if (grid && grid.children[window.CRAFT_ACTIVE_INDEX]) {
+                    grid.children[window.CRAFT_ACTIVE_INDEX].focus({ preventScroll: true });
                     grid.children[window.CRAFT_ACTIVE_INDEX].scrollIntoView({ behavior: 'smooth', block: 'nearest' });
                 }
             }
