@@ -1,6 +1,6 @@
 const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
-const MAX_BACKGROUND_IMAGES = 100;
+const QUEUE_SEND_BATCH_SIZE = 100;
 const MAX_ATTEMPTS = 5;
 const NAI_MIN_REQUEST_INTERVAL_MS = 15000;
 const MAX_INLINE_COOLDOWN_MS = 30000;
@@ -122,6 +122,14 @@ function getPlannerImagePrefix(projectPrefix, imageNumber) {
 function parsePositiveInt(value, fallback = 1) {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function chunkArray(items, size) {
+    const chunks = [];
+    for (let i = 0; i < items.length; i += size) {
+        chunks.push(items.slice(i, i + size));
+    }
+    return chunks;
 }
 
 function parseResolution(value) {
@@ -301,9 +309,6 @@ export async function startPlannerBackgroundJob(env, body) {
     const targetItems = collectTargetItems(plannerMeta, targetSituationId);
     targetItems.forEach(assertSupportedBackgroundItem);
     const totalCount = targetItems.reduce((sum, item) => sum + parsePositiveInt(item.count || plannerMeta.defaultCount, 1), 0);
-    if (totalCount > MAX_BACKGROUND_IMAGES) {
-        throw new Error(`Background generation is limited to ${MAX_BACKGROUND_IMAGES} images per job`);
-    }
 
     const jobId = makeId("job");
     const createdAt = nowIso();
@@ -380,7 +385,9 @@ export async function startPlannerBackgroundJob(env, body) {
 
     await env.DB.batch(inserts);
     if (env.GENERATION_QUEUE.sendBatch) {
-        await env.GENERATION_QUEUE.sendBatch(queueMessages);
+        for (const batch of chunkArray(queueMessages, QUEUE_SEND_BATCH_SIZE)) {
+            await env.GENERATION_QUEUE.sendBatch(batch);
+        }
     } else {
         for (const message of queueMessages) {
             await env.GENERATION_QUEUE.send(message.body);
