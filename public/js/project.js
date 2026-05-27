@@ -4430,10 +4430,8 @@ export async function saveCraftPromptToSituation() {
         situation.prompt = {
             ...(situation.prompt || {}),
             composition: fields.composition,
-            expression: fields.expression,
             action: fields.action,
-            background: fields.background,
-            negative: fields.negative
+            background: fields.background
         };
         situation.updatedAt = Date.now();
 
