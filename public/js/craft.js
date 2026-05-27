@@ -35,11 +35,13 @@ export async function initGenerationQueue() {
     try {
         const savedQueue = localStorage.getItem('imggul_gen_queue');
         if (savedQueue) {
-            window.GENERATION_QUEUE = JSON.parse(savedQueue);
+            window.GENERATION_QUEUE = JSON.parse(savedQueue).filter(isPersistableQueueTask);
             if (window.GENERATION_QUEUE.length > 0) {
                 alert(`[안내] 이전에 브라우저 종료로 중단되었던 생성 작업(${window.GENERATION_QUEUE.length}개)을 안전하게 이어받아 백그라운드에서 재개합니다.`);
                 window.IS_GENERATING = true; window.CANCEL_GENERATION = false;
                 window.updateQueueUI(true); window.processNextQueueItem();
+            } else {
+                localStorage.removeItem('imggul_gen_queue');
             }
         }
     } catch (e) { localStorage.removeItem('imggul_gen_queue'); }
@@ -51,7 +53,30 @@ export async function initGenerationQueue() {
  * 주요 변수: GENERATION_QUEUE - 저장할 작업 배열.
  * 반환값: 명시 반환 없음.
  */
-export function saveQueueToStorage() { localStorage.setItem('imggul_gen_queue', JSON.stringify(window.GENERATION_QUEUE)); }
+function isPersistableQueueTask(task) {
+    return !!task
+        && !task.preloadedVibeBase64
+        && !task.preloadedDirectorBase64
+        && !task.inpaintPayload;
+}
+
+function serializeQueueForStorage(queue) {
+    return (Array.isArray(queue) ? queue : []).filter(isPersistableQueueTask);
+}
+
+export function saveQueueToStorage() {
+    const persistableQueue = serializeQueueForStorage(window.GENERATION_QUEUE);
+    try {
+        if (persistableQueue.length === 0) {
+            localStorage.removeItem('imggul_gen_queue');
+            return;
+        }
+        localStorage.setItem('imggul_gen_queue', JSON.stringify(persistableQueue));
+    } catch (error) {
+        console.warn('Generation queue could not be persisted; continuing current in-memory generation.', error);
+        localStorage.removeItem('imggul_gen_queue');
+    }
+}
 
 /**
  * 역할: 진행 중인 NovelAI 생성 큐를 비우고 취소 상태를 UI에 반영한다.
