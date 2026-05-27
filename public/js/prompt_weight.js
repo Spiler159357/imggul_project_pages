@@ -144,11 +144,17 @@ function renderEditor(editor, value, preserveCaret = true) {
     const offset = preserveCaret ? getTextOffset(editor) : null;
     editor.innerHTML = value ? parsePromptSegment(value) : '';
     setTextOffset(editor, offset);
+    resizeEditor(editor);
 }
 
 function syncTextareaFromEditor(textarea, editor) {
     textarea.value = normalizeEditorText(editor);
     textarea.dispatchEvent(new Event('input', { bubbles: true }));
+}
+
+function resizeEditor(editor) {
+    editor.style.height = 'auto';
+    editor.style.height = `${editor.scrollHeight}px`;
 }
 
 function syncEditorFromTextarea(textarea) {
@@ -159,7 +165,10 @@ function syncEditorFromTextarea(textarea) {
     editor.classList.toggle('block', textarea.classList.contains('block'));
 
     const value = textarea.value || '';
-    if (normalizeEditorText(editor) === value) return;
+    if (normalizeEditorText(editor) === value) {
+        resizeEditor(editor);
+        return;
+    }
     renderEditor(editor, value, false);
 }
 
@@ -197,7 +206,12 @@ function createEditor(textarea) {
 
     editor.addEventListener('input', () => {
         syncTextareaFromEditor(textarea, editor);
-        renderEditor(editor, textarea.value || '');
+        resizeEditor(editor);
+    });
+
+    editor.addEventListener('blur', () => {
+        syncTextareaFromEditor(textarea, editor);
+        renderEditor(editor, textarea.value || '', false);
     });
 
     editor.addEventListener('keydown', (event) => {

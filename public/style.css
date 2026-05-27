@@ -88,8 +88,9 @@ body {
     min-width: 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    overflow-y: auto;
+    overflow: hidden;
     outline: none;
+    resize: none;
 }
 
 .nai-weight-editor:empty::before {
