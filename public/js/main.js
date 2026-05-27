@@ -7,7 +7,7 @@ import * as Craft from './craft.js?v=nai-weight-preview-20260526a';
 import * as TempGallery from './temp_gallery.js?v=temp-focus-keys-20260527a';
 import * as Modals from './modals.js';
 import * as Project from './project.js?v=nai-weight-preview-20260526a';
-import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=nai-weight-preview-20260526a';
+import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=temp-focus-keys-20260527a';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals, Project);
@@ -66,9 +66,11 @@ document.addEventListener('keydown', (e) => {
     const craftTab = document.getElementById('main-craft-content');
     if (!craftTab || craftTab.classList.contains('hidden')) return;
     const activeElement = document.activeElement;
+    const eventTarget = e.target instanceof Element ? e.target : null;
     const historyPanel = document.getElementById('craft-history-panel');
     const isEditableFocus = activeElement?.closest?.('input, textarea, select, [contenteditable="true"], .nai-weight-editor');
-    if (isEditableFocus || !historyPanel || !historyPanel.contains(activeElement)) return;
+    const isEditableEvent = eventTarget?.closest?.('input, textarea, select, [contenteditable="true"], .nai-weight-editor');
+    if (isEditableFocus || isEditableEvent || !historyPanel || !historyPanel.contains(activeElement)) return;
 
     if (window.TEMP_IMAGES && window.TEMP_IMAGES.length > 0) {
         let currentIndex = window.CRAFT_ACTIVE_INDEX !== null ? window.CRAFT_ACTIVE_INDEX : 0;

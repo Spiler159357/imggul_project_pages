@@ -15,6 +15,16 @@ const PROMPT_WEIGHT_SELECTOR = [
 
 const EMPHASIS_STEP = 1.05;
 const WEIGHT_RE = /^([+-]?(?:\d+(?:\.\d+)?|\.\d+))::/;
+const EDITOR_NAVIGATION_KEYS = new Set([
+    'ArrowLeft',
+    'ArrowRight',
+    'ArrowUp',
+    'ArrowDown',
+    'Home',
+    'End',
+    'PageUp',
+    'PageDown'
+]);
 
 function escapeHtml(value) {
     return String(value || '')
@@ -191,6 +201,11 @@ function createEditor(textarea) {
     });
 
     editor.addEventListener('keydown', (event) => {
+        if (EDITOR_NAVIGATION_KEYS.has(event.key)) {
+            event.stopPropagation();
+            return;
+        }
+
         if (event.key === 'Enter' && !event.shiftKey && textarea.matches('.prompt-input, #nai-negative')) {
             event.preventDefault();
             syncTextareaFromEditor(textarea, editor);
