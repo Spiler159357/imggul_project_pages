@@ -206,6 +206,13 @@ function clearProjectCaches(...prefixes) {
     });
 }
 
+function clearFolderDataCaches(...prefixes) {
+    if (!window.FOLDER_DATA_CACHE) return;
+    prefixes.forEach(prefix => {
+        if (prefix !== undefined && window.FOLDER_DATA_CACHE[prefix]) delete window.FOLDER_DATA_CACHE[prefix];
+    });
+}
+
 function normalizeProjectFolderName(value) {
     return value.trim().replace(/^\/+|\/+$/g, '');
 }
@@ -235,6 +242,7 @@ function getPlannerSettingsKey(project) {
 }
 
 const DEFAULT_PLANNER_RESOLUTION = '832x1216';
+const PLANNER_CHARACTER_CACHE_KEY = 'imggul_planner_selected_characters';
 
 const DEFAULT_PLANNER_SETTINGS = {
     model: 'nai-diffusion-4-5-full',
@@ -336,6 +344,33 @@ function normalizePlannerMeta(meta) {
     if (!meta || typeof meta !== 'object') return meta;
     if (Array.isArray(meta.items)) meta.items = sortPlannerItems(meta.items);
     return meta;
+}
+
+function readPlannerCharacterCache() {
+    try {
+        return JSON.parse(localStorage.getItem(PLANNER_CHARACTER_CACHE_KEY) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function getCachedPlannerCharacterId(project) {
+    return project?.id ? readPlannerCharacterCache()[project.id] || '' : '';
+}
+
+function setCachedPlannerCharacterId(project, characterId) {
+    if (!project?.id || !characterId) return;
+    const cache = readPlannerCharacterCache();
+    cache[project.id] = characterId;
+    try {
+        localStorage.setItem(PLANNER_CHARACTER_CACHE_KEY, JSON.stringify(cache));
+    } catch {}
+}
+
+export function cachePlannerCharacterSelection() {
+    const project = getActiveProject();
+    const characterId = document.getElementById('planner-character-select')?.value || '';
+    setCachedPlannerCharacterId(project, characterId);
 }
 
 function isImageFile(file) {
@@ -3094,7 +3129,10 @@ function renderPlannerProgressPanel(meta) {
 function renderPlannerPanel(project, situations) {
     const characters = getProjectItems(project, 'characters');
     const meta = window.PROJECT_PLANNER_META || null;
-    const activeCharacter = characters.find(character => character.id === meta?.characterId || character.prefix === meta?.characterId) || characters[0];
+    const activeCharacter = getCharacterById(project, meta?.characterId)
+        || getCharacterById(project, meta?.characterPrefix)
+        || getCharacterById(project, getCachedPlannerCharacterId(project))
+        || characters[0];
     const activeCharacterName = activeCharacter ? (activeCharacter.name || activeCharacter.alias || activeCharacter.folderName || activeCharacter.id) : '선택된 캐릭터 없음';
     const selectedSituationId = meta?.lastSituationId || situations[0]?.id || '';
     const view = window.PROJECT_PLANNER_VIEW || 'plan';
@@ -3143,7 +3181,7 @@ function renderPlannerPanel(project, situations) {
         <div class="grid grid-cols-1 sm:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_5rem] gap-2 mb-3">
             <label class="block min-w-0">
                 <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">캐릭터</span>
-                <select id="planner-character-select" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
+                <select id="planner-character-select" onchange="window.cachePlannerCharacterSelection()" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
                     ${characters.map(character => `<option value="${escapeHtml(character.id)}" ${activeCharacter?.id === character.id ? 'selected' : ''}>${escapeHtml(character.name || character.folderName)}</option>`).join('')}
                 </select>
             </label>
@@ -3485,6 +3523,7 @@ export async function addPlannerDraftItem() {
     ]);
 
     const characterId = document.getElementById('planner-character-select')?.value || getProjectItems(project, 'characters')[0]?.id || '';
+    setCachedPlannerCharacterId(project, characterId);
     const character = getCharacterById(project, characterId);
     if (!character) {
         setPlannerStatus('먼저 캐릭터를 선택하세요.');
@@ -3632,7 +3671,7 @@ export async function deletePlannerItem(situationId) {
         await deletePlannerMeta(project);
         window.PROJECT_PLANNER_META = null;
     }
-    clearProjectCaches(getPlannerPrefix(project));
+    clearFolderDataCaches(getPlannerPrefix(project));
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
@@ -4005,6 +4044,7 @@ export async function confirmPlannerSelection(situationId = null) {
     const confirmButton = document.getElementById('planner-result-confirm-button');
     if (confirmButton) confirmButton.disabled = true;
 
+    await loadProjectCharacters(project).catch(() => []);
     const character = getCharacterById(project, meta.characterId) || getCharacterById(project, meta.characterPrefix);
     if (!character) {
         setPlannerStatus('플래너 캐릭터를 찾을 수 없습니다.');
@@ -4074,7 +4114,7 @@ export async function confirmPlannerSelection(situationId = null) {
         body: JSON.stringify({ action: 'delete_folder', key: getPlannerImagePrefix(project, item.imageNumber) })
     }).catch(() => null)));
 
-    clearProjectCaches(project.prefix, character.prefix, getPlannerPrefix(project));
+    clearFolderDataCaches(project.prefix, character.prefix, getPlannerPrefix(project));
     character.filesLoaded = false;
     await loadCharacterFiles(character, true).catch(() => []);
     renderPlannerResultOverlay();

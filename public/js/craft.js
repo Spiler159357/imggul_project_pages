@@ -1,5 +1,6 @@
 // 5. craft.js: 이미지 생성 큐, 설정 로직
 const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
+const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
 
 function isCraftVisibleProjectChildFolder(folderPrefix) {
     const folderName = String(folderPrefix || '').split('/').filter(Boolean).pop();
@@ -25,6 +26,52 @@ function getCraftSituationDisplayName(situation, index) {
     const name = situation?.alias || situation?.name || situation?.id || `상황 ${imageNumber}`;
     return `${imageNumber} - ${name}`;
 }
+
+function normalizeCraftPath(path) {
+    return path && !path.endsWith('/') ? `${path}/` : (path || '');
+}
+
+function readCraftUploadContextCache() {
+    try {
+        return JSON.parse(localStorage.getItem(CRAFT_UPLOAD_CONTEXT_STORAGE_KEY) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function writeCraftUploadContextCache(cache) {
+    try {
+        localStorage.setItem(CRAFT_UPLOAD_CONTEXT_STORAGE_KEY, JSON.stringify(cache || {}));
+    } catch {}
+}
+
+function getCachedCraftProjectContext(projectPath) {
+    const cache = readCraftUploadContextCache();
+    return cache.byProject?.[normalizeCraftPath(projectPath)] || {};
+}
+
+function cacheCraftUploadSelection({ projectPath, characterPath, situationId } = {}) {
+    const normalizedProject = normalizeCraftPath(projectPath);
+    if (!normalizedProject) return;
+    const cache = readCraftUploadContextCache();
+    cache.projectPath = normalizedProject;
+    cache.byProject = cache.byProject || {};
+    cache.byProject[normalizedProject] = {
+        ...(cache.byProject[normalizedProject] || {}),
+        characterPath: normalizeCraftPath(characterPath),
+        situationId: situationId || ''
+    };
+    writeCraftUploadContextCache(cache);
+}
+
+export function saveCraftUploadSelectionFromDom() {
+    cacheCraftUploadSelection({
+        projectPath: document.getElementById('craft-project-select')?.value || '',
+        characterPath: document.getElementById('craft-char-select')?.value || '',
+        situationId: document.getElementById('craft-situation-select')?.value || ''
+    });
+}
+
 /**
  * 역할: localStorage에 남아 있는 생성 큐를 복원하고 중단된 생성 작업을 재개한다.
  * 매개변수: 없음.
@@ -356,7 +403,8 @@ export async function updateCraftFolderList() {
             optionsHtml += `<option value="${proj}">${displayText}</option>`;
         }
         projSelect.innerHTML = optionsHtml;
-        if (prevProj && projSelect.querySelector(`option[value="${prevProj}"]`)) { projSelect.value = prevProj; await window.onCraftProjectChange(); }
+        const effectivePrevProj = prevProj || readCraftUploadContextCache().projectPath || '';
+        if (effectivePrevProj && projSelect.querySelector(`option[value="${effectivePrevProj}"]`)) { projSelect.value = effectivePrevProj; await window.onCraftProjectChange(); }
     } catch (e) { projSelect.innerHTML = '<option value="">목록 로드 실패</option>'; }
 }
 
@@ -373,6 +421,8 @@ export async function onCraftProjectChange() {
     if (!projSelect || !charSelect) return;
 
     const proj = projSelect.value;
+    const cachedContext = getCachedCraftProjectContext(proj);
+    if (proj) cacheCraftUploadSelection({ projectPath: proj, characterPath: cachedContext.characterPath || '', situationId: cachedContext.situationId || '' });
     charSelect.innerHTML = '<option value="">캐릭터 선택</option>';
     if (situationSelect) situationSelect.innerHTML = '<option value="">상황 선택</option>';
 
@@ -413,6 +463,9 @@ export async function onCraftProjectChange() {
             optionsHtml += `<option value="${charF}">${displayText}</option>`;
         }
         charSelect.innerHTML = optionsHtml;
+        if (cachedContext.characterPath && charSelect.querySelector(`option[value="${cachedContext.characterPath}"]`)) {
+            charSelect.value = cachedContext.characterPath;
+        }
 
         if (situationSelect) {
             let situationOptionsHtml = '<option value="">상황 선택</option>';
@@ -422,7 +475,11 @@ export async function onCraftProjectChange() {
             });
             situationSelect.innerHTML = situationOptionsHtml;
             situationSelect.disabled = situations.length === 0;
+            if (cachedContext.situationId && situationSelect.querySelector(`option[value="${cachedContext.situationId}"]`)) {
+                situationSelect.value = cachedContext.situationId;
+            }
         }
+        saveCraftUploadSelectionFromDom();
     } catch (e) {
         charSelect.innerHTML = '<option value="">로드 실패</option>';
         if (situationSelect) situationSelect.innerHTML = '<option value="">로드 실패</option>';

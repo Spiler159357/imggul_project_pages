@@ -121,6 +121,8 @@ document.querySelectorAll('.prompt-input, #nai-negative').forEach(textarea => {
 });
 
 document.getElementById('prompt-toggle-simple')?.addEventListener('change', window.togglePromptMode);
+document.getElementById('craft-char-select')?.addEventListener('change', window.saveCraftUploadSelectionFromDom);
+document.getElementById('craft-situation-select')?.addEventListener('change', window.saveCraftUploadSelectionFromDom);
 
 /**
  * 역할: 생성 설정 input 목록에 설정 저장 이벤트를 일괄 등록한다.
