@@ -4331,11 +4331,12 @@ function renderSituationCharacterProgress(project, situation, state = {}) {
 
 function renderSituationV4PromptRow(row = {}, index = 0) {
     const rowId = index;
+    const label = Number.isFinite(Number(index)) && Number(index) < 1000 ? Number(index) + 1 : '새 항목';
     const inputClass = 'w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
     return `
         <div data-situation-v4-row="${rowId}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-900/40 p-2">
             <div class="flex items-center justify-between gap-2 mb-2">
-                <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 캐릭터 ${index + 1}</span>
+                <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 캐릭터 ${escapeHtml(label)}</span>
                 <button type="button" onclick="window.removeSituationV4PromptRow('${rowId}')" class="p-1 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="V4 캐릭터 삭제">
                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                 </button>
@@ -4395,7 +4396,9 @@ export function addSituationV4PromptRow() {
 }
 
 export function removeSituationV4PromptRow(rowId) {
-    document.querySelector(`[data-situation-v4-row="${CSS.escape(String(rowId))}"]`)?.remove();
+    document.querySelectorAll('[data-situation-v4-row]').forEach(row => {
+        if (row.getAttribute('data-situation-v4-row') === String(rowId)) row.remove();
+    });
 }
 
 function renderSituationDetailShell(project, situation, state = {}) {
