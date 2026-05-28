@@ -234,6 +234,8 @@ function getPlannerSettingsKey(project) {
     return `${getPlannerPrefix(project)}_planner_settings.json`;
 }
 
+const DEFAULT_PLANNER_RESOLUTION = '832x1216';
+
 const DEFAULT_PLANNER_SETTINGS = {
     model: 'nai-diffusion-4-5-full',
     steps: '28',
@@ -292,6 +294,48 @@ function getFileBaseName(fileName) {
 
 function getFileExtension(fileName) {
     return String(fileName || '').split('.').pop().toLowerCase();
+}
+
+function normalizePlannerV4PromptRows(rows = []) {
+    return Array.isArray(rows)
+        ? rows.map(row => ({
+            subject: String(row?.subject || '').trim(),
+            clothing: String(row?.clothing || '').trim(),
+            expression: String(row?.expression || '').trim(),
+            action: String(row?.action || '').trim(),
+            negative: String(row?.negative || '').trim()
+        })).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean))
+        : [];
+}
+
+function getSituationGeneration(situation = {}) {
+    const generation = situation.generation || {};
+    const v4PromptCharacters = normalizePlannerV4PromptRows(
+        generation.v4PromptCharacters || generation.v4_prompt || situation.v4PromptCharacters || situation.v4_prompt || []
+    );
+    return {
+        res: generation.res || situation.resolution || situation.res || DEFAULT_PLANNER_RESOLUTION,
+        v4PromptCharacters,
+        v4_prompt: v4PromptCharacters
+    };
+}
+
+function sortPlannerItems(items = []) {
+    return [...items].sort((a, b) => {
+        const aIndex = Number.isFinite(Number(a?.situationIndex)) ? Number(a.situationIndex) : Number.MAX_SAFE_INTEGER;
+        const bIndex = Number.isFinite(Number(b?.situationIndex)) ? Number(b.situationIndex) : Number.MAX_SAFE_INTEGER;
+        if (aIndex !== bIndex) return aIndex - bIndex;
+        const aNumber = Number.isFinite(Number(a?.imageNumber)) ? Number(a.imageNumber) : Number.MAX_SAFE_INTEGER;
+        const bNumber = Number.isFinite(Number(b?.imageNumber)) ? Number(b.imageNumber) : Number.MAX_SAFE_INTEGER;
+        if (aNumber !== bNumber) return aNumber - bNumber;
+        return String(a?.situationId || '').localeCompare(String(b?.situationId || ''));
+    });
+}
+
+function normalizePlannerMeta(meta) {
+    if (!meta || typeof meta !== 'object') return meta;
+    if (Array.isArray(meta.items)) meta.items = sortPlannerItems(meta.items);
+    return meta;
 }
 
 function isImageFile(file) {
@@ -452,6 +496,7 @@ function normalizeProjectSituations(situations) {
         const id = situation?.id || situation?.folderName || `situation-${index + 1}`;
         const alias = situation?.alias || '';
         const name = situation?.name || alias || id;
+        const generation = getSituationGeneration(situation);
         return {
             ...situation,
             id,
@@ -466,6 +511,10 @@ function normalizeProjectSituations(situations) {
                 background: situation?.prompt?.background || situation?.background || '',
                 negative: situation?.prompt?.negative || situation?.negative || ''
             },
+            generation,
+            resolution: generation.res,
+            v4PromptCharacters: generation.v4PromptCharacters,
+            v4_prompt: generation.v4PromptCharacters,
             createdAt: situation?.createdAt || Date.now()
         };
     });
@@ -2293,6 +2342,14 @@ async function createSituation(project, situationId, alias) {
             background: '',
             negative: ''
         },
+        generation: {
+            res: DEFAULT_PLANNER_RESOLUTION,
+            v4PromptCharacters: [],
+            v4_prompt: []
+        },
+        resolution: DEFAULT_PLANNER_RESOLUTION,
+        v4PromptCharacters: [],
+        v4_prompt: [],
         createdAt: Date.now()
     };
 
@@ -2350,11 +2407,12 @@ async function loadPlannerMeta(project) {
     const res = await fetch(`${getAssetUrl(getPlannerMetaKey(project))}?_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error('플래너 메타데이터를 불러오지 못했습니다.');
-    return await res.json();
+    return normalizePlannerMeta(await res.json());
 }
 
 async function savePlannerMeta(project, meta) {
     const key = getPlannerMetaKey(project);
+    const normalized = normalizePlannerMeta(meta || {});
     const res = await fetch('/api/upload?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
@@ -2362,13 +2420,22 @@ async function savePlannerMeta(project, meta) {
             'X-File-Name': encodeURIComponent('_planner_meta.json'),
             'X-Absolute-Path': encodeURIComponent(key)
         },
-        body: new Blob([JSON.stringify(meta || {}, null, 2)], { type: 'application/json; charset=utf-8' }),
+        body: new Blob([JSON.stringify(normalized, null, 2)], { type: 'application/json; charset=utf-8' }),
         cache: 'no-store'
     });
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || '플래너 메타데이터 저장에 실패했습니다.');
     }
+}
+
+async function deletePlannerMeta(project) {
+    if (!project?.prefix) return;
+    await fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete', key: getPlannerMetaKey(project) })
+    }).catch(() => null);
 }
 
 function getPlannerImagePrefix(project, imageNumber) {
@@ -2537,7 +2604,8 @@ function readPlannerEditsFromDom(meta) {
         Object.entries(generationInputs).forEach(([key, value]) => {
             if (value !== undefined) item.generation[key] = value;
         });
-        item.generation.v4PromptCharacters = readPlannerV4PromptRows(item.imageNumber);
+        item.generation.v4PromptCharacters = normalizePlannerV4PromptRows(readPlannerV4PromptRows(item.imageNumber));
+        item.generation.v4_prompt = item.generation.v4PromptCharacters;
         item.generation.batchCount = String(item.count);
         item.generation.negative = fields.negative;
         item.generation.prompts = {
@@ -2555,6 +2623,35 @@ function readPlannerEditsFromDom(meta) {
     });
     meta.updatedAt = Date.now();
     return meta;
+}
+
+async function persistPlannerGenerationToSituations(project, meta) {
+    if (!project || !Array.isArray(meta?.items) || !meta.items.length) return;
+    await loadProjectSituations(project, true).catch(() => []);
+    let changed = false;
+    meta.items.forEach(item => {
+        const situation = getSituationById(project, item.situationId);
+        if (!situation) return;
+        const nextGeneration = {
+            ...getSituationGeneration(situation),
+            res: item.generation?.res || getSituationGeneration(situation).res,
+            v4PromptCharacters: normalizePlannerV4PromptRows(item.generation?.v4PromptCharacters || [])
+        };
+        nextGeneration.v4_prompt = nextGeneration.v4PromptCharacters;
+        const currentGeneration = getSituationGeneration(situation);
+        if (
+            currentGeneration.res !== nextGeneration.res ||
+            JSON.stringify(currentGeneration.v4PromptCharacters) !== JSON.stringify(nextGeneration.v4PromptCharacters)
+        ) {
+            situation.generation = nextGeneration;
+            situation.resolution = nextGeneration.res;
+            situation.v4PromptCharacters = nextGeneration.v4PromptCharacters;
+            situation.v4_prompt = nextGeneration.v4PromptCharacters;
+            situation.updatedAt = Date.now();
+            changed = true;
+        }
+    });
+    if (changed) await saveProjectSituations(project);
 }
 
 async function listPlannerImages(project, imageNumber) {
@@ -2604,7 +2701,16 @@ function renderPlannerCheckbox(id, label, checked) {
 }
 
 function getPlannerV4PromptRows(item) {
-    return Array.isArray(item?.generation?.v4PromptCharacters) ? item.generation.v4PromptCharacters : [];
+    const rows = item?.generation?.v4PromptCharacters || [];
+    return Array.isArray(rows)
+        ? rows.map(row => ({
+            subject: String(row?.subject || ''),
+            clothing: String(row?.clothing || ''),
+            expression: String(row?.expression || ''),
+            action: String(row?.action || ''),
+            negative: String(row?.negative || '')
+        }))
+        : [];
 }
 
 function readPlannerV4PromptRows(imageNumber) {
@@ -3352,6 +3458,7 @@ export async function addPlannerV4Prompt(imageNumber) {
         ...(item.generation.v4PromptCharacters || []),
         { subject: '', clothing: '', expression: '', action: '', negative: '' }
     ];
+    item.generation.v4_prompt = item.generation.v4PromptCharacters;
     window.PROJECT_PLANNER_META = meta;
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
@@ -3364,6 +3471,7 @@ export async function removePlannerV4Prompt(imageNumber, index) {
     const item = meta.items.find(entry => String(entry.imageNumber) === String(imageNumber));
     if (!item) return;
     item.generation.v4PromptCharacters = (item.generation.v4PromptCharacters || []).filter((_, rowIndex) => rowIndex !== index);
+    item.generation.v4_prompt = item.generation.v4PromptCharacters;
     window.PROJECT_PLANNER_META = meta;
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
@@ -3398,6 +3506,7 @@ export async function addPlannerDraftItem() {
     const stylePrompt = projectStyle || currentSettings.prompts?.['prompt-style'] || '';
 
     const prompt = getSituationPrompt(situation);
+    const situationGeneration = getSituationGeneration(situation);
     const expressionPrompt = combinePromptParts(characterMeta.parts?.expression, prompt.expression) || currentSettings.prompts?.['prompt-expression'] || '';
     const negativePrompt = combinePromptParts(characterMeta.parts?.negative, prompt.negative) || currentSettings.negative || '';
     const imageNumber = getSituationImageNumber(project, situation);
@@ -3414,6 +3523,7 @@ export async function addPlannerDraftItem() {
     const generation = applyPlannerSettingsToGeneration({
         ...currentSettings,
         simpleMode: false,
+        res: situationGeneration.res || currentSettings.res || DEFAULT_PLANNER_RESOLUTION,
         batchCount: String(defaultCount),
         negative: fields.negative,
         prompts: {
@@ -3427,8 +3537,12 @@ export async function addPlannerDraftItem() {
             'prompt-background': fields.background,
             'prompt-raw': ''
         },
-        fields
+        fields,
+        v4PromptCharacters: situationGeneration.v4PromptCharacters
     }, plannerSettings);
+    generation.res = situationGeneration.res || generation.res || DEFAULT_PLANNER_RESOLUTION;
+    generation.v4PromptCharacters = normalizePlannerV4PromptRows(situationGeneration.v4PromptCharacters);
+    generation.v4_prompt = generation.v4PromptCharacters;
 
     let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!meta || meta.characterId !== character.id) {
@@ -3459,6 +3573,7 @@ export async function addPlannerDraftItem() {
 
     if (existingIndex >= 0) meta.items[existingIndex] = item;
     else meta.items.push(item);
+    meta.items = sortPlannerItems(meta.items);
     meta.defaultCount = defaultCount;
     meta.lastSituationId = situation.id;
     meta.updatedAt = Date.now();
@@ -3478,6 +3593,7 @@ export async function savePlannerDraft() {
 
     meta = readPlannerEditsFromDom(meta);
     meta.status = 'draft';
+    await persistPlannerGenerationToSituations(project, meta);
     await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
     setPlannerStatus('플랜이 저장되었습니다.');
@@ -3513,13 +3629,12 @@ export async function deletePlannerItem(situationId) {
         await savePlannerMeta(project, meta);
         window.PROJECT_PLANNER_META = meta;
     } else {
-        await fetch('/api/manage', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'delete_folder', key: getPlannerPrefix(project) })
-        }).catch(() => null);
+        await deletePlannerMeta(project);
         window.PROJECT_PLANNER_META = null;
     }
+    clearProjectCaches(getPlannerPrefix(project));
+    renderPlannerResultOverlay();
+    renderPlannerPreviewOverlay();
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
 }
 
@@ -3698,6 +3813,7 @@ async function startPlannerBackgroundGeneration(situationId = null) {
     }
 
     meta = readPlannerEditsFromDom(meta);
+    await persistPlannerGenerationToSituations(project, meta).catch(() => null);
     const targetItems = situationId
         ? meta.items.filter(item => item.situationId === situationId)
         : meta.items;
@@ -3779,6 +3895,7 @@ export async function startPlannerGeneration(situationId = null) {
     }
 
     meta = readPlannerEditsFromDom(meta);
+    await persistPlannerGenerationToSituations(project, meta).catch(() => null);
     const targetItems = situationId
         ? meta.items.filter(item => item.situationId === situationId)
         : meta.items;
@@ -3885,10 +4002,13 @@ export async function confirmPlannerSelection(situationId = null) {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!project || !meta?.items?.length) return;
+    const confirmButton = document.getElementById('planner-result-confirm-button');
+    if (confirmButton) confirmButton.disabled = true;
 
     const character = getCharacterById(project, meta.characterId) || getCharacterById(project, meta.characterPrefix);
     if (!character) {
         setPlannerStatus('플래너 캐릭터를 찾을 수 없습니다.');
+        if (confirmButton) confirmButton.disabled = false;
         return;
     }
 
@@ -3897,9 +4017,11 @@ export async function confirmPlannerSelection(situationId = null) {
     );
     if (!selectedItems.length) {
         setPlannerStatus('확정 전에 상황별 이미지를 하나 이상 선택하세요.');
+        if (confirmButton) confirmButton.disabled = false;
         return;
     }
 
+    try {
     for (const item of selectedItems) {
         const newKey = `${character.prefix}${item.imageNumber}.webp`;
         const imageRes = await fetch(getAssetUrl(item.selectedImage), { cache: 'no-store' });
@@ -3931,37 +4053,37 @@ export async function confirmPlannerSelection(situationId = null) {
         item.status = 'confirmed';
     }
 
+    const selectedIds = new Set(selectedItems.map(item => item.situationId));
+    meta.items = meta.items.filter(item => !selectedIds.has(item.situationId));
+    meta.status = meta.items.length ? 'draft' : 'confirmed';
+    meta.updatedAt = Date.now();
+    window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+    window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    if (meta.items.length) {
+        await savePlannerMeta(project, meta);
+        window.PROJECT_PLANNER_META = meta;
+        setPlannerStatus(`${selectedItems.length}개 플랜을 확정했습니다. 선택하지 않은 플랜은 남아 있습니다.`);
+    } else {
+        await deletePlannerMeta(project);
+        window.PROJECT_PLANNER_META = null;
+        setPlannerStatus('선택한 플랜이 모두 확정되었습니다.');
+    }
     await Promise.all(selectedItems.map(item => fetch('/api/manage', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'delete_folder', key: getPlannerImagePrefix(project, item.imageNumber) })
     }).catch(() => null)));
 
-    const selectedIds = new Set(selectedItems.map(item => item.situationId));
-    meta.items = meta.items.filter(item => !selectedIds.has(item.situationId));
-    meta.status = meta.items.length ? 'draft' : 'confirmed';
-    meta.updatedAt = Date.now();
-    if (situationId) {
-        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-        window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    }
-    if (meta.items.length) {
-        await savePlannerMeta(project, meta);
-        window.PROJECT_PLANNER_META = meta;
-        setPlannerStatus(`${selectedItems.length}개 플랜을 확정했습니다. 선택하지 않은 플랜은 남아 있습니다.`);
-    } else {
-        await fetch('/api/manage', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'delete_folder', key: getPlannerPrefix(project) })
-        }).catch(() => null);
-        window.PROJECT_PLANNER_META = null;
-        setPlannerStatus('선택한 플랜이 모두 확정되었습니다.');
-    }
     clearProjectCaches(project.prefix, character.prefix, getPlannerPrefix(project));
     character.filesLoaded = false;
     await loadCharacterFiles(character, true).catch(() => []);
+    renderPlannerResultOverlay();
+    renderPlannerPreviewOverlay();
     renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    } catch (err) {
+        setPlannerStatus(err.message || '플랜 확정에 실패했습니다.');
+        if (confirmButton) confirmButton.disabled = false;
+    }
 }
 
 function getSituationPromptIndicator(situation) {

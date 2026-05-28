@@ -691,8 +691,15 @@ export async function syncPlannerMetaToR2(env, jobId) {
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
     if (!job?.planner_meta_json) return;
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
-    const meta = JSON.parse(job.planner_meta_json);
+    const metaKey = getPlannerMetaKey(job.project_prefix);
+    const storedMeta = await readJsonObject(env.imgBucket, metaKey, null);
+    if (!storedMeta || typeof storedMeta !== "object") return;
+    const meta = storedMeta;
     const bySituation = new Map(items.map(item => [item.situation_id, item]));
+    const currentIds = new Set(Array.isArray(meta.items) ? meta.items.map(item => item.situationId) : []);
+    const snapshotTargetIds = new Set(items.map(item => item.situation_id));
+    const hasCurrentTarget = [...snapshotTargetIds].some(id => currentIds.has(id));
+    if (!hasCurrentTarget) return;
 
     meta.status = job.status;
     meta.stage = job.stage || "";
@@ -701,6 +708,10 @@ export async function syncPlannerMetaToR2(env, jobId) {
     meta.updatedAt = Date.now();
     if (["completed", "failed", "partial_failed", "cancelled"].includes(job.status)) {
         delete meta.runningSituationIds;
+    } else {
+        meta.runningSituationIds = Array.isArray(meta.runningSituationIds)
+            ? meta.runningSituationIds.filter(id => currentIds.has(id))
+            : [...snapshotTargetIds].filter(id => currentIds.has(id));
     }
     meta.items = (meta.items || []).map(item => {
         const row = bySituation.get(item.situationId);
@@ -719,7 +730,7 @@ export async function syncPlannerMetaToR2(env, jobId) {
         };
     });
 
-    await putJsonObject(env.imgBucket, getPlannerMetaKey(job.project_prefix), meta);
+    await putJsonObject(env.imgBucket, metaKey, meta);
 }
 
 async function markItemFailure(env, item, errorMessage) {
