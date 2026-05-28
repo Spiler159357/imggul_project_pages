@@ -2073,7 +2073,9 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
     if (situationSelect && selectedSituation) situationSelect.value = selectedSituation.id || selectedSituation.folderName || '';
 }
 
-function applyCraftPromptValues(promptValues = {}, negativePromptValue = '') {
+export function applyCraftPromptValues(promptValues = {}, negativePromptValue = '', options = {}) {
+    const clearMissing = options.clearMissing !== false;
+    const applyNegative = options.applyNegative !== false;
     const resizePromptInput = (id) => {
         const el = document.getElementById(id);
         if (!el) return;
@@ -2088,20 +2090,21 @@ function applyCraftPromptValues(promptValues = {}, negativePromptValue = '') {
     }
 
     const rawPrompt = document.getElementById('prompt-raw');
-    if (rawPrompt) {
-        rawPrompt.value = '';
+    if (rawPrompt && (clearMissing || Object.prototype.hasOwnProperty.call(promptValues, 'prompt-raw'))) {
+        rawPrompt.value = promptValues['prompt-raw'] || '';
         resizePromptInput('prompt-raw');
     }
 
     window.PROMPT_IDS.forEach(id => {
         const el = document.getElementById(id);
         if (!el) return;
+        if (!clearMissing && !Object.prototype.hasOwnProperty.call(promptValues, id)) return;
         el.value = promptValues[id] || '';
         resizePromptInput(id);
     });
 
     const negativePrompt = document.getElementById('nai-negative');
-    if (negativePrompt) {
+    if (negativePrompt && applyNegative) {
         negativePrompt.value = negativePromptValue || '';
         resizePromptInput('nai-negative');
     }
@@ -4069,11 +4072,15 @@ function buildPlannerMetadataFallback(item) {
     };
     if (Array.isArray(generation.v4PromptCharacters) && generation.v4PromptCharacters.length) {
         metadata['Extra Characters'] = generation.v4PromptCharacters
-            .map(row => [row.subject, row.clothing, row.expression, row.action].filter(Boolean).join(', '))
-            .filter(Boolean);
+            .map(row => ({
+                subject: row.subject || '',
+                clothing: row.clothing || '',
+                expression: row.expression || '',
+                action: row.action || ''
+            }))
+            .filter(row => row.subject || row.clothing || row.expression || row.action);
         metadata['Negative Extra Characters'] = generation.v4PromptCharacters
             .map(row => row.negative || '')
-            .filter(Boolean);
     }
     Object.keys(metadata).forEach(key => {
         if (
@@ -4682,6 +4689,11 @@ export async function saveCraftPromptToProjectStyle() {
 }
 
 export async function loadCraftPromptFromSelection() {
+    if (window.openImportModal) {
+        await window.openImportModal();
+        return;
+    }
+
     setCraftPromptSaveStatus('불러오는 중...');
 
     try {

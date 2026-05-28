@@ -72,6 +72,72 @@ window.downloadModalImage = async function() {
     }
 };
 
+function normalizeImportedV4PromptRows(meta) {
+    const extraCharacters = Array.isArray(meta?.['Extra Characters']) ? meta['Extra Characters'] : [];
+    const negativeExtraCharacters = Array.isArray(meta?.['Negative Extra Characters']) ? meta['Negative Extra Characters'] : [];
+
+    return extraCharacters.map((entry, idx) => {
+        if (entry && typeof entry === 'object') {
+            return {
+                subject: entry.subject || entry.char_caption || entry.prompt || '',
+                clothing: entry.clothing || '',
+                expression: entry.expression || '',
+                action: entry.action || '',
+                negative: entry.negative || negativeExtraCharacters[idx] || ''
+            };
+        }
+
+        return {
+            subject: entry || '',
+            clothing: '',
+            expression: '',
+            action: '',
+            negative: negativeExtraCharacters[idx] || ''
+        };
+    });
+}
+
+function applyImportedMetadataToCraft(meta, options = {}) {
+    const {
+        optStyle = true,
+        optComp = true,
+        optChar = true,
+        optCloth = true,
+        optExp = true,
+        optAct = true,
+        optBg = true,
+        optNegative = true
+    } = options;
+
+    const promptValues = {};
+    const anyPromptOption = optStyle || optComp || optChar || optCloth || optExp || optAct || optBg;
+
+    if (meta['Split Prompts']) {
+        const sp = meta['Split Prompts'];
+        if (optStyle && sp.style !== undefined) promptValues['prompt-style'] = sp.style;
+        if (optComp && sp.composition !== undefined) promptValues['prompt-composition'] = sp.composition;
+        if (optChar && sp.character !== undefined) promptValues['prompt-character'] = sp.character;
+        if (optCloth && sp.clothing !== undefined) promptValues['prompt-clothing'] = sp.clothing;
+        if (optExp && sp.expression !== undefined) promptValues['prompt-expression'] = sp.expression;
+        if (optAct && sp.action !== undefined) promptValues['prompt-action'] = sp.action;
+        if (optBg && sp.background !== undefined) promptValues['prompt-background'] = sp.background;
+        if (anyPromptOption && sp.raw !== undefined) promptValues['prompt-raw'] = sp.raw;
+    } else if (anyPromptOption && meta['Prompt']) {
+        promptValues['prompt-raw'] = meta['Prompt'];
+    }
+
+    if (window.applyCraftPromptValues) {
+        window.applyCraftPromptValues(promptValues, meta['Negative Prompt'] || '', {
+            clearMissing: false,
+            applyNegative: optNegative
+        });
+    }
+
+    if (optChar && window.setCraftV4PromptRows) {
+        window.setCraftV4PromptRows(normalizeImportedV4PromptRows(meta));
+    }
+}
+
 /**
  * 역할: 선택 이미지의 저장된 메타데이터를 읽어 Craft 입력 폼과 생성 설정에 반영한다.
  * 매개변수: fileKey - 메타데이터를 가져올 이미지 경로.
@@ -110,6 +176,9 @@ window.importMetadata = async function(fileKey) {
         const optSettings = document.getElementById('import-opt-settings')?.checked ?? false;
         const optSeed = document.getElementById('import-opt-seed')?.checked ?? false;
 
+        if (window.applyCraftPromptValues) {
+            applyImportedMetadataToCraft(meta, { optStyle, optComp, optChar, optCloth, optExp, optAct, optBg, optNegative });
+        } else {
         const toggle = document.getElementById('prompt-toggle-simple');
 
         if (meta['Split Prompts']) {
@@ -170,6 +239,7 @@ window.importMetadata = async function(fileKey) {
         if (optNegative && meta['Negative Prompt'] !== undefined) {
             const el = document.getElementById('nai-negative');
             if (el) { el.value = meta['Negative Prompt']; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+        }
         }
 
         if (optRes && meta['Resolution']) {
