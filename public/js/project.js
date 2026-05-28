@@ -2055,42 +2055,8 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
         'prompt-action': situationPrompt.action || '',
         'prompt-background': situationPrompt.background || ''
     };
-    const resizePromptInput = (id) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.style.height = 'auto';
-        el.style.height = el.scrollHeight + 'px';
-    };
-
     window.switchTab('craft');
-
-    const simpleToggle = document.getElementById('prompt-toggle-simple');
-    if (simpleToggle) {
-        simpleToggle.checked = false;
-        if (window.togglePromptMode) window.togglePromptMode();
-    }
-
-    const rawPrompt = document.getElementById('prompt-raw');
-    if (rawPrompt) {
-        rawPrompt.value = '';
-        resizePromptInput('prompt-raw');
-    }
-
-    Object.entries(promptValues).forEach(([id, value]) => {
-        const el = document.getElementById(id);
-        if (!el) return;
-        el.value = value || '';
-        resizePromptInput(id);
-    });
-
-    const negativePrompt = document.getElementById('nai-negative');
-    if (negativePrompt) {
-        negativePrompt.value = combinedNegativePrompt;
-        resizePromptInput('nai-negative');
-    }
-
-    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
-    if (window.saveCraftSettings) window.saveCraftSettings();
+    applyCraftPromptValues(promptValues, combinedNegativePrompt);
 
     if (window.updateCraftFolderList) await window.updateCraftFolderList();
     const projectSelect = document.getElementById('craft-project-select');
@@ -2104,6 +2070,43 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
 
     const situationSelect = document.getElementById('craft-situation-select');
     if (situationSelect && selectedSituation) situationSelect.value = selectedSituation.id || selectedSituation.folderName || '';
+}
+
+function applyCraftPromptValues(promptValues = {}, negativePromptValue = '') {
+    const resizePromptInput = (id) => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.style.height = 'auto';
+        el.style.height = el.scrollHeight + 'px';
+    };
+
+    const simpleToggle = document.getElementById('prompt-toggle-simple');
+    if (simpleToggle) {
+        simpleToggle.checked = false;
+        if (window.togglePromptMode) window.togglePromptMode();
+    }
+
+    const rawPrompt = document.getElementById('prompt-raw');
+    if (rawPrompt) {
+        rawPrompt.value = '';
+        resizePromptInput('prompt-raw');
+    }
+
+    window.PROMPT_IDS.forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        el.value = promptValues[id] || '';
+        resizePromptInput(id);
+    });
+
+    const negativePrompt = document.getElementById('nai-negative');
+    if (negativePrompt) {
+        negativePrompt.value = negativePromptValue || '';
+        resizePromptInput('nai-negative');
+    }
+
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
+    if (window.saveCraftSettings) window.saveCraftSettings();
 }
 
 export function openCharacterFolder(prefix) {
@@ -4037,6 +4040,54 @@ export async function selectPlannerImageFromPreview(key) {
     renderPlannerPreviewOverlay();
 }
 
+function buildPlannerMetadataFallback(item) {
+    const generation = item?.generation || {};
+    const fields = generation.fields || {};
+    const prompts = generation.prompts || {};
+    const splitPrompts = {
+        style: fields.style || prompts['prompt-style'] || '',
+        composition: fields.composition || prompts['prompt-composition'] || '',
+        character: fields.character || prompts['prompt-character'] || '',
+        clothing: fields.clothing || prompts['prompt-clothing'] || '',
+        expression: fields.expression || prompts['prompt-expression'] || '',
+        action: fields.action || prompts['prompt-action'] || '',
+        background: fields.background || prompts['prompt-background'] || ''
+    };
+    Object.keys(splitPrompts).forEach(key => {
+        if (!splitPrompts[key]) delete splitPrompts[key];
+    });
+
+    const [width, height] = String(generation.res || DEFAULT_PLANNER_RESOLUTION).split('x').map(Number);
+    const metadata = {
+        'Negative Prompt': generation.negative || fields.negative || '',
+        'Resolution': `${Number.isFinite(width) ? width : 832} x ${Number.isFinite(height) ? height : 1216}`,
+        'Steps': generation.steps,
+        'Sampler': generation.sampler,
+        'CFG Scale': generation.scale,
+        'Split Prompts': splitPrompts
+    };
+    if (Array.isArray(generation.v4PromptCharacters) && generation.v4PromptCharacters.length) {
+        metadata['Extra Characters'] = generation.v4PromptCharacters
+            .map(row => [row.subject, row.clothing, row.expression, row.action].filter(Boolean).join(', '))
+            .filter(Boolean);
+        metadata['Negative Extra Characters'] = generation.v4PromptCharacters
+            .map(row => row.negative || '')
+            .filter(Boolean);
+    }
+    Object.keys(metadata).forEach(key => {
+        if (
+            metadata[key] === undefined ||
+            metadata[key] === null ||
+            metadata[key] === '' ||
+            (Array.isArray(metadata[key]) && metadata[key].length === 0) ||
+            (key === 'Split Prompts' && Object.keys(metadata[key]).length === 0)
+        ) {
+            delete metadata[key];
+        }
+    });
+    return metadata;
+}
+
 export async function confirmPlannerSelection(situationId = null) {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
@@ -4088,6 +4139,13 @@ export async function confirmPlannerSelection(situationId = null) {
         if (!uploadRes.ok) {
             const data = await uploadRes.json().catch(() => ({}));
             throw new Error(data.error || `${item.imageNumber}.webp 확정에 실패했습니다.`);
+        }
+        if (window.loadMetadataFromDB && window.saveMetadataToDB) {
+            const sourcePrefix = item.selectedImage.slice(0, item.selectedImage.lastIndexOf('/') + 1);
+            const sourceFileName = getFileNameFromKey(item.selectedImage);
+            const metadata = await window.loadMetadataFromDB(sourcePrefix, sourceFileName).catch(() => null)
+                || buildPlannerMetadataFallback(item);
+            if (metadata && Object.keys(metadata).length) await window.saveMetadataToDB(character.prefix, `${item.imageNumber}.webp`, metadata);
         }
         item.finalImage = newKey;
         item.status = 'confirmed';
@@ -4540,6 +4598,43 @@ export async function saveCraftPromptToProjectStyle() {
     }
 }
 
+export async function loadCraftPromptFromSelection() {
+    setCraftPromptSaveStatus('불러오는 중...');
+
+    try {
+        const project = await getCraftSelectedProject();
+        await Promise.all([
+            loadProjectCharacters(project).catch(() => []),
+            loadProjectSituations(project, true).catch(() => [])
+        ]);
+
+        const characterPrefix = getCraftSelectedPrefix('craft-char-select');
+        const situationId = getCraftSelectedPrefix('craft-situation-select');
+        const character = characterPrefix ? getCharacterById(project, characterPrefix) : null;
+        const situation = situationId ? getSituationById(project, situationId) : null;
+        const [projectStyle, characterMeta] = await Promise.all([
+            loadProjectStylePrompt(project).catch(() => ''),
+            character ? loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
+        ]);
+
+        const characterParts = characterMeta.parts || {};
+        const situationPrompt = getSituationPrompt(situation);
+        applyCraftPromptValues({
+            'prompt-style': projectStyle || '',
+            'prompt-composition': situationPrompt.composition || '',
+            'prompt-character': characterParts.character || characterMeta.prompt || '',
+            'prompt-clothing': characterParts.clothing || '',
+            'prompt-expression': combinePromptParts(characterParts.expression, situationPrompt.expression),
+            'prompt-action': situationPrompt.action || '',
+            'prompt-background': situationPrompt.background || ''
+        }, combinePromptParts(characterParts.negative, situationPrompt.negative));
+
+        setCraftPromptSaveStatus('프롬프트 불러오기 완료');
+    } catch (err) {
+        setCraftPromptSaveStatus(err.message || '프롬프트 불러오기 실패', true);
+    }
+}
+
 export async function saveCraftPromptToCharacterParts() {
     setCraftPromptSaveStatus('저장 중...');
 
@@ -4592,8 +4687,10 @@ export async function saveCraftPromptToSituation() {
         situation.prompt = {
             ...(situation.prompt || {}),
             composition: fields.composition,
+            expression: fields.expression,
             action: fields.action,
-            background: fields.background
+            background: fields.background,
+            negative: fields.negative
         };
         situation.updatedAt = Date.now();
 
