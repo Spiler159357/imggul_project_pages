@@ -2057,6 +2057,7 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
     };
     window.switchTab('craft');
     applyCraftPromptValues(promptValues, combinedNegativePrompt);
+    if (window.setCraftV4PromptRows) window.setCraftV4PromptRows(getSituationGeneration(selectedSituation).v4PromptCharacters || []);
 
     if (window.updateCraftFolderList) await window.updateCraftFolderList();
     const projectSelect = document.getElementById('craft-project-select');
@@ -4328,6 +4329,75 @@ function renderSituationCharacterProgress(project, situation, state = {}) {
     `;
 }
 
+function renderSituationV4PromptRow(row = {}, index = 0) {
+    const rowId = index;
+    const inputClass = 'w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
+    return `
+        <div data-situation-v4-row="${rowId}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-900/40 p-2">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 캐릭터 ${index + 1}</span>
+                <button type="button" onclick="window.removeSituationV4PromptRow('${rowId}')" class="p-1 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="V4 캐릭터 삭제">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <input id="situation-v4-${rowId}-subject" value="${escapeHtml(row.subject || '')}" class="${inputClass}" placeholder="캐릭터">
+                <input id="situation-v4-${rowId}-clothing" value="${escapeHtml(row.clothing || '')}" class="${inputClass}" placeholder="의상">
+                <input id="situation-v4-${rowId}-expression" value="${escapeHtml(row.expression || '')}" class="${inputClass}" placeholder="표정">
+                <input id="situation-v4-${rowId}-action" value="${escapeHtml(row.action || '')}" class="${inputClass}" placeholder="행위">
+                <input id="situation-v4-${rowId}-negative" value="${escapeHtml(row.negative || '')}" class="${inputClass} md:col-span-2" placeholder="부정 프롬프트">
+            </div>
+        </div>
+    `;
+}
+
+function renderSituationV4PromptSection(situation) {
+    const rows = getSituationGeneration(situation).v4PromptCharacters || [];
+    return `
+        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <div>
+                    <p class="text-xs font-bold text-gray-700 dark:text-gray-300">V4 Prompt</p>
+                    <p class="text-[10px] text-gray-400 dark:text-gray-500">상황별 캐릭터 caption을 추가해 이미지 생성과 플래너 v4_prompt에 사용합니다.</p>
+                </div>
+                <button type="button" onclick="window.addSituationV4PromptRow()" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
+                    <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> 캐릭터 추가
+                </button>
+            </div>
+            <div id="situation-v4-rows" class="space-y-2">
+                ${rows.map((row, index) => renderSituationV4PromptRow(row, index)).join('')}
+            </div>
+        </div>
+    `;
+}
+
+function readSituationV4PromptRows() {
+    const container = document.getElementById('situation-v4-rows');
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('[data-situation-v4-row]')).map(row => {
+        const rowId = row.getAttribute('data-situation-v4-row');
+        return {
+            subject: document.getElementById(`situation-v4-${rowId}-subject`)?.value.trim() || '',
+            clothing: document.getElementById(`situation-v4-${rowId}-clothing`)?.value.trim() || '',
+            expression: document.getElementById(`situation-v4-${rowId}-expression`)?.value.trim() || '',
+            action: document.getElementById(`situation-v4-${rowId}-action`)?.value.trim() || '',
+            negative: document.getElementById(`situation-v4-${rowId}-negative`)?.value.trim() || ''
+        };
+    }).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean));
+}
+
+export function addSituationV4PromptRow() {
+    const container = document.getElementById('situation-v4-rows');
+    if (!container) return;
+    const rowId = Date.now();
+    container.insertAdjacentHTML('beforeend', renderSituationV4PromptRow({}, rowId));
+    refreshProjectIcons();
+}
+
+export function removeSituationV4PromptRow(rowId) {
+    document.querySelector(`[data-situation-v4-row="${CSS.escape(String(rowId))}"]`)?.remove();
+}
+
 function renderSituationDetailShell(project, situation, state = {}) {
     const prompt = getSituationPrompt(situation);
     const imageNumber = getSituationImageNumber(project, situation);
@@ -4375,6 +4445,7 @@ function renderSituationDetailShell(project, situation, state = {}) {
                             <textarea id="situation-negative-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-red-300 dark:border-red-800 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-red-400" placeholder="이 상황에서 제외할 태그">${escapeHtml(prompt.negative)}</textarea>
                         </div>
                     </div>
+                    ${renderSituationV4PromptSection(situation)}
                     <div class="mt-3 flex items-center justify-end gap-3">
                         <p id="situation-prompt-save-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                         <button id="situation-prompt-save-btn" type="submit" class="flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
@@ -4532,6 +4603,15 @@ export async function saveActiveSituationPrompt(event) {
             action: actionInput.value.trim(),
             negative: negativeInput.value.trim()
         };
+        const currentGeneration = getSituationGeneration(situation);
+        const v4PromptCharacters = normalizePlannerV4PromptRows(readSituationV4PromptRows());
+        situation.generation = {
+            ...currentGeneration,
+            v4PromptCharacters,
+            v4_prompt: v4PromptCharacters
+        };
+        situation.v4PromptCharacters = v4PromptCharacters;
+        situation.v4_prompt = v4PromptCharacters;
         situation.updatedAt = Date.now();
         await saveProjectSituations(project);
         if (status) status.textContent = '저장되었습니다.';
@@ -4619,6 +4699,7 @@ export async function loadCraftPromptFromSelection() {
 
         const characterParts = characterMeta.parts || {};
         const situationPrompt = getSituationPrompt(situation);
+        const situationGeneration = getSituationGeneration(situation);
         applyCraftPromptValues({
             'prompt-style': projectStyle || '',
             'prompt-composition': situationPrompt.composition || '',
@@ -4628,6 +4709,7 @@ export async function loadCraftPromptFromSelection() {
             'prompt-action': situationPrompt.action || '',
             'prompt-background': situationPrompt.background || ''
         }, combinePromptParts(characterParts.negative, situationPrompt.negative));
+        if (window.setCraftV4PromptRows) window.setCraftV4PromptRows(situationGeneration.v4PromptCharacters || []);
 
         setCraftPromptSaveStatus('프롬프트 불러오기 완료');
     } catch (err) {
@@ -4692,6 +4774,15 @@ export async function saveCraftPromptToSituation() {
             background: fields.background,
             negative: fields.negative
         };
+        const currentGeneration = getSituationGeneration(situation);
+        const v4PromptCharacters = window.readCraftV4PromptRows ? normalizePlannerV4PromptRows(window.readCraftV4PromptRows()) : [];
+        situation.generation = {
+            ...currentGeneration,
+            v4PromptCharacters,
+            v4_prompt: v4PromptCharacters
+        };
+        situation.v4PromptCharacters = v4PromptCharacters;
+        situation.v4_prompt = v4PromptCharacters;
         situation.updatedAt = Date.now();
 
         await saveProjectSituations(project);

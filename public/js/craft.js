@@ -285,6 +285,7 @@ export function loadCraftSettings() {
                 document.getElementById('inpaint-strength').value = settings.inpaintStrength;
                 if (document.getElementById('inpaint-strength-val')) document.getElementById('inpaint-strength-val').innerText = parseFloat(settings.inpaintStrength).toFixed(2);
             }
+            if (Array.isArray(settings.v4PromptCharacters)) setCraftV4PromptRows(settings.v4PromptCharacters);
             window.updateModelSpecificUI();
         }
     } catch(e) {}
@@ -309,6 +310,7 @@ export function readCraftSettings() {
         simpleMode: document.getElementById('prompt-toggle-simple')?.checked || false,
         prompts: promptsObj,
         negative: document.getElementById('nai-negative')?.value || '',
+        v4PromptCharacters: readCraftV4PromptRows(),
         res: document.querySelector('input[name="nai-res"]:checked')?.value || '832x1216',
         model: document.getElementById('nai-model')?.value || 'nai-diffusion-4-5-full',
         steps: document.getElementById('nai-steps')?.value || '28',
@@ -342,6 +344,7 @@ export function applyCraftSettings(settings = {}) {
         const raw = document.getElementById('prompt-raw');
         if (raw) raw.value = settings.prompts['prompt-raw'] || '';
     }
+    setCraftV4PromptRows(settings.v4PromptCharacters || []);
 
     const valueTargets = {
         'nai-negative': settings.negative,
@@ -500,7 +503,10 @@ export function addExtraCharacter() {
     const div = document.createElement('div'); div.id = `char-box-${id}`;
     div.className = 'bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 shadow-sm relative';
     div.innerHTML = `<div class="flex justify-between items-center mb-2"><span class="text-[10px] font-bold text-gray-700 dark:text-gray-300">추가 캐릭터</span><button onclick="window.removeExtraCharacter(${id})" class="text-[10px] text-red-500 hover:text-red-700"><i data-lucide="trash-2" class="w-3 h-3"></i></button></div><div class="space-y-1.5"><input type="text" id="char-subject-${id}" class="w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="캐릭터 (예: 1girl, blonde hair...)"><input type="text" id="char-clothing-${id}" class="w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="의상 (예: school uniform...)"><input type="text" id="char-expression-${id}" class="w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="표정 (예: smiling, crying...)"><input type="text" id="char-action-${id}" class="w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="행위 (예: running, sitting...)"><div class="pt-1 mt-1 border-t border-gray-100 dark:border-gray-600"><input type="text" id="char-negative-${id}" class="w-full p-1.5 text-[10px] border border-red-200 dark:border-red-900 rounded bg-red-50/50 dark:bg-red-900/10 text-red-700 dark:text-red-300" placeholder="전용 부정 프롬프트 (옵션)"></div></div>`;
-    container.appendChild(div); lucide.createIcons();
+    container.appendChild(div);
+    div.querySelectorAll('input').forEach(input => input.addEventListener('input', window.saveCraftSettings));
+    window.saveCraftSettings();
+    lucide.createIcons();
 }
 
 /**
@@ -511,7 +517,56 @@ export function addExtraCharacter() {
  */
 export function removeExtraCharacter(id) {
     const el = document.getElementById(`char-box-${id}`);
-    if (el) { el.remove(); window.EXTRA_CHAR_COUNT--; }
+    if (el) { el.remove(); window.EXTRA_CHAR_COUNT = Math.max(0, window.EXTRA_CHAR_COUNT - 1); window.saveCraftSettings(); }
+}
+
+function escapeCraftAttr(value) {
+    return String(value || '')
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#39;');
+}
+
+export function readCraftV4PromptRows() {
+    const container = document.getElementById('extra-chars-container');
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('[id^="char-box-"]')).map(box => {
+        const id = box.id.replace('char-box-', '');
+        return {
+            subject: document.getElementById(`char-subject-${id}`)?.value.trim() || '',
+            clothing: document.getElementById(`char-clothing-${id}`)?.value.trim() || '',
+            expression: document.getElementById(`char-expression-${id}`)?.value.trim() || '',
+            action: document.getElementById(`char-action-${id}`)?.value.trim() || '',
+            negative: document.getElementById(`char-negative-${id}`)?.value.trim() || ''
+        };
+    }).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean));
+}
+
+export function setCraftV4PromptRows(rows = []) {
+    const container = document.getElementById('extra-chars-container');
+    if (!container) return;
+    container.innerHTML = '';
+    window.EXTRA_CHAR_COUNT = 0;
+    (Array.isArray(rows) ? rows : []).forEach(row => {
+        window.addExtraCharacter();
+        const box = container.lastElementChild;
+        if (!box?.id) return;
+        const id = box.id.replace('char-box-', '');
+        const values = {
+            [`char-subject-${id}`]: row.subject,
+            [`char-clothing-${id}`]: row.clothing,
+            [`char-expression-${id}`]: row.expression,
+            [`char-action-${id}`]: row.action,
+            [`char-negative-${id}`]: row.negative
+        };
+        Object.entries(values).forEach(([inputId, value]) => {
+            const input = document.getElementById(inputId);
+            if (input) input.value = value || '';
+        });
+    });
+    window.saveCraftSettings();
 }
 
 /**
@@ -616,17 +671,10 @@ export async function generateNaiImage(options = {}) {
     } catch (err) { alert('이미지 전처리 실패: ' + err.message); window.updateQueueUI(false); return; }
 
     let charCaptionsArray = []; let negCharCaptionsArray = [];
-    const extraCharBoxes = document.querySelectorAll('[id^="char-box-"]');
-    extraCharBoxes.forEach(box => {
-        const id = box.id.replace('char-box-', '');
-        const c_sub = (document.getElementById(`char-subject-${id}`)?.value || '').trim();
-        const c_clo = (document.getElementById(`char-clothing-${id}`)?.value || '').trim();
-        const c_exp = (document.getElementById(`char-expression-${id}`)?.value || '').trim();
-        const c_act = (document.getElementById(`char-action-${id}`)?.value || '').trim();
-        const c_neg = (document.getElementById(`char-negative-${id}`)?.value || '').trim();
-        const mergedCharPrompt = [c_sub, c_clo, c_exp, c_act].filter(v => v.length > 0).join(', ');
+    readCraftV4PromptRows().forEach(row => {
+        const mergedCharPrompt = [row.subject, row.clothing, row.expression, row.action].filter(v => v.length > 0).join(', ');
         if (mergedCharPrompt) charCaptionsArray.push({ char_caption: mergedCharPrompt, centers: [{"x": 0.5, "y": 0.5}] });
-        if (c_neg) negCharCaptionsArray.push({ char_caption: c_neg, centers: [{"x": 0.5, "y": 0.5}] });
+        if (row.negative) negCharCaptionsArray.push({ char_caption: row.negative, centers: [{"x": 0.5, "y": 0.5}] });
     });
     if (Array.isArray(options.v4PromptCharacters)) {
         charCaptionsArray = [];
