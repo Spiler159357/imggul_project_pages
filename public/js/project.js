@@ -3783,7 +3783,7 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
                     status: statusItem.status === 'completed' ? 'done' : statusItem.status,
                     stage: statusItem.stage || item.stage || '',
                     stageLabel: statusItem.stageLabel || item.stageLabel || '',
-                    images: statusItem.resultKeys || item.images || [],
+                    images: statusItem.resultKeys?.length ? statusItem.resultKeys : (item.images || []),
                     errorMessage: statusItem.errorMessage || item.errorMessage || ''
                 };
             });
@@ -3849,12 +3849,28 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
 }
 
 async function startPlannerBackgroundGeneration(situationId = null) {
+    if (window.PLANNER_BACKGROUND_STARTING) return;
+    window.PLANNER_BACKGROUND_STARTING = true;
+    try {
+        await runPlannerBackgroundGenerationStart(situationId);
+    } finally {
+        window.PLANNER_BACKGROUND_STARTING = false;
+    }
+}
+
+async function runPlannerBackgroundGenerationStart(situationId = null) {
     const project = getActiveProject();
     if (!project) return;
 
     let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!meta?.items?.length) {
         setPlannerStatus('먼저 플래너 초안을 생성하세요.');
+        return;
+    }
+
+    if (meta.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
+        startPlannerBackgroundPolling(meta.backgroundJobId);
+        await refreshPlannerBackgroundStatus(meta.backgroundJobId);
         return;
     }
 
@@ -3875,11 +3891,8 @@ async function startPlannerBackgroundGeneration(situationId = null) {
     }
 
     for (const item of targetItems) {
-        if (item.images?.length || item.selectedImage) await clearPlannerItemImages(project, item);
         item.status = 'queued';
         item.stage = 'queued';
-        item.images = [];
-        item.selectedImage = null;
     }
 
     meta.status = 'queued';

@@ -4,8 +4,10 @@ const QUEUE_SEND_BATCH_SIZE = 100;
 const MAX_ATTEMPTS = 5;
 const NAI_MIN_REQUEST_INTERVAL_MS = 15000;
 const MAX_INLINE_COOLDOWN_MS = 30000;
+const R2_PUT_MAX_ATTEMPTS = 4;
 const TERMINAL_JOB_RETENTION_MS = 10 * 60 * 1000;
 const TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "cancelled"];
+const ACTIVE_JOB_STATUSES = ["queued", "running", "cancel_requested"];
 const STAGE_LABELS = {
     queued: "Queue waiting",
     running: "Preparing generation",
@@ -59,6 +61,47 @@ function isoBeforeNow(ms) {
 
 function sleep(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+function makeRetriedStorageError(error, key) {
+    const message = error?.message || String(error || "Unknown R2 put error");
+    const retried = new Error(`R2 put failed after ${R2_PUT_MAX_ATTEMPTS} attempts for ${key}: ${message}`);
+    retried.code = "R2_PUT_RETRY_EXHAUSTED";
+    retried.cause = error;
+    return retried;
+}
+
+function isR2PutRetryExhausted(error) {
+    return error?.code === "R2_PUT_RETRY_EXHAUSTED";
+}
+
+function getR2PutRetryDelayMs(attempt) {
+    return Math.min(1000 * (2 ** Math.max(attempt - 1, 0)), 8000);
+}
+
+function isRetriableR2PutError(error) {
+    const message = error?.message || String(error || "");
+    return message.includes("(10001)")
+        || message.includes("(10043)")
+        || message.includes("(10058)")
+        || message.includes("InternalError")
+        || message.includes("ServiceUnavailable")
+        || message.includes("TooManyRequests")
+        || message.includes("internal error");
+}
+
+async function putR2WithRetry(bucket, key, value, options = {}) {
+    let lastError = null;
+    for (let attempt = 1; attempt <= R2_PUT_MAX_ATTEMPTS; attempt += 1) {
+        try {
+            return await bucket.put(key, value, options);
+        } catch (error) {
+            lastError = error;
+            if (!isRetriableR2PutError(error) || attempt >= R2_PUT_MAX_ATTEMPTS) break;
+            await sleep(getR2PutRetryDelayMs(attempt));
+        }
+    }
+    throw makeRetriedStorageError(lastError, key);
 }
 
 function makeId(prefix) {
@@ -119,9 +162,30 @@ function getPlannerImagePrefix(projectPrefix, imageNumber) {
     return `${getPlannerPrefix(projectPrefix)}${imageNumber}/`;
 }
 
+function getActiveJobKey(projectId, targetSituationId = null) {
+    return `${projectId}:${targetSituationId || "__all__"}`;
+}
+
+function getActiveProjectKey(projectId) {
+    return `${projectId}:__project__`;
+}
+
 function parsePositiveInt(value, fallback = 1) {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function parseResultKeys(value) {
+    try {
+        const parsed = JSON.parse(value || "[]");
+        return Array.isArray(parsed) ? parsed : [];
+    } catch {
+        return [];
+    }
+}
+
+function compactResultKeys(value) {
+    return parseResultKeys(value).filter(Boolean);
 }
 
 function chunkArray(items, size) {
@@ -262,6 +326,24 @@ async function ensurePlannerBackgroundSchema(env) {
     if (!hasJobStage) {
         await env.DB.prepare("ALTER TABLE planner_background_jobs ADD COLUMN stage TEXT").run();
     }
+    const hasActiveKey = columns.some(column => column.name === "active_key");
+    if (!hasActiveKey) {
+        await env.DB.prepare("ALTER TABLE planner_background_jobs ADD COLUMN active_key TEXT").run();
+    }
+    const hasActiveProjectKey = columns.some(column => column.name === "active_project_key");
+    if (!hasActiveProjectKey) {
+        await env.DB.prepare("ALTER TABLE planner_background_jobs ADD COLUMN active_project_key TEXT").run();
+    }
+    await env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_planner_background_jobs_active_key
+        ON planner_background_jobs(active_key)
+        WHERE status IN ('queued', 'running', 'cancel_requested')
+    `).run();
+    await env.DB.prepare(`
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_planner_background_jobs_active_project_key
+        ON planner_background_jobs(active_project_key)
+        WHERE status IN ('queued', 'running', 'cancel_requested')
+    `).run();
 
     const itemColumns = await queryAll(env.DB, "PRAGMA table_info(planner_background_items)");
     const hasItemStage = itemColumns.some(column => column.name === "stage");
@@ -290,6 +372,25 @@ async function cleanupFinishedBackgroundJobs(env) {
     return jobIds.length;
 }
 
+async function findActiveBackgroundJob(env, projectId) {
+    const activePlaceholders = ACTIVE_JOB_STATUSES.map(() => "?").join(", ");
+    const params = [
+        projectId,
+        ...ACTIVE_JOB_STATUSES
+    ];
+    return await queryFirst(
+        env.DB,
+        `
+            SELECT * FROM planner_background_jobs
+            WHERE project_id = ?
+              AND status IN (${activePlaceholders})
+            ORDER BY created_at DESC
+            LIMIT 1
+        `,
+        ...params
+    );
+}
+
 export async function startPlannerBackgroundJob(env, body) {
     requireBackgroundBindings(env);
     await ensurePlannerBackgroundSchema(env);
@@ -309,6 +410,18 @@ export async function startPlannerBackgroundJob(env, body) {
     const targetItems = collectTargetItems(plannerMeta, targetSituationId);
     targetItems.forEach(assertSupportedBackgroundItem);
     const totalCount = targetItems.reduce((sum, item) => sum + parsePositiveInt(item.count || plannerMeta.defaultCount, 1), 0);
+    const activeKey = getActiveJobKey(projectId, targetSituationId);
+    const activeProjectKey = getActiveProjectKey(projectId);
+    const activeJob = await findActiveBackgroundJob(env, projectId);
+    if (activeJob) {
+        await syncPlannerMetaToR2Safely(env, activeJob.id, { stage: "background_start_existing_job" });
+        return {
+            jobId: activeJob.id,
+            status: activeJob.status,
+            totalCount: activeJob.total_count,
+            existing: true
+        };
+    }
 
     const jobId = makeId("job");
     const createdAt = nowIso();
@@ -321,7 +434,7 @@ export async function startPlannerBackgroundJob(env, body) {
         runningSituationIds: targetItems.map(item => item.situationId),
         updatedAt: Date.now(),
         items: plannerMeta.items.map(item => targetItems.includes(item)
-            ? { ...item, status: "queued", stage: "queued", stageLabel: STAGE_LABELS.queued, images: [], selectedImage: null, backgroundJobId: jobId }
+            ? { ...item, status: "queued", stage: "queued", stageLabel: STAGE_LABELS.queued, backgroundJobId: jobId }
             : item
         )
     };
@@ -331,8 +444,8 @@ export async function startPlannerBackgroundJob(env, body) {
             INSERT INTO planner_background_jobs (
                 id, project_id, project_prefix, character_id, character_prefix, status, stage,
                 total_count, completed_count, failed_count, target_situation_id,
-                planner_meta_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'queued', 'queued', ?, 0, 0, ?, ?, ?, ?)
+                planner_meta_json, active_key, active_project_key, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'queued', 'queued', ?, 0, 0, ?, ?, ?, ?, ?, ?)
         `).bind(
             jobId,
             projectId,
@@ -342,6 +455,8 @@ export async function startPlannerBackgroundJob(env, body) {
             totalCount,
             targetSituationId,
             JSON.stringify(metaForStorage),
+            activeKey,
+            activeProjectKey,
             createdAt,
             createdAt
         )
@@ -383,7 +498,21 @@ export async function startPlannerBackgroundJob(env, body) {
         }
     }
 
-    await env.DB.batch(inserts);
+    try {
+        await env.DB.batch(inserts);
+    } catch (error) {
+        const concurrentJob = await findActiveBackgroundJob(env, projectId);
+        if (concurrentJob) {
+            await syncPlannerMetaToR2Safely(env, concurrentJob.id, { stage: "background_start_concurrent_job" });
+            return {
+                jobId: concurrentJob.id,
+                status: concurrentJob.status,
+                totalCount: concurrentJob.total_count,
+                existing: true
+            };
+        }
+        throw error;
+    }
     if (env.GENERATION_QUEUE.sendBatch) {
         for (const batch of chunkArray(queueMessages, QUEUE_SEND_BATCH_SIZE)) {
             await env.GENERATION_QUEUE.sendBatch(batch);
@@ -393,7 +522,7 @@ export async function startPlannerBackgroundJob(env, body) {
             await env.GENERATION_QUEUE.send(message.body);
         }
     }
-    await syncPlannerMetaToR2(env, jobId);
+    await syncPlannerMetaToR2Safely(env, jobId, { stage: "background_start_sync" });
 
     return { jobId, status: "queued", totalCount };
 }
@@ -431,7 +560,7 @@ export async function getPlannerBackgroundStatus(env, jobId) {
             status: item.status,
             stage: item.stage || "",
             stageLabel: STAGE_LABELS[item.stage] || item.stage || "",
-            resultKeys: JSON.parse(item.result_keys || "[]"),
+            resultKeys: compactResultKeys(item.result_keys),
             errorMessage: item.error_message || ""
         }))
     };
@@ -644,7 +773,7 @@ async function readJsonObject(bucket, key, fallback = {}) {
 }
 
 async function putJsonObject(bucket, key, value) {
-    await bucket.put(key, JSON.stringify(value, null, 2), {
+    await putR2WithRetry(bucket, key, JSON.stringify(value, null, 2), {
         httpMetadata: { contentType: "application/json; charset=utf-8" }
     });
 }
@@ -716,14 +845,17 @@ export async function syncPlannerMetaToR2(env, jobId) {
     meta.items = (meta.items || []).map(item => {
         const row = bySituation.get(item.situationId);
         if (!row) return item;
-        const resultKeys = JSON.parse(row.result_keys || "[]");
+        const resultKeys = compactResultKeys(row.result_keys);
+        const hasNewResults = resultKeys.length > 0;
         return {
             ...item,
             status: row.status === "completed" ? "done" : row.status,
             stage: row.stage || "",
             stageLabel: STAGE_LABELS[row.stage] || row.stage || "",
-            images: resultKeys,
-            selectedImage: resultKeys.includes(item.selectedImage) ? item.selectedImage : null,
+            images: hasNewResults ? resultKeys : (item.images || []),
+            selectedImage: hasNewResults
+                ? (resultKeys.includes(item.selectedImage) ? item.selectedImage : null)
+                : (item.selectedImage || null),
             backgroundJobId: job.id,
             backgroundItemId: row.id,
             errorMessage: row.error_message || ""
@@ -731,6 +863,18 @@ export async function syncPlannerMetaToR2(env, jobId) {
     });
 
     await putJsonObject(env.imgBucket, metaKey, meta);
+}
+
+async function syncPlannerMetaToR2Safely(env, jobId, context = {}) {
+    try {
+        await syncPlannerMetaToR2(env, jobId);
+    } catch (error) {
+        await writeBackgroundErrorLog(env, error, {
+            jobId,
+            stage: "planner_meta_sync",
+            ...context
+        });
+    }
 }
 
 async function markItemFailure(env, item, errorMessage) {
@@ -785,6 +929,11 @@ export async function processPlannerQueueMessage(env, message) {
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
     const item = await queryFirst(env.DB, "SELECT * FROM planner_background_items WHERE id = ?", itemId);
     if (!job || !item) return;
+    const storedResultKeys = parseResultKeys(item.result_keys);
+    if (storedResultKeys[imageIndex]) {
+        await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, stage: "duplicate_message_skip" });
+        return;
+    }
 
     if (["cancel_requested", "cancelled"].includes(job.status) || ["cancel_requested", "cancelled"].includes(item.status)) {
         await env.DB.batch([
@@ -799,7 +948,7 @@ export async function processPlannerQueueMessage(env, message) {
                 WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
             `).bind(nowIso(), nowIso(), jobId)
         ]);
-        await syncPlannerMetaToR2(env, jobId);
+        await syncPlannerMetaToR2Safely(env, jobId, { itemId, stage: "cancelled_sync" });
         await cleanupFinishedBackgroundJobs(env).catch(() => null);
         return;
     }
@@ -810,7 +959,7 @@ export async function processPlannerQueueMessage(env, message) {
         env.DB.prepare("UPDATE planner_background_items SET status = 'running', stage = 'running', started_at = COALESCE(started_at, ?), attempts = ?, updated_at = ? WHERE id = ?")
             .bind(nowIso(), attempt, nowIso(), itemId)
     ]);
-    await syncPlannerMetaToR2(env, jobId);
+    await syncPlannerMetaToR2Safely(env, jobId, { itemId, stage: "running_sync" });
 
     try {
         const generation = JSON.parse(item.generation_json || "{}");
@@ -835,7 +984,7 @@ export async function processPlannerQueueMessage(env, message) {
 
         await updateProgressStage(env, jobId, itemId, "r2_put");
         await abortIfBackgroundJobCancelled(env, jobId, itemId);
-        await env.imgBucket.put(key, webpBuffer, {
+        await putR2WithRetry(env.imgBucket, key, webpBuffer, {
             httpMetadata: { contentType: "image/webp" },
             customMetadata: { ispublic: "false", backgroundjobid: jobId }
         });
@@ -844,11 +993,11 @@ export async function processPlannerQueueMessage(env, message) {
             await abortIfBackgroundJobCancelled(env, jobId, itemId);
         }
 
-        const resultKeys = JSON.parse(item.result_keys || "[]");
-        resultKeys.push(key);
+        const resultKeys = parseResultKeys(item.result_keys);
+        resultKeys[imageIndex] = key;
         await updateProgressStage(env, jobId, itemId, "metadata_put");
         await abortIfBackgroundJobCancelled(env, jobId, itemId);
-        await saveMetadata(env, item.output_prefix, fileName, {
+        const metadata = {
             Prompt: request.prompt,
             "Negative Prompt": request.negative,
             Resolution: `${request.width} x ${request.height}`,
@@ -859,7 +1008,16 @@ export async function processPlannerQueueMessage(env, message) {
             Model: request.model,
             "Background Job": jobId,
             "Generated At": generatedAt
-        });
+        };
+        await saveMetadata(env, item.output_prefix, fileName, metadata).catch(error => writeBackgroundErrorLog(env, error, {
+            jobId,
+            itemId,
+            imageIndex,
+            attempt,
+            stage: "metadata_put",
+            outputPrefix: item.output_prefix,
+            savedImageKey: key
+        }));
 
         const completedCount = Number(item.completed_count || 0) + 1;
         const failedCount = Number(item.failed_count || 0);
@@ -893,7 +1051,7 @@ export async function processPlannerQueueMessage(env, message) {
         if (isRateLimited) {
             await setNovelAiCooldown(env, retryDelaySeconds);
         }
-        if (attempt < MAX_ATTEMPTS && await enqueueRetry(env, message, attempt, retryDelaySeconds)) {
+        if (!isR2PutRetryExhausted(error) && attempt < MAX_ATTEMPTS && await enqueueRetry(env, message, attempt, retryDelaySeconds)) {
             const retryStage = isRateLimited ? "rate_limited" : "running";
             await env.DB.batch([
                 env.DB.prepare(`
@@ -907,18 +1065,18 @@ export async function processPlannerQueueMessage(env, message) {
                     WHERE id = ?
                 `).bind(retryStage, attempt, errorMessage.slice(0, 1000), nowIso(), itemId)
             ]);
-            await syncPlannerMetaToR2(env, jobId);
+            await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "retry_sync" });
             return;
         }
         await markItemFailure(env, item, errorMessage);
         await refreshJobRollup(env, jobId);
-        await syncPlannerMetaToR2(env, jobId);
+        await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "failure_sync" });
         await cleanupFinishedBackgroundJobs(env).catch(() => null);
         return;
     }
 
     await refreshJobRollup(env, jobId);
-    await syncPlannerMetaToR2(env, jobId);
+    await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "success_sync" });
     await cleanupFinishedBackgroundJobs(env).catch(() => null);
 }
 
