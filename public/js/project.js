@@ -1715,7 +1715,6 @@ function renderCharacterDetailShell(project, character, state = {}) {
     const promptParts = meta.parts || {};
     const characterPrompt = promptParts.character || meta.prompt || '';
     const clothingPrompt = promptParts.clothing || '';
-    const expressionPrompt = promptParts.expression || '';
     const negativePrompt = promptParts.negative || '';
 
     renderProjectShell(`
@@ -1801,10 +1800,6 @@ function renderCharacterDetailShell(project, character, state = {}) {
                                 <label class="block">
                                     <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">의상</span>
                                     <textarea id="character-prompt-clothing-input" class="w-full min-h-[100px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="기본 의상, 장신구, 소품 등">${escapeHtml(clothingPrompt)}</textarea>
-                                </label>
-                                <label class="block">
-                                    <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">표정</span>
-                                    <textarea id="character-prompt-expression-input" class="w-full min-h-[80px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="이 캐릭터의 기본 표정, 눈매, 분위기 등">${escapeHtml(expressionPrompt)}</textarea>
                                 </label>
                                 <label class="block">
                                     <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">부정 프롬프트</span>
@@ -1985,11 +1980,10 @@ export async function saveCharacterPrompt(event) {
     const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
     const characterInput = document.getElementById('character-prompt-character-input');
     const clothingInput = document.getElementById('character-prompt-clothing-input');
-    const expressionInput = document.getElementById('character-prompt-expression-input');
     const negativeInput = document.getElementById('character-prompt-negative-input');
     const button = document.getElementById('character-prompt-save-btn');
     const status = document.getElementById('character-prompt-save-status');
-    if (!project || !character || !characterInput || !clothingInput || !expressionInput || !negativeInput) return;
+    if (!project || !character || !characterInput || !clothingInput || !negativeInput) return;
 
     const previousButtonHtml = button?.innerHTML || '';
     if (button) {
@@ -2001,11 +1995,12 @@ export async function saveCharacterPrompt(event) {
 
     try {
         const meta = await loadCharacterMeta(character).catch(() => ({}));
+        const remainingParts = { ...(meta.parts || {}) };
+        delete remainingParts.expression;
         const parts = {
-            ...(meta.parts || {}),
+            ...remainingParts,
             character: characterInput.value.trim(),
             clothing: clothingInput.value.trim(),
-            expression: expressionInput.value.trim(),
             negative: negativeInput.value.trim()
         };
         await saveCharacterMeta(character, {
@@ -2051,7 +2046,7 @@ export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTI
         'prompt-composition': situationPrompt.composition || '',
         'prompt-character': characterParts.character || meta.prompt || '',
         'prompt-clothing': characterParts.clothing || '',
-        'prompt-expression': combinePromptParts(characterParts.expression, situationPrompt.expression),
+        'prompt-expression': situationPrompt.expression || '',
         'prompt-action': situationPrompt.action || '',
         'prompt-background': situationPrompt.background || ''
     };
@@ -3553,7 +3548,7 @@ export async function addPlannerDraftItem() {
 
     const prompt = getSituationPrompt(situation);
     const situationGeneration = getSituationGeneration(situation);
-    const expressionPrompt = combinePromptParts(characterMeta.parts?.expression, prompt.expression) || currentSettings.prompts?.['prompt-expression'] || '';
+    const expressionPrompt = prompt.expression || currentSettings.prompts?.['prompt-expression'] || '';
     const negativePrompt = combinePromptParts(characterMeta.parts?.negative, prompt.negative) || currentSettings.negative || '';
     const imageNumber = getSituationImageNumber(project, situation);
     const fields = {
@@ -4424,6 +4419,8 @@ export function removeSituationV4PromptRow(rowId) {
 function renderSituationDetailShell(project, situation, state = {}) {
     const prompt = getSituationPrompt(situation);
     const imageNumber = getSituationImageNumber(project, situation);
+    const generation = getSituationGeneration(situation);
+    const resolution = generation.res || DEFAULT_PLANNER_RESOLUTION;
 
     renderProjectShell(`
         <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
@@ -4450,6 +4447,12 @@ function renderSituationDetailShell(project, situation, state = {}) {
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
             <section class="max-w-7xl mx-auto min-h-full">
                 <form id="situation-prompt-form" onsubmit="window.saveActiveSituationPrompt(event)" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
+                    <div class="mb-4 max-w-xs">
+                        <label for="situation-resolution-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">해상도</label>
+                        <select id="situation-resolution-input" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            ${PLANNER_RESOLUTION_OPTIONS.map(([value, label]) => `<option value="${escapeHtml(value)}" ${resolution === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}
+                        </select>
+                    </div>
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
                         <div>
                             <label for="situation-composition-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구도</label>
@@ -4602,13 +4605,14 @@ export async function saveActiveSituationPrompt(event) {
 
     const project = getActiveProject();
     const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    const resolutionInput = document.getElementById('situation-resolution-input');
     const compositionInput = document.getElementById('situation-composition-input');
     const expressionInput = document.getElementById('situation-expression-input');
     const actionInput = document.getElementById('situation-action-input');
     const negativeInput = document.getElementById('situation-negative-input');
     const button = document.getElementById('situation-prompt-save-btn');
     const status = document.getElementById('situation-prompt-save-status');
-    if (!project || !situation || !compositionInput || !expressionInput || !actionInput || !negativeInput) return;
+    if (!project || !situation || !resolutionInput || !compositionInput || !expressionInput || !actionInput || !negativeInput) return;
 
     const previousButtonHtml = button?.innerHTML || '';
     if (button) {
@@ -4627,12 +4631,16 @@ export async function saveActiveSituationPrompt(event) {
             negative: negativeInput.value.trim()
         };
         const currentGeneration = getSituationGeneration(situation);
+        const resolution = resolutionInput.value || DEFAULT_PLANNER_RESOLUTION;
         const v4PromptCharacters = normalizePlannerV4PromptRows(readSituationV4PromptRows());
         situation.generation = {
             ...currentGeneration,
+            res: resolution,
             v4PromptCharacters,
             v4_prompt: v4PromptCharacters
         };
+        situation.resolution = resolution;
+        situation.res = resolution;
         situation.v4PromptCharacters = v4PromptCharacters;
         situation.v4_prompt = v4PromptCharacters;
         situation.updatedAt = Date.now();
@@ -4733,7 +4741,7 @@ export async function loadCraftPromptFromSelection() {
             'prompt-composition': situationPrompt.composition || '',
             'prompt-character': characterParts.character || characterMeta.prompt || '',
             'prompt-clothing': characterParts.clothing || '',
-            'prompt-expression': combinePromptParts(characterParts.expression, situationPrompt.expression),
+            'prompt-expression': situationPrompt.expression || '',
             'prompt-action': situationPrompt.action || '',
             'prompt-background': situationPrompt.background || ''
         }, combinePromptParts(characterParts.negative, situationPrompt.negative));

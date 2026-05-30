@@ -5,7 +5,6 @@ const PROMPT_WEIGHT_SELECTOR = [
     '#project-style-prompt-input',
     '#character-prompt-character-input',
     '#character-prompt-clothing-input',
-    '#character-prompt-expression-input',
     '#character-prompt-negative-input',
     '#situation-composition-input',
     '#situation-expression-input',
