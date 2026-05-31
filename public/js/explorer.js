@@ -21,7 +21,7 @@ function updateLogToolsVisibility(prefix) {
 }
 
 /**
- * 역할: 지정한 폴더 prefix의 목록과 별칭을 불러와 갤러리/사이드바를 렌더링한다.
+ * 역할: 지정한 폴더 prefix의 목록과 이름을 불러와 갤러리/사이드바를 렌더링한다.
  * 매개변수: prefix - 로드할 폴더 경로, skipHistory - 브라우저 history push 생략 여부.
  * 주요 변수: galleryContent, grid, loader, cached, listRes, aliasRes - 스크롤 저장, 캐시, API 응답.
  * 반환값: 명시 반환 없음. 캐시가 유효하면 API 호출 없이 종료한다.
@@ -104,7 +104,7 @@ export function renderFiles(folders, files) {
         let deleteBtnHtml = window.IS_ADMIN ? `<button class="delete-btn absolute top-1 right-1 p-1 bg-white dark:bg-gray-800 rounded-full shadow hover:bg-red-100 dark:hover:bg-red-900 hidden group-hover:block transition" onclick="window.deleteFolder('${folderPrefix}')"><i data-lucide="trash-2" class="w-4 h-4 text-red-500"></i></button>` : '';
 
         const nameHtml = alias 
-            ? `<div class="flex flex-col items-center w-full overflow-hidden mt-1"><span class="text-xs sm:text-sm font-bold text-gray-800 dark:text-gray-200 truncate w-full text-center group-hover:text-indigo-700 dark:group-hover:text-indigo-400" title="별칭">${alias}</span><span class="text-[9px] sm:text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center" title="원본 경로명">(${folderName})</span></div>`
+            ? `<div class="flex flex-col items-center w-full overflow-hidden mt-1"><span class="text-xs sm:text-sm font-bold text-gray-800 dark:text-gray-200 truncate w-full text-center group-hover:text-indigo-700 dark:group-hover:text-indigo-400" title="이름">${alias}</span><span class="text-[9px] sm:text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center" title="경로">(${folderName})</span></div>`
             : `<span class="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 truncate w-full text-center group-hover:text-indigo-700 dark:group-hover:text-indigo-400 mt-1">${folderName}</span>`;
 
         div.innerHTML = `<div class="relative w-20 h-20 sm:w-28 sm:h-28 mb-2"><div class="absolute inset-0 bg-yellow-100 dark:bg-yellow-900/30 rounded-xl flex items-center justify-center group-hover:bg-yellow-200 dark:group-hover:bg-yellow-900/50 transition"><i data-lucide="folder" class="w-10 h-10 sm:w-12 sm:h-12 text-yellow-500 fill-current"></i></div><img src="/${folderPrefix}0.webp" class="absolute inset-0 w-20 h-20 sm:w-28 sm:h-28 object-cover rounded-xl border border-gray-200 dark:border-gray-600 shadow-sm z-10 bg-white dark:bg-gray-800 transition-opacity" onerror="this.style.display='none'" loading="lazy"></div>${nameHtml}${deleteBtnHtml}`;
@@ -128,7 +128,7 @@ export function renderFiles(folders, files) {
         
         let iconHtml = isImage ? `<img src="/${file.key}?t=${timestamp}" class="w-full h-24 sm:h-32 object-cover rounded mb-2 border border-gray-200 dark:border-gray-600 shadow-sm" loading="lazy">` : (isText ? `<div class="w-full h-24 sm:h-32 bg-gray-100 dark:bg-gray-800 rounded mb-2 flex items-center justify-center border border-gray-200 dark:border-gray-600 shadow-sm"><i data-lucide="file-text" class="w-8 h-8 sm:w-10 sm:h-10 text-gray-500 dark:text-gray-400"></i></div>` : `<div class="w-full h-24 sm:h-32 bg-gray-100 dark:bg-gray-800 rounded mb-2 flex items-center justify-center border border-gray-200 dark:border-gray-600 shadow-sm"><i data-lucide="file" class="w-8 h-8 sm:w-10 sm:h-10 text-gray-400 dark:text-gray-500"></i></div>`);
         let statusIcon = isText ? (file.isPublic ? `<div class="absolute top-1 right-1 sm:top-2 sm:right-2 z-10 bg-white/90 dark:bg-gray-800/90 rounded-full p-1 shadow-sm border border-green-200 dark:border-green-900" title="공개됨"><i data-lucide="eye" class="w-3 h-3 sm:w-3.5 sm:h-3.5 text-green-600 dark:text-green-400"></i></div>` : `<div class="absolute top-1 right-1 sm:top-2 sm:right-2 z-10 bg-white/90 dark:bg-gray-800/90 rounded-full p-1 shadow-sm border border-red-200 dark:border-red-900" title="비공개"><i data-lucide="lock" class="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-600 dark:text-red-400"></i></div>`) : '';
-        const nameHtml = alias ? `<div class="flex flex-col items-center w-full overflow-hidden mt-1"><span class="text-xs sm:text-sm font-bold text-gray-800 dark:text-gray-200 truncate w-full text-center group-hover:text-black dark:group-hover:text-white" title="별칭">${alias}</span><span class="text-[9px] sm:text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center" title="원본 파일명">(${fileName})</span></div>` : `<span class="text-[10px] sm:text-xs text-gray-600 dark:text-gray-400 truncate w-full text-center group-hover:text-black dark:group-hover:text-white mt-1">${fileName}</span>`;
+        const nameHtml = alias ? `<div class="flex flex-col items-center w-full overflow-hidden mt-1"><span class="text-xs sm:text-sm font-bold text-gray-800 dark:text-gray-200 truncate w-full text-center group-hover:text-black dark:group-hover:text-white" title="이름">${alias}</span><span class="text-[9px] sm:text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center" title="파일 경로">(${fileName})</span></div>` : `<span class="text-[10px] sm:text-xs text-gray-600 dark:text-gray-400 truncate w-full text-center group-hover:text-black dark:group-hover:text-white mt-1">${fileName}</span>`;
 
         div.innerHTML = `${statusIcon}${iconHtml}${nameHtml}`; grid.appendChild(div);
     });
@@ -209,7 +209,7 @@ export function updateBreadcrumbs(prefix) {
         const btn = document.createElement('button');
         btn.className = 'flex-shrink-0 hover:text-indigo-600 dark:hover:text-indigo-400 px-2 py-1.5 rounded hover:bg-gray-200 dark:hover:bg-gray-700 transition flex items-center max-w-[120px] sm:max-w-[150px] dark:text-gray-300';
         btn.innerHTML = `<span class="truncate block text-xs sm:text-sm font-medium">${displayHtml}</span>`;
-        btn.title = `실제 경로: ${currentPath}`;
+        btn.title = `경로: ${currentPath}`;
         if (idx < parts.length) btn.onclick = () => window.loadPath(currentPath);
         container.appendChild(btn);
     });
@@ -273,7 +273,7 @@ async function saveAlias(key, alias) {
         body: JSON.stringify({ key, alias })
     });
     if (!res.ok) {
-        let message = '별칭 저장에 실패했습니다.';
+        let message = '이름 저장에 실패했습니다.';
         try {
             const data = await res.json();
             if (data && data.error) message = data.error;
@@ -362,14 +362,14 @@ export async function setCurrentFolderAlias() {
     const folderName = window.currentPrefix
         ? window.currentPrefix.split('/').filter(Boolean).pop()
         : 'Root';
-    const nextAlias = prompt(`'${folderName}' 폴더의 별칭을 입력하세요.\n비워두면 별칭이 삭제됩니다.`, currentAlias);
+    const nextAlias = prompt(`'${folderName}' 폴더의 이름을 입력하세요.\n비워두면 이름이 삭제됩니다.`, currentAlias);
     if (nextAlias === null) return;
 
     try {
         await saveAlias(window.currentPrefix, nextAlias.trim());
         clearFolderCache(window.currentPrefix);
         await window.loadPath(window.currentPrefix, true);
-        alert(nextAlias.trim() ? '별칭이 저장되었습니다.' : '별칭이 삭제되었습니다.');
+        alert(nextAlias.trim() ? '이름이 저장되었습니다.' : '이름이 삭제되었습니다.');
     } catch (err) {
         alert(err.message);
     }
@@ -380,7 +380,7 @@ export async function setModalFileAlias() {
 
     const currentAlias = window.getAliasOnly(window.currentFileKey, false) || '';
     const fileName = window.currentFileKey.split('/').pop();
-    const nextAlias = prompt(`'${fileName}' 파일의 별칭을 입력하세요.\n비워두면 별칭이 삭제됩니다.`, currentAlias);
+    const nextAlias = prompt(`'${fileName}' 파일의 이름을 입력하세요.\n비워두면 이름이 삭제됩니다.`, currentAlias);
     if (nextAlias === null) return;
 
     try {
@@ -393,7 +393,7 @@ export async function setModalFileAlias() {
         const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
         const isPublic = document.getElementById('modal-public-check')?.checked || false;
         await window.openModal(window.currentFileKey, rawUrl.split('?')[0] + '?t=' + Date.now(), isImage, isText, isPublic, true);
-        alert(nextAlias.trim() ? '별칭이 저장되었습니다.' : '별칭이 삭제되었습니다.');
+        alert(nextAlias.trim() ? '이름이 저장되었습니다.' : '이름이 삭제되었습니다.');
     } catch (err) {
         alert(err.message);
     }
@@ -403,7 +403,7 @@ export async function renameCurrentFileOnly() {
     if (!window.currentFileKey) return alert('선택된 파일이 없습니다.');
 
     const { prefix, fileName } = splitFileKey(window.currentFileKey);
-    const nextName = prompt('새 파일명을 입력하세요.', fileName);
+    const nextName = prompt('새 파일 경로명을 입력하세요.', fileName);
     if (nextName === null) return;
 
     const cleanName = nextName.trim().replace(/^\/+/, '');

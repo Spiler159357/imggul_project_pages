@@ -120,6 +120,7 @@ export function renderCharacterDetailShell(project, character, state = {}) {
                     </button>
                     <div id="character-action-menu" class="hidden absolute right-0 top-10 z-20 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
                         <button type="button" onclick="window.renameActiveCharacter()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">캐릭터 이름 변경</button>
+                        <button type="button" onclick="window.changeActiveCharacterPath()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">캐릭터 경로 변경</button>
                         <button type="button" onclick="window.openCharacterFolder('${escapeJsString(character.prefix)}')" class="sm:hidden w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">폴더 열기</button>
                         <button type="button" onclick="window.deleteActiveCharacter()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">캐릭터 삭제</button>
                     </div>
@@ -143,7 +144,7 @@ export function renderCharacterDetailShell(project, character, state = {}) {
                                 </div>
                                 <div class="min-w-0">
                                     <h2 class="text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(character.name || character.folderName)}</h2>
-                                    ${character.alias ? `<p class="mt-1 text-xs text-gray-500 dark:text-gray-400 truncate">${escapeHtml(character.folderName)}</p>` : ''}
+                                    ${character.alias ? `<p class="mt-1 text-xs text-gray-500 dark:text-gray-400 truncate">경로: ${escapeHtml(character.folderName)}</p>` : ''}
                                     <div class="mt-3 flex flex-wrap gap-2 text-[11px] font-bold">
                                         <span class="px-2 py-1 rounded bg-gray-100 dark:bg-gray-900/60 text-gray-600 dark:text-gray-300">상황 ${progress.total}</span>
                                         <span class="px-2 py-1 rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">완료 ${progress.complete}</span>
@@ -583,26 +584,49 @@ export async function renameActiveCharacter() {
     const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
     if (!project || !character) return;
 
-    const nextFolderName = prompt('캐릭터 폴더 이름을 입력하세요.', character.folderName);
+    const nextAlias = prompt('캐릭터 이름을 입력하세요. 비워두면 경로를 표시합니다.', character.alias || '');
+    if (nextAlias === null) return;
+
+    const alias = nextAlias.trim();
+    const aliasChanged = alias !== (character.alias || '');
+
+    if (!aliasChanged) return;
+
+    try {
+        await saveProjectAlias(character.prefix, alias);
+        clearProjectCaches(project.prefix, character.prefix);
+        project.charactersLoaded = false;
+        await loadProjectCharacters(project, true);
+        await openCharacterDetail(project.id, character.prefix, true);
+
+        if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
+    } catch (err) {
+        alert(err.message || '캐릭터 이름 변경에 실패했습니다.');
+    }
+}
+
+export async function changeActiveCharacterPath() {
+    closeCharacterActionMenu();
+
+    const project = getActiveProject();
+    const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
+    if (!project || !character) return;
+
+    const nextFolderName = prompt('캐릭터 경로를 입력하세요.', character.folderName);
     if (nextFolderName === null) return;
 
     const folderName = normalizeProjectFolderName(nextFolderName);
     if (isInvalidProjectFolderName(folderName)) {
-        alert('이름에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
+        alert('경로에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
         return;
     }
 
-    const nextAlias = prompt('캐릭터 표시 이름을 입력하세요. 비워두면 폴더 이름을 표시합니다.', character.alias || '');
-    if (nextAlias === null) return;
-
-    const alias = nextAlias.trim();
     const folderChanged = folderName !== character.folderName;
-    const aliasChanged = alias !== (character.alias || '');
 
-    if (!folderChanged && !aliasChanged) return;
+    if (!folderChanged) return;
 
     if (folderChanged && getProjectItems(project, 'characters').some(item => item.folderName === folderName)) {
-        alert('이미 존재하는 캐릭터 이름입니다.');
+        alert('이미 존재하는 캐릭터 경로입니다.');
         return;
     }
 
@@ -612,10 +636,6 @@ export async function renameActiveCharacter() {
     try {
         if (folderChanged) {
             await renameProjectFolder(oldPrefix, newPrefix);
-        }
-
-        if (aliasChanged || folderChanged) {
-            await saveProjectAlias(newPrefix, alias);
         }
 
         clearProjectCaches(project.prefix, oldPrefix, newPrefix);
@@ -629,7 +649,7 @@ export async function renameActiveCharacter() {
 
         if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
     } catch (err) {
-        alert(err.message || '캐릭터 이름 변경에 실패했습니다.');
+        alert(err.message || '캐릭터 경로 변경에 실패했습니다.');
     }
 }
 
@@ -673,14 +693,14 @@ export function renderProjectItemCreateModal() {
                 <form id="project-item-create-form" class="p-4 sm:p-5 space-y-4" onsubmit="window.submitProjectItemCreate(event)">
                     <input id="project-item-create-type" type="hidden">
                     <div>
-                        <label for="project-item-create-name" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">이름</label>
-                        <input id="project-item-create-name" type="text" required class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="저장 이름">
+                        <label for="project-item-create-name" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">경로</label>
+                        <input id="project-item-create-name" type="text" required class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="저장 경로">
                         <p id="project-item-create-help" class="mt-1 text-[11px] text-gray-400 dark:text-gray-500"></p>
                     </div>
 
                     <div>
-                        <label for="project-item-create-alias" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">별칭</label>
-                        <input id="project-item-create-alias" type="text" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="표시 이름">
+                        <label for="project-item-create-alias" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">이름</label>
+                        <input id="project-item-create-alias" type="text" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="이름">
                     </div>
 
                     <div id="project-item-create-error" class="hidden text-xs text-red-500"></div>
@@ -716,8 +736,8 @@ export async function openProjectItemCreateModal(type) {
     if (title) title.textContent = type === 'character' ? '캐릭터 추가' : '상황 추가';
     if (help) {
         help.textContent = type === 'character'
-            ? '프로젝트 하위 캐릭터 폴더 이름으로 사용됩니다.'
-            : '프로젝트 상황 메타데이터에 저장됩니다.';
+            ? '프로젝트 하위 캐릭터 폴더 경로로 사용됩니다.'
+            : '프로젝트 상황 경로로 사용됩니다.';
     }
 
     if (type === 'situation' && project) {
@@ -765,7 +785,7 @@ export async function submitProjectItemCreate(event) {
     if (!project || !['character', 'situation'].includes(type)) return;
 
     if (isInvalidProjectFolderName(itemName)) {
-        setProjectItemCreateError('이름에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
+        setProjectItemCreateError('경로에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
         return;
     }
 
@@ -797,7 +817,7 @@ export async function submitProjectItemCreate(event) {
 export async function createCharacter(project, folderName, alias) {
     if (!project.charactersLoaded) await loadProjectCharacters(project);
     if (getProjectItems(project, 'characters').some(character => character.folderName === folderName)) {
-        throw new Error('이미 존재하는 캐릭터 이름입니다.');
+        throw new Error('이미 존재하는 캐릭터 경로입니다.');
     }
 
     await createProjectChildFolder(project, folderName);
@@ -810,7 +830,7 @@ export async function createCharacter(project, folderName, alias) {
 export async function createSituation(project, situationId, alias) {
     if (!project.situationsLoaded) await loadProjectSituations(project);
     if (getProjectItems(project, 'situations').some(situation => situation.id === situationId)) {
-        throw new Error('이미 존재하는 상황 이름입니다.');
+        throw new Error('이미 존재하는 상황 경로입니다.');
     }
 
     const folderNumber = getSituationFolderNumber(situationId);

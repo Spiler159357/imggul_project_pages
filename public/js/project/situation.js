@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js';
 
@@ -227,8 +227,9 @@ export function renderSituationDetailShell(project, situation, state = {}) {
                 <button type="button" onclick="window.toggleSituationActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
                     <i data-lucide="more-vertical" class="w-5 h-5"></i>
                 </button>
-                <div id="situation-action-menu" class="hidden absolute right-0 top-10 z-20 w-40 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
+                <div id="situation-action-menu" class="hidden absolute right-0 top-10 z-20 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
                     <button type="button" onclick="window.renameActiveSituation()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">상황 이름 변경</button>
+                    <button type="button" onclick="window.changeActiveSituationPath()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">상황 경로 변경</button>
                     <button type="button" onclick="window.deleteActiveSituation()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">상황 삭제</button>
                 </div>
             </div>
@@ -374,6 +375,64 @@ export async function renameActiveSituation() {
         renderSituationDetailShell(project, situation);
     } catch (err) {
         alert(err.message || '상황 이름 변경에 실패했습니다.');
+    }
+}
+
+export async function changeActiveSituationPath() {
+    closeSituationActionMenu();
+
+    const project = getActiveProject();
+    const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    if (!project || !situation) return;
+
+    const nextPath = prompt('상황 경로를 입력하세요.', situation.folderName || situation.id);
+    if (nextPath === null) return;
+
+    const folderName = normalizeProjectFolderName(nextPath);
+    if (isInvalidProjectFolderName(folderName)) {
+        alert('경로에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
+        return;
+    }
+
+    const oldId = situation.id;
+    if (folderName === oldId && folderName === situation.folderName) return;
+    if (getProjectItems(project, 'situations').some(item => item !== situation && (item.id === folderName || item.folderName === folderName))) {
+        alert('이미 존재하는 상황 경로입니다.');
+        return;
+    }
+
+    const previousActiveId = window.PROJECT_ACTIVE_SITUATION_ID;
+    const previousId = situation.id;
+    const previousFolderName = situation.folderName;
+    const previousImageNumber = situation.imageNumber;
+
+    try {
+        const previousImageKey = getSituationImageKey(project, situation);
+        const folderNumber = getSituationFolderNumber(folderName);
+        situation.id = folderName;
+        situation.folderName = folderName;
+        if (Number.isFinite(folderNumber)) situation.imageNumber = folderNumber;
+        project.situationsLoaded = true;
+        window.PROJECT_ACTIVE_SITUATION_ID = situation.id;
+
+        await saveProjectSituations(project);
+        const nextImageKey = getSituationImageKey(project, situation);
+        if (previousImageKey !== nextImageKey) {
+            const displayName = getSituationDisplayName(situation);
+            await saveProjectAlias(previousImageKey, '');
+            await saveProjectAlias(nextImageKey, displayName);
+        }
+        renderSituationDetailShell(project, situation);
+        replaceProjectRoute(
+            { projectView: 'situation-detail', projectId: project.id, situationId: situation.id },
+            `#project/${project.id}/situation/${encodeURIComponent(situation.id)}`
+        );
+    } catch (err) {
+        window.PROJECT_ACTIVE_SITUATION_ID = previousActiveId;
+        situation.id = previousId;
+        situation.folderName = previousFolderName;
+        situation.imageNumber = previousImageNumber;
+        alert(err.message || '상황 경로 변경에 실패했습니다.');
     }
 }
 

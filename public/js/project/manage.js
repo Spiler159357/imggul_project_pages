@@ -39,7 +39,7 @@ export function renderProjectManageShell(projects, state = {}) {
                         <button type="button" onclick="window.openProjectDetail('${escapeJsString(project.id)}')" class="w-full h-16 text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-4 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition flex items-center gap-3">
                             <span class="min-w-0 flex-1">
                                 <span class="block font-bold text-sm sm:text-base text-gray-900 dark:text-white truncate">${escapeHtml(project.name)}</span>
-                                ${project.alias ? `<span class="block text-[11px] text-gray-400 dark:text-gray-500 mt-0.5 truncate">${escapeHtml(project.folderName)}</span>` : ''}
+                                ${project.alias ? `<span class="block text-[11px] text-gray-400 dark:text-gray-500 mt-0.5 truncate">경로: ${escapeHtml(project.folderName)}</span>` : ''}
                             </span>
                             <i data-lucide="chevron-right" class="w-5 h-5 text-gray-400 flex-shrink-0"></i>
                         </button>
@@ -66,14 +66,14 @@ export function renderProjectCreateModal() {
 
                 <form id="project-create-form" class="p-4 sm:p-5 space-y-4" onsubmit="window.submitProjectCreate(event)">
                     <div>
-                        <label for="project-create-name" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">이름</label>
-                        <input id="project-create-name" type="text" required class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="실제 폴더 이름">
-                        <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">탐색기 최상위 폴더 이름으로 사용됩니다.</p>
+                        <label for="project-create-name" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">경로</label>
+                        <input id="project-create-name" type="text" required class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="실제 폴더 경로">
+                        <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">탐색기 최상위 폴더 경로로 사용됩니다.</p>
                     </div>
 
                     <div>
-                        <label for="project-create-alias" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">별칭</label>
-                        <input id="project-create-alias" type="text" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="표시 이름">
+                        <label for="project-create-alias" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">이름</label>
+                        <input id="project-create-alias" type="text" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="이름">
                     </div>
 
                     <div id="project-create-error" class="hidden text-xs text-red-500"></div>
@@ -132,12 +132,12 @@ export async function submitProjectCreate(event) {
     const alias = (aliasInput?.value || '').trim();
 
     if (isInvalidProjectFolderName(folderName)) {
-        setProjectCreateError('이름에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
+        setProjectCreateError('경로에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
         return;
     }
 
     if (getProjects().some(project => project.folderName === folderName)) {
-        setProjectCreateError('이미 존재하는 프로젝트 이름입니다.');
+        setProjectCreateError('이미 존재하는 프로젝트 경로입니다.');
         return;
     }
 
@@ -197,8 +197,9 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
                 <button type="button" onclick="window.toggleProjectActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
                     <i data-lucide="more-vertical" class="w-5 h-5"></i>
                 </button>
-                <div id="project-action-menu" class="hidden absolute right-0 top-10 z-20 w-40 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
+                <div id="project-action-menu" class="hidden absolute right-0 top-10 z-20 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
                     <button type="button" onclick="window.renameActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 이름 변경</button>
+                    <button type="button" onclick="window.changeActiveProjectPath()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 경로 변경</button>
                     <button type="button" onclick="window.deleteActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">프로젝트 삭제</button>
                 </div>
             </div>
@@ -239,18 +240,40 @@ export async function renameActiveProject() {
     const project = getActiveProject();
     if (!project) return;
 
-    const nextName = prompt('새 프로젝트 이름을 입력하세요.', project.folderName);
+    const nextName = prompt('새 프로젝트 이름을 입력하세요. 비워두면 경로를 표시합니다.', project.alias || '');
     if (nextName === null) return;
 
-    const folderName = normalizeProjectFolderName(nextName);
+    const alias = nextName.trim();
+    if (alias === (project.alias || '')) return;
+
+    try {
+        await saveProjectAlias(project.prefix, alias);
+        clearProjectCaches(project.prefix);
+        await loadProjects(true);
+        await openProjectDetail(project.id, true);
+        if (window.currentPrefix === getProjectBasePrefix() && window.loadPath) window.loadPath(getProjectBasePrefix(), true);
+    } catch (err) {
+        alert(err.message || '프로젝트 이름 변경 실패');
+    }
+}
+
+export async function changeActiveProjectPath() {
+    closeProjectActionMenu();
+    const project = getActiveProject();
+    if (!project) return;
+
+    const nextPath = prompt('새 프로젝트 경로를 입력하세요.', project.folderName);
+    if (nextPath === null) return;
+
+    const folderName = normalizeProjectFolderName(nextPath);
     if (isInvalidProjectFolderName(folderName)) {
-        alert('이름에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
+        alert('경로에는 /, \\, 숨김 폴더명, 예약 폴더명을 사용할 수 없습니다.');
         return;
     }
 
     if (folderName === project.folderName) return;
     if (getProjects().some(item => item.folderName === folderName)) {
-        alert('이미 존재하는 프로젝트 이름입니다.');
+        alert('이미 존재하는 프로젝트 경로입니다.');
         return;
     }
 
@@ -265,7 +288,7 @@ export async function renameActiveProject() {
         replaceProjectRoute({ projectView: 'detail', projectId: folderName }, `#project/${folderName}`);
         if (window.currentPrefix === getProjectBasePrefix() && window.loadPath) window.loadPath(getProjectBasePrefix(), true);
     } catch (err) {
-        alert(err.message || '프로젝트 이름 변경 실패');
+        alert(err.message || '프로젝트 경로 변경 실패');
     }
 }
 

@@ -69,10 +69,10 @@ export function initSidebarControls() {
 }
 
 /**
- * 역할: 경로에 연결된 별칭 문자열만 찾아 반환한다.
+ * 역할: 경로에 연결된 이름 문자열만 찾아 반환한다.
  * 매개변수: path - 파일/폴더 경로, isFolder - 폴더 여부.
- * 주요 변수: GLOBAL_ALIASES, PROJECT_ALIASES, parts, targetName - 별칭 조회 대상.
- * 반환값: 별칭 문자열 또는 null.
+ * 주요 변수: GLOBAL_ALIASES, PROJECT_ALIASES, parts, targetName - 이름 조회 대상.
+ * 반환값: 이름 문자열 또는 null.
  */
 export function getAliasOnly(path, isFolder) {
     if (window.GLOBAL_ALIASES && window.GLOBAL_ALIASES[path]) return window.GLOBAL_ALIASES[path];
@@ -85,9 +85,9 @@ export function getAliasOnly(path, isFolder) {
 }
 
 /**
- * 역할: 별칭이 있으면 별칭을, 없으면 경로 마지막 조각이나 Root를 표시 이름으로 만든다.
+ * 역할: 이름이 있으면 이름을, 없으면 경로 마지막 조각이나 Root를 표시 이름으로 만든다.
  * 매개변수: path - 파일/폴더 경로, isFolder - 폴더 여부.
- * 주요 변수: alias, parts - 표시명 결정에 쓰는 별칭과 경로 조각.
+ * 주요 변수: alias, parts - 표시명 결정에 쓰는 이름과 경로 조각.
  * 반환값: UI에 표시할 이름 문자열.
  */
 export function getDisplayName(path, isFolder) {

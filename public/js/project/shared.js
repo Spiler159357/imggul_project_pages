@@ -133,7 +133,7 @@ export async function saveProjectAlias(key, alias) {
 
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || '별칭 저장 실패');
+        throw new Error(data.error || '이름 저장 실패');
     }
 }
 
@@ -184,7 +184,7 @@ export async function renameProjectFolder(oldPrefix, newPrefix) {
 
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || '프로젝트 이름 변경 실패');
+        throw new Error(data.error || '프로젝트 경로 변경 실패');
     }
 }
 
@@ -775,7 +775,7 @@ export function renderCharacterName(character) {
     if (character.alias) {
         return `
             <span class="block text-xs font-bold text-gray-800 dark:text-gray-100 truncate">${escapeHtml(character.name)}</span>
-            <span class="block text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">${escapeHtml(character.folderName)}</span>
+            <span class="block text-[11px] text-gray-500 dark:text-gray-400 truncate mt-0.5">경로: ${escapeHtml(character.folderName)}</span>
         `;
     }
 

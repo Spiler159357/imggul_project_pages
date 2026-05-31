@@ -408,7 +408,7 @@ export async function onRequest(context) {
 
                 const existing = await env.imgBucket.list({ prefix: newPrefix, limit: 1 });
                 if (existing.objects.length > 0 || (existing.delimitedPrefixes && existing.delimitedPrefixes.length > 0)) {
-                    throw new Error('Destination folder already exists');
+                    throw new Error('Destination path already exists');
                 }
 
                 let truncated = true;
