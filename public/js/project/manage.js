@@ -109,6 +109,14 @@ export function renderR2JsonMigrationPanel() {
                     </button>
                 </div>
             </div>
+            <div class="mt-3 flex items-center justify-end gap-2 border-t border-gray-100 dark:border-gray-700 pt-3">
+                <button id="r2-json-cleanup-dryrun-btn" type="button" onclick="window.runR2JsonCleanup(true)" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-red-300 dark:hover:border-red-700 transition">
+                    Cleanup dry run
+                </button>
+                <button id="r2-json-cleanup-run-btn" type="button" onclick="window.runR2JsonCleanup(false)" class="px-3 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700 transition">
+                    Delete migrated JSON
+                </button>
+            </div>
             <pre id="r2-json-migration-result" class="mt-3 hidden max-h-48 overflow-auto rounded-md bg-gray-50 dark:bg-gray-900/60 border border-gray-100 dark:border-gray-700 p-3 text-[11px] leading-5 text-gray-700 dark:text-gray-200 whitespace-pre-wrap"></pre>
         </div>
     `;
@@ -151,6 +159,61 @@ export async function runR2JsonMigration(dryRun = true) {
             `skipped: ${summary.skipped || 0}`,
             `errors: ${(summary.errors || []).length}`,
             ...(summary.errors || []).slice(0, 20).map(item => `- ${item.key}: ${item.error}`)
+        ].join('\n');
+    } catch (err) {
+        resultBox.textContent = `[ERROR]\n${err.message || String(err)}`;
+    } finally {
+        if (dryRunBtn) {
+            dryRunBtn.disabled = false;
+            dryRunBtn.textContent = previousDryRunText;
+        }
+        if (runBtn) {
+            runBtn.disabled = false;
+            runBtn.textContent = previousRunText;
+        }
+        refreshProjectIcons();
+    }
+}
+
+export async function runR2JsonCleanup(dryRun = true) {
+    const dryRunBtn = document.getElementById('r2-json-cleanup-dryrun-btn');
+    const runBtn = document.getElementById('r2-json-cleanup-run-btn');
+    const resultBox = document.getElementById('r2-json-migration-result');
+    if (!resultBox) return;
+
+    if (!dryRun && !confirm('DB로 이관된 R2 JSON 파일을 삭제할까요? .memos.json은 제외됩니다.')) return;
+
+    const activeBtn = dryRun ? dryRunBtn : runBtn;
+    const previousDryRunText = dryRunBtn?.textContent || '';
+    const previousRunText = runBtn?.textContent || '';
+    if (dryRunBtn) dryRunBtn.disabled = true;
+    if (runBtn) runBtn.disabled = true;
+    if (activeBtn) activeBtn.textContent = dryRun ? 'Checking...' : 'Deleting...';
+    resultBox.classList.remove('hidden');
+    resultBox.textContent = dryRun ? 'Scanning migrated R2 JSON objects...' : 'Deleting migrated R2 JSON objects...';
+
+    try {
+        const res = await fetch('/api/db/delete-migrated-r2-json', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ dryRun }),
+            cache: 'no-store'
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Cleanup failed (${res.status})`);
+
+        const summary = data.summary || {};
+        resultBox.textContent = [
+            dryRun ? '[CLEANUP DRY RUN]' : '[CLEANUP DONE]',
+            `scanned: ${summary.scanned || 0}`,
+            `matched: ${summary.matched || 0}`,
+            `deleted: ${summary.deleted || 0}`,
+            `skipped: ${summary.skipped || 0}`,
+            `errors: ${(summary.errors || []).length}`,
+            '',
+            'sample keys:',
+            ...(summary.keys || []).map(key => `- ${key}`),
+            ...(summary.errors || []).slice(0, 20).map(item => `- ERROR ${item.batchStart ?? ''}: ${item.error}`)
         ].join('\n');
     } catch (err) {
         resultBox.textContent = `[ERROR]\n${err.message || String(err)}`;

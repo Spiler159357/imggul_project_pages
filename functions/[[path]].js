@@ -182,6 +182,16 @@ async function moveAliasPrefix(env, oldPrefix, newPrefix) {
     }
 }
 
+function isMigratedR2JsonKey(key) {
+    return key === '.imggul_aliases.json'
+        || key.endsWith('/.aliases.json')
+        || key.endsWith('_character_meta.json')
+        || key.endsWith('_situations_meta.json')
+        || key.endsWith('_planner_settings.json')
+        || key.endsWith('_planner_meta.json')
+        || key.endsWith('_meta.json');
+}
+
 // Pages Functions의 Entry Point (모든 Method 요청을 처리하는 Catch-all 핸들러)
 /**
  * 역할: Cloudflare Pages catch-all 요청을 라우팅하고 인증, API, 정적/R2 파일 응답을 처리한다.
@@ -643,6 +653,60 @@ export async function onRequest(context) {
                         summary.skipped += 1;
                     } catch (e) {
                         summary.errors.push({ key, error: e.message || String(e) });
+                    }
+                }
+            }
+
+            return jsonResponse({ success: true, dryRun, summary });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/db/delete-migrated-r2-json" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json().catch(() => ({}));
+            const dryRun = body?.dryRun !== false;
+            const prefix = body?.prefix || '';
+            const summary = {
+                scanned: 0,
+                matched: 0,
+                deleted: 0,
+                skipped: 0,
+                keys: [],
+                errors: []
+            };
+            const keysToDelete = [];
+
+            let truncated = true;
+            let cursor = undefined;
+            while (truncated) {
+                const list = await env.imgBucket.list({ prefix, cursor });
+                truncated = list.truncated;
+                cursor = list.cursor;
+                for (const objectInfo of list.objects || []) {
+                    const key = objectInfo.key;
+                    if (!key.endsWith('.json')) continue;
+                    summary.scanned += 1;
+                    if (!isMigratedR2JsonKey(key) || key.endsWith('.memos.json')) {
+                        summary.skipped += 1;
+                        continue;
+                    }
+                    summary.matched += 1;
+                    keysToDelete.push(key);
+                    if (summary.keys.length < 50) summary.keys.push(key);
+                }
+            }
+
+            if (!dryRun && keysToDelete.length) {
+                for (let i = 0; i < keysToDelete.length; i += 1000) {
+                    const batch = keysToDelete.slice(i, i + 1000);
+                    try {
+                        await env.imgBucket.delete(batch);
+                        summary.deleted += batch.length;
+                    } catch (e) {
+                        summary.errors.push({ batchStart: i, error: e.message || String(e) });
                     }
                 }
             }
