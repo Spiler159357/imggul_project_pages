@@ -21,6 +21,12 @@ const PROJECT_SECTIONS = [
         title: '상황',
         icon: 'map',
         emptyText: '등록된 상황이 없습니다.'
+    },
+    {
+        key: 'planner',
+        title: '플래너',
+        icon: 'calendar-check',
+        emptyText: '생성된 플랜이 없습니다.'
     }
 ];
 
@@ -1296,7 +1302,8 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
 
     await Promise.all([
         loadProjectCharacters(project).catch(() => []),
-        loadProjectSituations(project).catch(() => [])
+        loadProjectSituations(project).catch(() => []),
+        loadPlannerMeta(project).then(meta => { window.PROJECT_PLANNER_META = meta; }).catch(() => { window.PROJECT_PLANNER_META = null; })
     ]);
 
     window.PROJECT_VIEW = 'detail';
@@ -1324,17 +1331,12 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
 
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
             <section class="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 min-h-full">
-                ${PROJECT_SECTIONS.map(section => `
-                    <button type="button" onclick="window.openProjectSection('${escapeJsString(section.key)}')" class="min-h-[220px] text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition flex flex-col">
-                        <span class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 font-bold text-gray-900 dark:text-white">
-                            <i data-lucide="${section.icon}" class="w-4 h-4 text-indigo-600 dark:text-indigo-400"></i>
-                            ${escapeHtml(section.title)}
-                        </span>
-                        <span class="flex-1 p-4 block">
-                            ${renderProjectPanelItems(project, section)}
-                        </span>
-                    </button>
-                `).join('')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'prompt'), 'min-h-[220px]')}
+                <div class="grid grid-rows-2 gap-4 sm:gap-6 min-h-[440px] lg:min-h-full">
+                    ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0')}
+                    ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0')}
+                </div>
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-[220px]')}
             </section>
         </div>
     `);
@@ -1411,7 +1413,35 @@ export async function deleteActiveProject() {
     }
 }
 
+function renderProjectDashboardCard(project, section, sizeClass = 'min-h-[220px]') {
+    if (!section) return '';
+
+    return `
+        <button type="button" onclick="window.openProjectSection('${escapeJsString(section.key)}')" class="${sizeClass} text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition flex flex-col">
+            <span class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 font-bold text-gray-900 dark:text-white">
+                <i data-lucide="${section.icon}" class="w-4 h-4 text-indigo-600 dark:text-indigo-400"></i>
+                ${escapeHtml(section.title)}
+            </span>
+            <span class="flex-1 min-h-0 p-4 block overflow-y-auto">
+                ${renderProjectPanelItems(project, section)}
+            </span>
+        </button>
+    `;
+}
+
 function renderProjectPanelItems(project, section) {
+    if (section.key === 'planner') {
+        const meta = window.PROJECT_PLANNER_META || null;
+        const count = Array.isArray(meta?.items) ? meta.items.length : 0;
+        return `
+            <span class="h-full flex flex-col items-center justify-center text-center text-xs text-gray-500 dark:text-gray-400">
+                <i data-lucide="calendar-check" class="w-8 h-8 mb-2 text-indigo-500"></i>
+                <span class="font-bold text-gray-700 dark:text-gray-200">${count ? `${count}개 플랜 작성 중` : section.emptyText}</span>
+                <span class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">상황 이미지 생성 계획을 여기에서 관리합니다.</span>
+            </span>
+        `;
+    }
+
     const items = getProjectItems(project, section.itemKey);
     if (!items.length) {
         return `
@@ -1450,18 +1480,26 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         });
         if (window.PROJECT_ACTIVE_SECTION === 'character') renderCharacterSection(section);
     }
-    else {
+    else if (section.key === 'situation') {
         const project = getActiveProject();
         renderSituationSection(section, { loading: !!project && !project.situationsLoaded });
+        await loadProjectSituations(project).catch(err => {
+            if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section, { error: err.message });
+        });
+        if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section);
+    }
+    else {
+        const project = getActiveProject();
+        renderPlannerSection(section, { loading: !!project && (!project.situationsLoaded || !project.charactersLoaded) });
         await Promise.all([
             loadProjectSituations(project),
             loadProjectCharacters(project),
             loadPlannerSettings(project).catch(() => normalizePlannerSettings()),
             loadPlannerMeta(project).then(meta => { window.PROJECT_PLANNER_META = meta; })
         ]).catch(err => {
-            if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section, { error: err.message });
+            if (window.PROJECT_ACTIVE_SECTION === 'planner') renderPlannerSection(section, { error: err.message });
         });
-        if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section);
+        if (window.PROJECT_ACTIVE_SECTION === 'planner') renderPlannerSection(section);
     }
 
     const routeState = { projectView: 'section', projectId: window.PROJECT_ACTIVE_PROJECT_ID, projectSection: section.key };
@@ -2616,12 +2654,12 @@ function isPlannerPanelVisible() {
     return !!projectContent
         && !projectContent.classList.contains('hidden')
         && window.PROJECT_VIEW === 'section'
-        && window.PROJECT_ACTIVE_SECTION === 'situation';
+        && window.PROJECT_ACTIVE_SECTION === 'planner';
 }
 
 function renderPlannerIfVisible() {
     if (!isPlannerPanelVisible()) return false;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
     return true;
 }
 
@@ -3307,6 +3345,27 @@ function renderPlannerPanel(project, situations) {
     `;
 }
 
+function renderPlannerSection(section, state = {}) {
+    const project = getActiveProject();
+    const situations = getProjectItems(project, 'situations');
+
+    renderProjectShell(`
+        ${renderSectionHeader(section.title)}
+        <div class="flex-1 overflow-hidden p-4 sm:p-6 min-h-0">
+            <section class="h-full min-h-0">
+                ${state.loading ? renderEmptyState('플래너 데이터를 불러오는 중입니다.') : ''}
+                ${state.error ? renderEmptyState(state.error) : ''}
+                ${!state.loading && !state.error ? renderPlannerPanel(project, situations) : ''}
+            </section>
+        </div>
+        ${renderProjectItemCreateModal()}
+    `);
+}
+
+function renderPlannerSectionByState() {
+    renderPlannerSection(PROJECT_SECTIONS.find(section => section.key === 'planner'));
+}
+
 export async function refreshPlannerPanel() {
     const project = getActiveProject();
     if (!project) return;
@@ -3318,18 +3377,18 @@ export async function refreshPlannerPanel() {
     if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
         startPlannerBackgroundPolling(meta.backgroundJobId);
     }
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 export function setPlannerView(view = 'plan') {
     window.PROJECT_PLANNER_VIEW = ['plan', 'run', 'result'].includes(view) ? view : 'plan';
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 export function setPlannerGenerationMode(mode = 'browser') {
     window.PROJECT_PLANNER_GENERATION_MODE = mode === 'background' ? 'background' : 'browser';
     localStorage.setItem('imggul_planner_generation_mode', window.PROJECT_PLANNER_GENERATION_MODE);
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 export function openPlannerResultModal(situationId) {
@@ -3405,7 +3464,7 @@ export async function savePlannerSettingsFromModal() {
         if (status) status.textContent = '저장되었습니다.';
         setTimeout(() => {
             closePlannerSettingsModal();
-            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+            renderPlannerSectionByState();
         }, 250);
     } catch (err) {
         if (status) status.textContent = err.message || '저장에 실패했습니다.';
@@ -3500,7 +3559,7 @@ export async function addPlannerV4Prompt(imageNumber) {
     ];
     item.generation.v4_prompt = item.generation.v4PromptCharacters;
     window.PROJECT_PLANNER_META = meta;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 export async function removePlannerV4Prompt(imageNumber, index) {
@@ -3513,7 +3572,7 @@ export async function removePlannerV4Prompt(imageNumber, index) {
     item.generation.v4PromptCharacters = (item.generation.v4PromptCharacters || []).filter((_, rowIndex) => rowIndex !== index);
     item.generation.v4_prompt = item.generation.v4PromptCharacters;
     window.PROJECT_PLANNER_META = meta;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 export async function addPlannerDraftItem() {
@@ -3619,7 +3678,7 @@ export async function addPlannerDraftItem() {
     meta.lastSituationId = situation.id;
     meta.updatedAt = Date.now();
     window.PROJECT_PLANNER_META = meta;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 export async function savePlannerDraft() {
@@ -3676,7 +3735,7 @@ export async function deletePlannerItem(situationId) {
     clearFolderDataCaches(getPlannerPrefix(project));
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 export async function deletePlannerImage(key) {
@@ -3707,7 +3766,7 @@ export async function deletePlannerImage(key) {
     meta.updatedAt = Date.now();
     await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 async function waitForPlannerQueueComplete() {
@@ -3896,7 +3955,7 @@ async function runPlannerBackgroundGenerationStart(situationId = null) {
     window.PROJECT_PLANNER_VIEW = 'run';
     await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 
     const res = await fetch('/api/planner/background/start', {
         method: 'POST',
@@ -3916,7 +3975,7 @@ async function runPlannerBackgroundGenerationStart(situationId = null) {
         meta.updatedAt = Date.now();
         await savePlannerMeta(project, meta).catch(() => null);
         window.PROJECT_PLANNER_META = meta;
-        renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+        renderPlannerSectionByState();
         return;
     }
 
@@ -3966,7 +4025,7 @@ export async function startPlannerGeneration(situationId = null) {
     }
     await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 
     const previousSettings = window.readCraftSettings ? window.readCraftSettings() : null;
     const previousVibeFile = window.VIBE_IMAGE_FILE || null;
@@ -3982,7 +4041,7 @@ export async function startPlannerGeneration(situationId = null) {
             applyPlannerSettingsToGeneration(item.generation, plannerSettings);
             await savePlannerMeta(project, meta);
             window.PROJECT_PLANNER_META = meta;
-            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+            renderPlannerSectionByState();
             setPlannerStatus(`${item.imageNumber}.webp 생성 중...`);
 
             if (window.applyCraftSettings) window.applyCraftSettings(item.generation);
@@ -4003,7 +4062,7 @@ export async function startPlannerGeneration(situationId = null) {
             meta.updatedAt = Date.now();
             await savePlannerMeta(project, meta);
             window.PROJECT_PLANNER_META = meta;
-            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+            renderPlannerSectionByState();
             if (result.cancelled) {
                 meta.status = 'paused';
                 break;
@@ -4020,7 +4079,7 @@ export async function startPlannerGeneration(situationId = null) {
         window.VIBE_IMAGE_FILE = previousVibeFile;
         window.PRECISE_IMAGE_FILE = previousPreciseFile;
         if (previousSettings && window.applyCraftSettings) window.applyCraftSettings(previousSettings);
-        renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+        renderPlannerSectionByState();
     }
 }
 
@@ -4034,7 +4093,7 @@ export async function selectPlannerImage(key) {
     meta.updatedAt = Date.now();
     await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
 }
 
 export async function selectPlannerImageFromPreview(key) {
@@ -4193,7 +4252,7 @@ export async function confirmPlannerSelection(situationId = null) {
     await loadCharacterFiles(character, true).catch(() => []);
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
-    renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+    renderPlannerSectionByState();
     } catch (err) {
         setPlannerStatus(err.message || '플랜 확정에 실패했습니다.');
         if (confirmButton) confirmButton.disabled = false;
@@ -4213,7 +4272,7 @@ function renderSituationSection(section, state = {}) {
     renderProjectShell(`
         ${renderSectionHeader(section.title)}
         <div class="flex-1 overflow-hidden p-4 sm:p-6 min-h-0">
-            <section class="grid h-full min-h-0 grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,1fr)] xl:grid-cols-2 xl:grid-rows-none gap-4 sm:gap-6">
+            <section class="h-full min-h-0">
                 <div class="min-h-0 flex flex-col">
                     <div class="flex items-center justify-between mb-4 flex-shrink-0">
                         <h3 class="font-bold text-base text-gray-900 dark:text-white">상황 목록</h3>
@@ -4237,14 +4296,6 @@ function renderSituationSection(section, state = {}) {
                         </div>
                     ` : ''}
                     ${!state.loading && !state.error && !situations.length ? renderEmptyState('등록된 상황이 없습니다.') : ''}
-                </div>
-
-                ${renderPlannerPanel(project, situations)}
-                <div class="hidden">
-                    <h3 class="font-bold text-sm text-gray-900 dark:text-white mb-4">액션 생성 플래너</h3>
-                    <div class="flex-1 flex items-start justify-center pt-10 text-sm font-bold text-gray-500 dark:text-gray-400 text-center">
-                        기능 및 상세 레이아웃은 추후 구현
-                    </div>
                 </div>
             </section>
         </div>
