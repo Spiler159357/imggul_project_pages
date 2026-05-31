@@ -322,7 +322,113 @@ function normalizePlannerV4PromptRows(rows = []) {
         : [];
 }
 
+function createPromptVariantId(prefix = 'variant') {
+    return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function normalizeCharacterPromptParts(parts = {}, fallbackPrompt = '') {
+    return {
+        ...(parts || {}),
+        character: String(parts?.character || fallbackPrompt || '').trim(),
+        clothing: String(parts?.clothing || '').trim(),
+        negative: String(parts?.negative || '').trim()
+    };
+}
+
+function normalizeCharacterPromptVariants(meta = {}) {
+    const source = Array.isArray(meta.promptVariants) ? meta.promptVariants : [];
+    const variants = source.map((variant, index) => {
+        const parts = normalizeCharacterPromptParts(variant?.parts || {}, variant?.prompt || '');
+        return {
+            id: String(variant?.id || `outfit-${index + 1}`),
+            name: String(variant?.name || variant?.label || `Outfit ${index + 1}`),
+            prompt: parts.character,
+            parts,
+            updatedAt: variant?.updatedAt || meta.updatedAt || Date.now()
+        };
+    });
+
+    if (!variants.length) {
+        const parts = normalizeCharacterPromptParts(meta.parts || {}, meta.prompt || '');
+        variants.push({
+            id: 'default',
+            name: 'Default',
+            prompt: parts.character,
+            parts,
+            updatedAt: meta.updatedAt || Date.now()
+        });
+    }
+
+    return variants;
+}
+
+function getActiveCharacterPromptVariant(meta = {}) {
+    const variants = normalizeCharacterPromptVariants(meta);
+    return variants.find(variant => variant.id === meta.activePromptVariantId) || variants[0];
+}
+
+function normalizeSituationPrompt(prompt = {}) {
+    return {
+        composition: String(prompt?.composition || '').trim(),
+        expression: String(prompt?.expression || '').trim(),
+        action: String(prompt?.action || '').trim(),
+        background: String(prompt?.background || '').trim(),
+        negative: String(prompt?.negative || '').trim()
+    };
+}
+
+function normalizeSituationPromptVariants(situation = {}) {
+    const source = Array.isArray(situation.promptVariants) ? situation.promptVariants : [];
+    const variants = source.map((variant, index) => {
+        const prompt = normalizeSituationPrompt(variant?.prompt || {});
+        const generation = variant?.generation || {};
+        const v4PromptCharacters = normalizePlannerV4PromptRows(
+            generation.v4PromptCharacters || generation.v4_prompt || variant?.v4PromptCharacters || variant?.v4_prompt || []
+        );
+        return {
+            id: String(variant?.id || `composition-${index + 1}`),
+            name: String(variant?.name || variant?.label || `Composition ${index + 1}`),
+            prompt,
+            generation: {
+                res: generation.res || variant?.resolution || variant?.res || situation.resolution || situation.res || DEFAULT_PLANNER_RESOLUTION,
+                v4PromptCharacters,
+                v4_prompt: v4PromptCharacters
+            },
+            updatedAt: variant?.updatedAt || situation.updatedAt || Date.now()
+        };
+    });
+
+    if (!variants.length) {
+        const prompt = normalizeSituationPrompt(situation.prompt || {});
+        const generation = situation.generation || {};
+        const v4PromptCharacters = normalizePlannerV4PromptRows(
+            generation.v4PromptCharacters || generation.v4_prompt || situation.v4PromptCharacters || situation.v4_prompt || []
+        );
+        variants.push({
+            id: 'default',
+            name: 'Default',
+            prompt,
+            generation: {
+                res: generation.res || situation.resolution || situation.res || DEFAULT_PLANNER_RESOLUTION,
+                v4PromptCharacters,
+                v4_prompt: v4PromptCharacters
+            },
+            updatedAt: situation.updatedAt || Date.now()
+        });
+    }
+
+    return variants;
+}
+
+function getActiveSituationPromptVariant(situation = {}) {
+    const variants = normalizeSituationPromptVariants(situation);
+    return variants.find(variant => variant.id === situation.activePromptVariantId) || variants[0];
+}
+
 function getSituationGeneration(situation = {}) {
+    const activeVariant = getActiveSituationPromptVariant(situation);
+    if (activeVariant) return activeVariant.generation;
+
     const generation = situation.generation || {};
     const v4PromptCharacters = normalizePlannerV4PromptRows(
         generation.v4PromptCharacters || generation.v4_prompt || situation.v4PromptCharacters || situation.v4_prompt || []
@@ -1750,8 +1856,10 @@ function renderCharacterDetailShell(project, character, state = {}) {
     const rows = getSituationRows(character, situations, files);
     const progress = getCharacterProgress(rows);
     const coverImage = rows.find(row => row.image)?.imageUrl || getAssetUrl(character.coverImage);
-    const promptParts = meta.parts || {};
-    const characterPrompt = promptParts.character || meta.prompt || '';
+    const promptVariants = normalizeCharacterPromptVariants(meta);
+    const activePromptVariant = getActiveCharacterPromptVariant(meta);
+    const promptParts = activePromptVariant.parts || {};
+    const characterPrompt = promptParts.character || activePromptVariant.prompt || '';
     const clothingPrompt = promptParts.clothing || '';
     const negativePrompt = promptParts.negative || '';
 
@@ -1825,10 +1933,22 @@ function renderCharacterDetailShell(project, character, state = {}) {
                         <form id="character-prompt-form" onsubmit="window.saveCharacterPrompt(event)" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex flex-col min-h-[360px]">
                             <div class="flex items-center justify-between gap-3 mb-3">
                                 <h3 class="text-sm font-bold text-gray-900 dark:text-white">캐릭터 프롬프트</h3>
-                                <button id="character-prompt-save-btn" type="submit" class="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
+                                <div class="flex flex-wrap items-center justify-end gap-2">
+                                    <button type="button" onclick="window.addCharacterPromptVariant()" class="flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 text-xs font-bold hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                                        <i data-lucide="plus" class="w-4 h-4"></i>
+                                        신규 의상 추가
+                                    </button>
+                                    <button id="character-prompt-save-btn" type="submit" class="flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
                                     <i data-lucide="save" class="w-4 h-4"></i>
                                     저장
-                                </button>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="mb-3">
+                                <label for="character-prompt-variant-select" class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">의상 / 헤어스타일</label>
+                                <select id="character-prompt-variant-select" onchange="window.selectCharacterPromptVariant(this.value)" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                    ${promptVariants.map(variant => `<option value="${escapeHtml(variant.id)}" ${variant.id === activePromptVariant.id ? 'selected' : ''}>${escapeHtml(variant.name)}</option>`).join('')}
+                                </select>
                             </div>
                             <div class="flex-1 grid grid-cols-1 gap-3">
                                 <label class="block">
@@ -2016,6 +2136,7 @@ export async function saveCharacterPrompt(event) {
 
     const project = getActiveProject();
     const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
+    const variantSelect = document.getElementById('character-prompt-variant-select');
     const characterInput = document.getElementById('character-prompt-character-input');
     const clothingInput = document.getElementById('character-prompt-clothing-input');
     const negativeInput = document.getElementById('character-prompt-negative-input');
@@ -2033,6 +2154,8 @@ export async function saveCharacterPrompt(event) {
 
     try {
         const meta = await loadCharacterMeta(character).catch(() => ({}));
+        const variants = normalizeCharacterPromptVariants(meta);
+        const activeVariantId = variantSelect?.value || meta.activePromptVariantId || variants[0]?.id || 'default';
         const remainingParts = { ...(meta.parts || {}) };
         delete remainingParts.expression;
         const parts = {
@@ -2041,10 +2164,16 @@ export async function saveCharacterPrompt(event) {
             clothing: clothingInput.value.trim(),
             negative: negativeInput.value.trim()
         };
+        const nextVariants = variants.map(variant => variant.id === activeVariantId
+            ? { ...variant, prompt: parts.character, parts, updatedAt: Date.now() }
+            : variant
+        );
         await saveCharacterMeta(character, {
             ...meta,
             prompt: parts.character,
             parts,
+            promptVariants: nextVariants,
+            activePromptVariantId: activeVariantId,
             updatedAt: Date.now()
         });
         if (status) status.textContent = '저장되었습니다.';
@@ -2057,6 +2186,54 @@ export async function saveCharacterPrompt(event) {
             refreshProjectIcons();
         }
     }
+}
+
+export async function selectCharacterPromptVariant(variantId) {
+    const project = getActiveProject();
+    const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
+    if (!project || !character || !variantId) return;
+
+    const meta = await loadCharacterMeta(character).catch(() => character.meta || {});
+    const variants = normalizeCharacterPromptVariants(meta);
+    const activeVariant = variants.find(variant => variant.id === variantId) || variants[0];
+    const parts = activeVariant.parts || {};
+    character.meta = {
+        ...meta,
+        prompt: parts.character || '',
+        parts,
+        promptVariants: variants,
+        activePromptVariantId: activeVariant.id
+    };
+    renderCharacterDetailShell(project, character);
+}
+
+export async function addCharacterPromptVariant() {
+    const project = getActiveProject();
+    const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
+    if (!project || !character) return;
+
+    const name = prompt('새 의상/헤어스타일 이름을 입력하세요.', 'New Outfit');
+    if (name === null) return;
+    const meta = await loadCharacterMeta(character).catch(() => character.meta || {});
+    const variants = normalizeCharacterPromptVariants(meta);
+    const newVariant = {
+        id: createPromptVariantId('outfit'),
+        name: name.trim() || 'New Outfit',
+        prompt: '',
+        parts: normalizeCharacterPromptParts({}),
+        updatedAt: Date.now()
+    };
+    const nextMeta = {
+        ...meta,
+        prompt: '',
+        parts: newVariant.parts,
+        promptVariants: [...variants, newVariant],
+        activePromptVariantId: newVariant.id,
+        updatedAt: Date.now()
+    };
+
+    await saveCharacterMeta(character, nextMeta);
+    renderCharacterDetailShell(project, character);
 }
 
 export async function prepareCharacterGeneration(projectId = window.PROJECT_ACTIVE_PROJECT_ID, characterId = window.PROJECT_ACTIVE_CHARACTER_ID, situationIndex = null) {
@@ -4312,13 +4489,7 @@ function getSituationById(project, situationId) {
 }
 
 function getSituationPrompt(situation) {
-    return {
-        composition: situation?.prompt?.composition || '',
-        expression: situation?.prompt?.expression || '',
-        action: situation?.prompt?.action || '',
-        background: situation?.prompt?.background || '',
-        negative: situation?.prompt?.negative || ''
-    };
+    return getActiveSituationPromptVariant(situation)?.prompt || normalizeSituationPrompt(situation?.prompt || {});
 }
 
 function combinePromptParts(...values) {
@@ -4469,6 +4640,8 @@ export function removeSituationV4PromptRow(rowId) {
 
 function renderSituationDetailShell(project, situation, state = {}) {
     const prompt = getSituationPrompt(situation);
+    const promptVariants = normalizeSituationPromptVariants(situation);
+    const activePromptVariant = getActiveSituationPromptVariant(situation);
     const imageNumber = getSituationImageNumber(project, situation);
     const generation = getSituationGeneration(situation);
     const resolution = generation.res || DEFAULT_PLANNER_RESOLUTION;
@@ -4498,11 +4671,19 @@ function renderSituationDetailShell(project, situation, state = {}) {
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
             <section class="max-w-7xl mx-auto min-h-full">
                 <form id="situation-prompt-form" onsubmit="window.saveActiveSituationPrompt(event)" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                    <div class="mb-4 max-w-xs">
+                    <div class="mb-4 flex flex-col md:flex-row md:items-end gap-3">
+                        <div class="flex-1 min-w-0">
+                            <label for="situation-prompt-variant-select" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구도</label>
+                            <select id="situation-prompt-variant-select" onchange="window.selectSituationPromptVariant(this.value)" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                ${promptVariants.map(variant => `<option value="${escapeHtml(variant.id)}" ${variant.id === activePromptVariant.id ? 'selected' : ''}>${escapeHtml(variant.name)}</option>`).join('')}
+                            </select>
+                        </div>
+                        <div class="w-full md:w-56">
                         <label for="situation-resolution-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">해상도</label>
                         <select id="situation-resolution-input" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                             ${PLANNER_RESOLUTION_OPTIONS.map(([value, label]) => `<option value="${escapeHtml(value)}" ${resolution === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}
                         </select>
+                        </div>
                     </div>
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
                         <div>
@@ -4523,8 +4704,12 @@ function renderSituationDetailShell(project, situation, state = {}) {
                         </div>
                     </div>
                     ${renderSituationV4PromptSection(situation)}
-                    <div class="mt-3 flex items-center justify-end gap-3">
+                    <div class="mt-3 flex flex-wrap items-center justify-end gap-3">
                         <p id="situation-prompt-save-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                        <button type="button" onclick="window.addSituationPromptVariant()" class="flex items-center gap-1.5 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 text-xs font-bold hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition">
+                            <i data-lucide="plus" class="w-4 h-4"></i>
+                            신규 구도 추가
+                        </button>
                         <button id="situation-prompt-save-btn" type="submit" class="flex items-center gap-1.5 px-4 py-2.5 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
                             <i data-lucide="save" class="w-4 h-4"></i>
                             저장
@@ -4656,6 +4841,7 @@ export async function saveActiveSituationPrompt(event) {
 
     const project = getActiveProject();
     const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    const variantSelect = document.getElementById('situation-prompt-variant-select');
     const resolutionInput = document.getElementById('situation-resolution-input');
     const compositionInput = document.getElementById('situation-composition-input');
     const expressionInput = document.getElementById('situation-expression-input');
@@ -4674,7 +4860,7 @@ export async function saveActiveSituationPrompt(event) {
     if (status) status.textContent = '';
 
     try {
-        situation.prompt = {
+        const prompt = {
             ...(situation.prompt || {}),
             composition: compositionInput.value.trim(),
             expression: expressionInput.value.trim(),
@@ -4684,12 +4870,22 @@ export async function saveActiveSituationPrompt(event) {
         const currentGeneration = getSituationGeneration(situation);
         const resolution = resolutionInput.value || DEFAULT_PLANNER_RESOLUTION;
         const v4PromptCharacters = normalizePlannerV4PromptRows(readSituationV4PromptRows());
-        situation.generation = {
+        const generation = {
             ...currentGeneration,
             res: resolution,
             v4PromptCharacters,
             v4_prompt: v4PromptCharacters
         };
+        const variants = normalizeSituationPromptVariants(situation);
+        const activeVariantId = variantSelect?.value || situation.activePromptVariantId || variants[0]?.id || 'default';
+        const nextVariants = variants.map(variant => variant.id === activeVariantId
+            ? { ...variant, prompt, generation, updatedAt: Date.now() }
+            : variant
+        );
+        situation.prompt = prompt;
+        situation.generation = generation;
+        situation.promptVariants = nextVariants;
+        situation.activePromptVariantId = activeVariantId;
         situation.resolution = resolution;
         situation.res = resolution;
         situation.v4PromptCharacters = v4PromptCharacters;
@@ -4706,6 +4902,58 @@ export async function saveActiveSituationPrompt(event) {
             refreshProjectIcons();
         }
     }
+}
+
+export function selectSituationPromptVariant(variantId) {
+    const project = getActiveProject();
+    const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    if (!project || !situation || !variantId) return;
+
+    const variants = normalizeSituationPromptVariants(situation);
+    const activeVariant = variants.find(variant => variant.id === variantId) || variants[0];
+    situation.prompt = activeVariant.prompt;
+    situation.generation = activeVariant.generation;
+    situation.promptVariants = variants;
+    situation.activePromptVariantId = activeVariant.id;
+    situation.resolution = activeVariant.generation.res || DEFAULT_PLANNER_RESOLUTION;
+    situation.res = situation.resolution;
+    situation.v4PromptCharacters = activeVariant.generation.v4PromptCharacters || [];
+    situation.v4_prompt = situation.v4PromptCharacters;
+    renderSituationDetailShell(project, situation);
+}
+
+export async function addSituationPromptVariant() {
+    const project = getActiveProject();
+    const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
+    if (!project || !situation) return;
+
+    const name = prompt('새 구도 이름을 입력하세요.', 'New Composition');
+    if (name === null) return;
+    const variants = normalizeSituationPromptVariants(situation);
+    const resolution = document.getElementById('situation-resolution-input')?.value || DEFAULT_PLANNER_RESOLUTION;
+    const newVariant = {
+        id: createPromptVariantId('composition'),
+        name: name.trim() || 'New Composition',
+        prompt: normalizeSituationPrompt({}),
+        generation: {
+            res: resolution,
+            v4PromptCharacters: [],
+            v4_prompt: []
+        },
+        updatedAt: Date.now()
+    };
+
+    situation.prompt = newVariant.prompt;
+    situation.generation = newVariant.generation;
+    situation.promptVariants = [...variants, newVariant];
+    situation.activePromptVariantId = newVariant.id;
+    situation.resolution = resolution;
+    situation.res = resolution;
+    situation.v4PromptCharacters = [];
+    situation.v4_prompt = [];
+    situation.updatedAt = Date.now();
+    await saveProjectSituations(project);
+    renderSituationDetailShell(project, situation);
 }
 
 function getCraftPromptFields() {
@@ -4820,6 +5068,8 @@ export async function saveCraftPromptToCharacterParts() {
         };
         const meta = await loadCharacterMeta(character).catch(() => ({}));
         const fields = getCraftPromptFields();
+        const variants = normalizeCharacterPromptVariants(meta);
+        const activeVariantId = meta.activePromptVariantId || variants[0]?.id || 'default';
         const parts = {
             ...(meta.parts || {}),
             character: fields.character,
@@ -4827,11 +5077,17 @@ export async function saveCraftPromptToCharacterParts() {
             expression: fields.expression,
             negative: fields.negative
         };
+        const nextVariants = variants.map(variant => variant.id === activeVariantId
+            ? { ...variant, prompt: parts.character, parts, updatedAt: Date.now() }
+            : variant
+        );
 
         await saveCharacterMeta(character, {
             ...meta,
             prompt: parts.character,
             parts,
+            promptVariants: nextVariants,
+            activePromptVariantId: activeVariantId,
             updatedAt: Date.now()
         });
         setCraftPromptSaveStatus('캐릭터 프롬프트 저장 완료');
@@ -4853,7 +5109,7 @@ export async function saveCraftPromptToSituation() {
         if (!situation) throw new Error('선택한 상황을 찾지 못했습니다.');
 
         const fields = getCraftPromptFields();
-        situation.prompt = {
+        const prompt = {
             ...(situation.prompt || {}),
             composition: fields.composition,
             expression: fields.expression,
@@ -4863,11 +5119,21 @@ export async function saveCraftPromptToSituation() {
         };
         const currentGeneration = getSituationGeneration(situation);
         const v4PromptCharacters = window.readCraftV4PromptRows ? normalizePlannerV4PromptRows(window.readCraftV4PromptRows()) : [];
-        situation.generation = {
+        const generation = {
             ...currentGeneration,
             v4PromptCharacters,
             v4_prompt: v4PromptCharacters
         };
+        const variants = normalizeSituationPromptVariants(situation);
+        const activeVariantId = situation.activePromptVariantId || variants[0]?.id || 'default';
+        const nextVariants = variants.map(variant => variant.id === activeVariantId
+            ? { ...variant, prompt, generation, updatedAt: Date.now() }
+            : variant
+        );
+        situation.prompt = prompt;
+        situation.generation = generation;
+        situation.promptVariants = nextVariants;
+        situation.activePromptVariantId = activeVariantId;
         situation.v4PromptCharacters = v4PromptCharacters;
         situation.v4_prompt = v4PromptCharacters;
         situation.updatedAt = Date.now();
