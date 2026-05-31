@@ -3,6 +3,16 @@ import { renderSectionHeader } from './manage.js';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js';
 import { combinePromptParts, getSituationById } from './situation.js';
 
+const PLANNER_DEFAULT_IMAGE_COUNT = 20;
+const PLANNER_MIN_IMAGE_COUNT = 1;
+const PLANNER_MAX_IMAGE_COUNT = 100;
+
+function clampPlannerImageCount(value, fallback = PLANNER_DEFAULT_IMAGE_COUNT) {
+    const parsed = parseInt(value, 10);
+    const count = Number.isFinite(parsed) ? parsed : fallback;
+    return Math.min(PLANNER_MAX_IMAGE_COUNT, Math.max(PLANNER_MIN_IMAGE_COUNT, count));
+}
+
 export async function loadPlannerMeta(project, characterId = '') {
     if (!project?.prefix) return null;
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
@@ -206,7 +216,7 @@ export function readPlannerEditsFromDom(meta) {
             if (input) fields[key] = input.value.trim();
         });
         const countInput = document.getElementById(`planner-${item.imageNumber}-count`);
-        if (countInput) item.count = Math.max(1, parseInt(countInput.value) || 1);
+        if (countInput) item.count = clampPlannerImageCount(countInput.value);
         const generationInputs = {
             res: document.getElementById(`planner-${item.imageNumber}-res`)?.value
         };
@@ -567,7 +577,7 @@ export function renderPlannerResultList(meta) {
                                 <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500 truncate">${escapeHtml(item.imageNumber)}.webp · ${selected ? '선택됨' : '미선택'}</p>
                             </div>
                             <div class="flex items-center gap-2 flex-shrink-0">
-                                <span class="px-2 py-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-600 dark:text-gray-300">목표 ${escapeHtml(item.count || 1)}</span>
+                                <span class="px-2 py-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-600 dark:text-gray-300">목표 ${escapeHtml(clampPlannerImageCount(item.count))}</span>
                                 <span class="px-2 py-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-600 dark:text-gray-300">생성 ${generatedCount}</span>
                                 <button type="button" onclick="event.stopPropagation(); window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="inline-flex p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
                                     <i data-lucide="trash-2" class="w-4 h-4"></i>
@@ -592,7 +602,7 @@ export function renderPlannerResultModal(meta) {
                 <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                     <div class="min-w-0">
                         <h3 class="text-sm font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.situationName || item.situationId)}</h3>
-                        <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">목표 ${escapeHtml(item.count || 1)}장 · 생성 ${images.length}장 · ${item.selectedImage ? '선택됨' : '미선택'}</p>
+                        <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">목표 ${escapeHtml(clampPlannerImageCount(item.count))}장 · 생성 ${images.length}장 · ${item.selectedImage ? '선택됨' : '미선택'}</p>
                     </div>
                     <button type="button" onclick="window.closePlannerResultModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" title="닫기" aria-label="닫기">
                         <i data-lucide="x" class="w-5 h-5"></i>
@@ -797,7 +807,7 @@ export function renderPlannerProgressPanel(meta) {
                             <p class="min-w-0 truncate text-[11px] font-bold text-gray-800 dark:text-gray-100">${escapeHtml(item.situationName || item.situationId)}</p>
                             <span class="flex-shrink-0 text-[10px] font-bold ${['queued', 'running', 'cancel_requested'].includes(item.status) ? 'text-indigo-600 dark:text-indigo-300' : 'text-gray-500 dark:text-gray-400'}">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>
                         </div>
-                        <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">후보 ${item.images?.length || 0}장 / 목표 ${escapeHtml(item.count || 1)}장</p>
+                        <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">후보 ${item.images?.length || 0}장 / 목표 ${escapeHtml(clampPlannerImageCount(item.count))}장</p>
                         ${item.stage ? `<p class="mt-1 text-[10px] font-bold text-indigo-600 dark:text-indigo-300">${escapeHtml(getPlannerStageLabel(item.stage))}</p>` : ''}
                         ${item.errorMessage ? `<p class="mt-1 text-[10px] text-red-500 truncate">${escapeHtml(item.errorMessage)}</p>` : ''}
                     </div>
@@ -834,7 +844,7 @@ export function renderPlannerSituationGrid(project, situations, character, meta,
                             <span class="min-w-0 flex-1">
                                 <span class="block truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(getSituationDisplayName(situation))}</span>
                                 <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${complete || selected ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}">${escapeHtml(statusText)}</span>
-                                ${item ? `<span class="mt-1 block truncate text-[10px] text-gray-500 dark:text-gray-400">플랜 ${escapeHtml(item.count || 1)}회 · ${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>` : '<span class="mt-1 block text-[10px] text-gray-400 dark:text-gray-500">플랜 없음</span>'}
+                                ${item ? `<span class="mt-1 block truncate text-[10px] text-gray-500 dark:text-gray-400">플랜 ${escapeHtml(clampPlannerImageCount(item.count))}회 · ${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>` : '<span class="mt-1 block text-[10px] text-gray-400 dark:text-gray-500">플랜 없음</span>'}
                             </span>
                         </div>
                     </button>
@@ -877,7 +887,9 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
     if (!fields.style) fields.style = projectStyle;
     if (!fields.background) fields.background = 'white background';
     if (!fields.negative) fields.negative = defaultFields.negative;
-    const count = existingItem?.count || Math.max(1, situationVariants.length);
+    const count = existingItem?.count === undefined
+        ? PLANNER_DEFAULT_IMAGE_COUNT
+        : clampPlannerImageCount(existingItem.count);
 
     return `
         <div id="planner-situation-plan-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onclick="window.closePlannerSituationPlanModal(event)">
@@ -895,7 +907,7 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                         ${renderPlannerSelect('planner-plan-character-variant', '의상 / 헤어스타일', selectedCharacterVariantId, characterVariants.map(variant => [variant.id, getPlannerPromptVariantName(variant)]))}
                         ${renderPlannerSelect('planner-plan-res', '해상도', generation.res || DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS)}
-                        ${renderPlannerNumberInput('planner-plan-count', '생성 횟수', count, 'type="number" min="1" max="48"')}
+                        ${renderPlannerNumberInput('planner-plan-count', '생성 횟수', count, `type="number" min="${PLANNER_MIN_IMAGE_COUNT}" max="${PLANNER_MAX_IMAGE_COUNT}"`)}
                     </div>
                     <div>
                         <p class="mb-2 text-[10px] font-bold text-gray-500 dark:text-gray-400">적용할 구도</p>
@@ -956,10 +968,10 @@ export function renderPlannerPanel(project, situations) {
                     <div class="flex items-center justify-between gap-3 mb-3">
                         <div class="min-w-0">
                             <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
-                            <p class="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 생성 ${escapeHtml(item.count || 1)}장</p>
+                            <p class="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 생성 ${escapeHtml(clampPlannerImageCount(item.count))}장</p>
                         </div>
                         <div class="flex items-center gap-2 flex-shrink-0">
-                            <input id="planner-${escapeHtml(item.imageNumber)}-count" type="number" min="1" max="12" value="${escapeHtml(item.count || 1)}" class="w-16 p-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
+                            <input id="planner-${escapeHtml(item.imageNumber)}-count" type="number" min="${PLANNER_MIN_IMAGE_COUNT}" max="${PLANNER_MAX_IMAGE_COUNT}" value="${escapeHtml(clampPlannerImageCount(item.count))}" class="w-16 p-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
                             <button type="button" onclick="window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
                                 <i data-lucide="trash-2" class="w-4 h-4"></i>
                             </button>
@@ -1048,7 +1060,7 @@ export function renderPlannerPanel(project, situations) {
                             <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 후보 ${item.images?.length || 0}장</p>
                         </div>
                         <div class="flex items-center gap-2 flex-shrink-0">
-                            <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(item.count || 1)}장</span>
+                            <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(clampPlannerImageCount(item.count))}장</span>
                             <button type="button" onclick="window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
                                 <i data-lucide="trash-2" class="w-4 h-4"></i>
                             </button>
@@ -1399,7 +1411,7 @@ export async function savePlannerSituationPlan() {
         return;
     }
 
-    const count = Math.max(1, parseInt(document.getElementById('planner-plan-count')?.value, 10) || activeSituationVariants.length);
+    const count = clampPlannerImageCount(document.getElementById('planner-plan-count')?.value);
     const counts = distributePlannerCount(count, activeSituationVariants.length);
     const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
@@ -1919,7 +1931,7 @@ export async function startPlannerGeneration(situationId = null) {
             item.status = 'running';
             const runGenerations = Array.isArray(item.variantGenerations) && item.variantGenerations.length
                 ? item.variantGenerations
-                : [{ count: item.count || meta.defaultCount || 1, generation: item.generation }];
+                : [{ count: clampPlannerImageCount(item.count || meta.defaultCount), generation: item.generation }];
             let result = {};
             for (const variantRun of runGenerations) {
             if (window.PROJECT_PLANNER_PAUSE_REQUESTED || window.PROJECT_PLANNER_CANCEL_REQUESTED) {
@@ -1927,7 +1939,7 @@ export async function startPlannerGeneration(situationId = null) {
                 break;
             }
             const generation = variantRun.generation || item.generation;
-            generation.batchCount = String(variantRun.count || item.count || meta.defaultCount || 1);
+            generation.batchCount = String(clampPlannerImageCount(variantRun.count || item.count || meta.defaultCount));
             applyPlannerSettingsToGeneration(generation, plannerSettings);
             item.generation = generation;
             await savePlannerMeta(project, meta);
