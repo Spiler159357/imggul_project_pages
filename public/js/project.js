@@ -3594,6 +3594,7 @@ function renderPlannerSituationPlanModal(project, situation, character, meta) {
                     <p id="planner-plan-modal-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                 </div>
                 <div class="flex items-center justify-end gap-2 px-4 py-3 border-t border-gray-200 dark:border-gray-700">
+                    ${existingItem ? `<button type="button" onclick="window.deletePlannerItemFromModal('${escapeJsString(situation.id)}')" class="mr-auto px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-xs font-bold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20">플랜 삭제</button>` : ''}
                     <button type="button" onclick="window.closePlannerSituationPlanModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
                     <button type="button" onclick="window.savePlannerSituationPlan()" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">플랜 추가</button>
                 </div>
@@ -4220,6 +4221,14 @@ export async function deletePlannerItem(situationId) {
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
     renderPlannerSectionByState();
+}
+
+export async function deletePlannerItemFromModal(situationId) {
+    await deletePlannerItem(situationId);
+    if (window.PLANNER_PLAN_MODAL_SITUATION_ID === situationId) {
+        window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
+        renderPlannerSituationPlanOverlay();
+    }
 }
 
 export async function deletePlannerImage(key) {
