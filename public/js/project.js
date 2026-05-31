@@ -1623,6 +1623,7 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         const character = getCharacterById(project, characterId);
         await Promise.all([
             loadPlannerMeta(project, characterId).then(meta => { window.PROJECT_PLANNER_META = meta; }).catch(() => { window.PROJECT_PLANNER_META = null; }),
+            loadProjectStylePrompt(project).then(style => { window.PROJECT_PLANNER_PROJECT_STYLE = style || ''; }).catch(() => { window.PROJECT_PLANNER_PROJECT_STYLE = ''; }),
             character ? loadCharacterFiles(character).catch(() => []) : Promise.resolve([]),
             character ? loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
         ]);
@@ -3354,7 +3355,46 @@ function renderPlannerSituationPlanOverlay() {
     const situation = getSituationById(project, window.PLANNER_PLAN_MODAL_SITUATION_ID);
     const character = getCharacterById(project, getSelectedPlannerCharacterId(project));
     root.innerHTML = renderPlannerSituationPlanModal(project, situation, character, window.PROJECT_PLANNER_META || null);
+    document.getElementById('planner-plan-character-variant')?.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('character'));
+    document.querySelectorAll('[data-planner-plan-situation-variant]').forEach(input => {
+        input.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('situation'));
+    });
     if (window.lucide) lucide.createIcons();
+}
+
+export function updatePlannerPlanModalDefaults(scope = 'all') {
+    const project = getActiveProject();
+    const situation = getSituationById(project, window.PLANNER_PLAN_MODAL_SITUATION_ID);
+    const character = getCharacterById(project, getSelectedPlannerCharacterId(project));
+    if (!project || !situation || !character) return;
+
+    const characterVariants = normalizeCharacterPromptVariants(character.meta || {});
+    const situationVariants = normalizeSituationPromptVariants(situation);
+    const characterVariantId = document.getElementById('planner-plan-character-variant')?.value || characterVariants[0]?.id || 'default';
+    const characterVariant = characterVariants.find(variant => variant.id === characterVariantId) || characterVariants[0];
+    const selectedSituationVariantIds = Array.from(document.querySelectorAll('[data-planner-plan-situation-variant]:checked')).map(input => input.value);
+    const situationVariant = situationVariants.find(variant => selectedSituationVariantIds.includes(variant.id)) || situationVariants[0];
+    const characterParts = characterVariant?.parts || {};
+    const situationPrompt = situationVariant?.prompt || {};
+
+    const setValue = (id, value) => {
+        const input = document.getElementById(id);
+        if (input) input.value = value || '';
+    };
+
+    if (scope === 'all' || scope === 'character') {
+        setValue('planner-plan-character', characterParts.character || characterVariant?.prompt || '');
+        setValue('planner-plan-clothing', characterParts.clothing || '');
+    }
+    if (scope === 'all' || scope === 'situation') {
+        setValue('planner-plan-composition', situationPrompt.composition || '');
+        setValue('planner-plan-expression', situationPrompt.expression || '');
+        setValue('planner-plan-action', situationPrompt.action || '');
+        setValue('planner-plan-background', situationPrompt.background || 'white background');
+    }
+    const styleInput = document.getElementById('planner-plan-style');
+    if (styleInput && !styleInput.value.trim()) styleInput.value = window.PROJECT_PLANNER_PROJECT_STYLE || '';
+    setValue('planner-plan-negative', combinePromptParts(characterParts.negative, situationPrompt.negative));
 }
 
 function syncPlannerResultModalSelection(item) {
@@ -3456,7 +3496,7 @@ function renderPlannerSituationGrid(project, situations, character, meta, mode =
                     ? (selected ? '선택됨' : generatedCount ? `결과 ${generatedCount}` : '결과 없음')
                     : (complete ? '완료' : '미완료');
                 const clickAction = mode === 'result'
-                    ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}')` : `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}')`)
+                    ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}')` : `window.setPlannerStatus('이 상황에 저장된 플랜 결과가 없습니다.')`)
                     : `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}')`;
                 return `
                     <button type="button" onclick="${clickAction}" class="group min-h-[112px] rounded-lg border ${item ? 'border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'} p-3 text-left hover:border-indigo-400 transition">
@@ -3488,12 +3528,28 @@ function renderPlannerSituationPlanModal(project, situation, character, meta) {
         ? existingItem.situationPromptVariantIds
         : situationVariants.map(variant => variant.id);
     const firstSituationVariant = situationVariants.find(variant => selectedSituationVariantIds.includes(variant.id)) || situationVariants[0];
+    const selectedCharacterVariant = characterVariants.find(variant => variant.id === selectedCharacterVariantId) || characterVariants[0];
     const generation = existingItem?.generation || firstSituationVariant?.generation || {};
-    const fields = existingItem?.generation?.fields || {
-        ...(firstSituationVariant?.prompt || {}),
-        character: characterVariants.find(variant => variant.id === selectedCharacterVariantId)?.parts?.character || '',
-        clothing: characterVariants.find(variant => variant.id === selectedCharacterVariantId)?.parts?.clothing || ''
+    const situationPrompt = firstSituationVariant?.prompt || {};
+    const characterParts = selectedCharacterVariant?.parts || {};
+    const projectStyle = window.PROJECT_PLANNER_PROJECT_STYLE || '';
+    const defaultFields = {
+        style: projectStyle,
+        composition: situationPrompt.composition || '',
+        character: characterParts.character || selectedCharacterVariant?.prompt || '',
+        clothing: characterParts.clothing || '',
+        expression: situationPrompt.expression || '',
+        action: situationPrompt.action || '',
+        background: situationPrompt.background || 'white background',
+        negative: combinePromptParts(characterParts.negative, situationPrompt.negative)
     };
+    const fields = {
+        ...defaultFields,
+        ...(existingItem?.generation?.fields || {})
+    };
+    if (!fields.style) fields.style = projectStyle;
+    if (!fields.background) fields.background = 'white background';
+    if (!fields.negative) fields.negative = defaultFields.negative;
     const count = existingItem?.count || Math.max(1, situationVariants.length);
 
     return `
@@ -3555,7 +3611,6 @@ function renderPlannerPanel(project, situations) {
         || getCharacterById(project, getCachedPlannerCharacterId(project))
         || characters[0];
     const activeCharacterName = activeCharacter ? (activeCharacter.name || activeCharacter.alias || activeCharacter.folderName || activeCharacter.id) : '선택된 캐릭터 없음';
-    const selectedSituationId = meta?.lastSituationId || situations[0]?.id || '';
     const view = window.PROJECT_PLANNER_VIEW || 'plan';
     const settings = normalizePlannerSettings(window.PROJECT_PLANNER_SETTINGS || {});
 
@@ -3600,36 +3655,18 @@ function renderPlannerPanel(project, situations) {
 
     const planView = `
         <div class="mb-4 max-w-md">
-            <label class="hidden min-w-0">
+            <label class="block min-w-0">
                 <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">캐릭터</span>
                 <select id="planner-character-select" onchange="window.cachePlannerCharacterSelection()" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
                     ${characters.map(character => `<option value="${escapeHtml(character.id)}" ${activeCharacter?.id === character.id ? 'selected' : ''}>${escapeHtml(character.name || character.folderName)}</option>`).join('')}
                 </select>
             </label>
-            <label class="block min-w-0">
-                <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">상황</span>
-                <select id="planner-situation-select" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
-                    ${situations.map(situation => `<option value="${escapeHtml(situation.id)}" ${selectedSituationId === situation.id ? 'selected' : ''}>${escapeHtml(getSituationImageNumber(project, situation))}.webp / ${escapeHtml(getSituationDisplayName(situation))}</option>`).join('')}
-                </select>
-            </label>
-            <label class="hidden">
-                <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">생성 수</span>
-                <input id="planner-default-count" type="number" min="1" max="12" value="${escapeHtml(meta?.defaultCount || 2)}" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
-            </label>
         </div>
         <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">상황을 선택하면 해당 상황 플랜을 구성합니다.</p>
-            <button type="button" onclick="window.addPlannerDraftItem()" class="hidden items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
-                <i data-lucide="plus" class="w-4 h-4"></i> 추가하기
-            </button>
+            <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">상황을 선택하면 해당 상황의 플랜을 구성합니다.</p>
             <button type="button" onclick="window.savePlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
                 <i data-lucide="save" class="w-4 h-4"></i> 플랜 저장하기
             </button>
-            <div class="hidden">
-            <button type="button" onclick="window.pausePlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900 text-amber-700 dark:text-amber-300 text-xs font-bold hover:bg-amber-50 dark:hover:bg-amber-900/20"><i data-lucide="pause" class="w-4 h-4"></i> 일시정지</button>
-            <button type="button" onclick="window.resumePlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400"><i data-lucide="rotate-cw" class="w-4 h-4"></i> 재개하기</button>
-            <button type="button" onclick="window.cancelPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20"><i data-lucide="square" class="w-4 h-4"></i> 취소</button>
-            </div>
         </div>
         ${!characters.length ? renderEmptyState('플랜을 작성하려면 먼저 캐릭터를 추가하세요.') : ''}
         ${!situations.length ? renderEmptyState('플랜을 작성하려면 먼저 상황을 추가하세요.') : ''}
@@ -3705,7 +3742,7 @@ function renderPlannerPanel(project, situations) {
     `;
 
     return `
-        <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 min-h-0 overflow-hidden flex flex-col">
+        <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 h-full min-h-0 overflow-hidden flex flex-col">
             <div class="flex items-start justify-between gap-3 mb-4 flex-shrink-0">
                 <div>
                     <h3 class="font-bold text-sm text-gray-900 dark:text-white">플래너 데모</h3>
@@ -3743,7 +3780,7 @@ function renderPlannerSection(section, state = {}) {
 
     renderProjectShell(`
         ${renderSectionHeader(section.title)}
-        <div class="flex-1 overflow-hidden p-4 sm:p-6 min-h-0">
+        <div class="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0">
             <section class="h-full min-h-0">
                 ${state.loading ? renderEmptyState('플래너 데이터를 불러오는 중입니다.') : ''}
                 ${state.error ? renderEmptyState(state.error) : ''}
@@ -3764,13 +3801,15 @@ export async function refreshPlannerPanel() {
     const characterId = getSelectedPlannerCharacterId(project);
     window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = characterId;
     const character = getCharacterById(project, characterId);
-    const [meta] = await Promise.all([
+    const [meta, , projectStyle] = await Promise.all([
         loadPlannerMeta(project, characterId).catch(() => null),
         loadPlannerSettings(project, true).catch(() => normalizePlannerSettings()),
+        loadProjectStylePrompt(project).catch(() => ''),
         character ? loadCharacterFiles(character).catch(() => []) : Promise.resolve([]),
         character ? loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
     ]);
     window.PROJECT_PLANNER_META = meta;
+    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
         startPlannerBackgroundPolling(meta.backgroundJobId);
     }
@@ -3801,7 +3840,12 @@ export async function loadPlannerForSelectedCharacter() {
             loadCharacterFiles(character).catch(() => [])
         ]);
     }
-    window.PROJECT_PLANNER_META = await loadPlannerMeta(project, characterId).catch(() => null);
+    const [meta, projectStyle] = await Promise.all([
+        loadPlannerMeta(project, characterId).catch(() => null),
+        loadProjectStylePrompt(project).catch(() => '')
+    ]);
+    window.PROJECT_PLANNER_META = meta;
+    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     renderPlannerSectionByState();
 }
 
@@ -3810,6 +3854,7 @@ export async function openPlannerSituationPlanModal(situationId) {
     const characterId = getSelectedPlannerCharacterId(project);
     const character = getCharacterById(project, characterId);
     if (character) await loadCharacterMeta(character).catch(() => ({}));
+    window.PROJECT_PLANNER_PROJECT_STYLE = await loadProjectStylePrompt(project).catch(() => '');
     window.PLANNER_PLAN_MODAL_SITUATION_ID = situationId;
     renderPlannerSituationPlanOverlay();
 }
@@ -4068,7 +4113,8 @@ export async function savePlannerSituationPlan() {
                     parts: {
                         ...(characterVariant.parts || {}),
                         character: overrideFields.character || characterVariant.parts?.character || characterVariant.prompt || '',
-                        clothing: overrideFields.clothing || characterVariant.parts?.clothing || ''
+                        clothing: overrideFields.clothing || characterVariant.parts?.clothing || '',
+                        negative: overrideFields.negative ? '' : characterVariant.parts?.negative || ''
                     }
                 },
                 situationVariant: mergedVariant,
@@ -4123,112 +4169,6 @@ export async function savePlannerSituationPlan() {
     renderPlannerSectionByState();
 }
 
-export async function addPlannerDraftItem() {
-    const project = getActiveProject();
-    if (!project) return;
-    await Promise.all([
-        loadProjectCharacters(project).catch(() => []),
-        loadProjectSituations(project).catch(() => [])
-    ]);
-
-    const characterId = document.getElementById('planner-character-select')?.value || getProjectItems(project, 'characters')[0]?.id || '';
-    setCachedPlannerCharacterId(project, characterId);
-    const character = getCharacterById(project, characterId);
-    if (!character) {
-        setPlannerStatus('먼저 캐릭터를 선택하세요.');
-        return;
-    }
-
-    const situationId = document.getElementById('planner-situation-select')?.value || '';
-    const situation = getSituationById(project, situationId);
-    if (!situation) {
-        setPlannerStatus('먼저 상황을 선택하세요.');
-        return;
-    }
-
-    const defaultCount = Math.max(1, parseInt(document.getElementById('planner-default-count')?.value) || 2);
-    const characterMeta = await loadCharacterMeta(character).catch(() => ({}));
-    const projectStyle = await loadProjectStylePrompt(project).catch(() => '');
-    const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
-    const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
-    const stylePrompt = projectStyle || currentSettings.prompts?.['prompt-style'] || '';
-
-    const prompt = getSituationPrompt(situation);
-    const situationGeneration = getSituationGeneration(situation);
-    const expressionPrompt = prompt.expression || currentSettings.prompts?.['prompt-expression'] || '';
-    const negativePrompt = combinePromptParts(characterMeta.parts?.negative, prompt.negative) || currentSettings.negative || '';
-    const imageNumber = getSituationImageNumber(project, situation);
-    const fields = {
-        style: stylePrompt,
-        composition: prompt.composition || currentSettings.prompts?.['prompt-composition'] || 'straight-on',
-        character: characterMeta.parts?.character || characterMeta.prompt || '',
-        clothing: characterMeta.parts?.clothing || currentSettings.prompts?.['prompt-clothing'] || '',
-        expression: expressionPrompt,
-        action: prompt.action || currentSettings.prompts?.['prompt-action'] || '',
-        background: prompt.background || currentSettings.prompts?.['prompt-background'] || 'white background',
-        negative: negativePrompt
-    };
-    const generation = applyPlannerSettingsToGeneration({
-        ...currentSettings,
-        simpleMode: false,
-        res: situationGeneration.res || currentSettings.res || DEFAULT_PLANNER_RESOLUTION,
-        batchCount: String(defaultCount),
-        negative: fields.negative,
-        prompts: {
-            ...(currentSettings.prompts || {}),
-            'prompt-style': fields.style,
-            'prompt-composition': fields.composition,
-            'prompt-character': fields.character,
-            'prompt-clothing': fields.clothing,
-            'prompt-expression': fields.expression,
-            'prompt-action': fields.action,
-            'prompt-background': fields.background,
-            'prompt-raw': ''
-        },
-        fields,
-        v4PromptCharacters: situationGeneration.v4PromptCharacters
-    }, plannerSettings);
-    generation.res = situationGeneration.res || generation.res || DEFAULT_PLANNER_RESOLUTION;
-    generation.v4PromptCharacters = normalizePlannerV4PromptRows(situationGeneration.v4PromptCharacters);
-    generation.v4_prompt = generation.v4PromptCharacters;
-
-    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    if (!meta || meta.characterId !== character.id) {
-        meta = {
-            projectId: project.id,
-            characterId: character.id,
-            characterPrefix: character.prefix,
-            status: 'draft',
-            defaultCount,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            items: []
-        };
-    }
-
-    const existingIndex = meta.items.findIndex(item => item.situationId === situation.id);
-    const item = {
-        situationId: situation.id,
-        situationName: getSituationDisplayName(situation),
-        situationIndex: getProjectItems(project, 'situations').findIndex(entry => entry.id === situation.id),
-        imageNumber,
-        count: defaultCount,
-        status: 'pending',
-        generation,
-        images: existingIndex >= 0 ? meta.items[existingIndex].images || [] : [],
-        selectedImage: existingIndex >= 0 ? meta.items[existingIndex].selectedImage || null : null
-    };
-
-    if (existingIndex >= 0) meta.items[existingIndex] = item;
-    else meta.items.push(item);
-    meta.items = sortPlannerItems(meta.items);
-    meta.defaultCount = defaultCount;
-    meta.lastSituationId = situation.id;
-    meta.updatedAt = Date.now();
-    window.PROJECT_PLANNER_META = meta;
-    renderPlannerSectionByState();
-}
-
 export async function savePlannerDraft() {
     const project = getActiveProject();
     if (!project) return;
@@ -4245,10 +4185,6 @@ export async function savePlannerDraft() {
     await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
     setPlannerStatus('플랜이 저장되었습니다.');
-}
-
-export async function createPlannerDraft() {
-    await addPlannerDraftItem();
 }
 
 export async function deletePlannerItem(situationId) {
