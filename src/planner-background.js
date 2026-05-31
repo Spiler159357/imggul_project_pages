@@ -154,8 +154,11 @@ function getPlannerPrefix(projectPrefix) {
     return `${projectPrefix}_planner_temp_image/`;
 }
 
-function getPlannerMetaKey(projectPrefix) {
-    return `${getPlannerPrefix(projectPrefix)}_planner_meta.json`;
+function getPlannerMetaKey(projectPrefix, characterId = "") {
+    const normalizedCharacterId = String(characterId || "").trim().replace(/[\\/]+/g, "_");
+    return normalizedCharacterId
+        ? `${getPlannerPrefix(projectPrefix)}plans/${normalizedCharacterId}_planner_meta.json`
+        : `${getPlannerPrefix(projectPrefix)}_planner_meta.json`;
 }
 
 function getPlannerImagePrefix(projectPrefix, imageNumber) {
@@ -820,7 +823,7 @@ export async function syncPlannerMetaToR2(env, jobId) {
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
     if (!job?.planner_meta_json) return;
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
-    const metaKey = getPlannerMetaKey(job.project_prefix);
+    const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
     const storedMeta = await readJsonObject(env.imgBucket, metaKey, null);
     if (!storedMeta || typeof storedMeta !== "object") return;
     const meta = storedMeta;
