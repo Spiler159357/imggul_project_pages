@@ -13,11 +13,13 @@ function getCraftSituationMetaUrl(projectPrefix) {
 
 async function loadCraftSituations(projectPrefix) {
     if (!projectPrefix) return [];
-    const res = await fetch(`${getCraftSituationMetaUrl(projectPrefix)}?_t=${Date.now()}`, { cache: 'no-store' });
+    const key = `${projectPrefix}_situations_meta.json`;
+    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(key)}&fallbackKey=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) return [];
     if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
 
-    const data = await res.json();
+    const payload = await res.json();
+    const data = payload.data || {};
     return Array.isArray(data.situations) ? data.situations : [];
 }
 

@@ -524,7 +524,8 @@ export async function loadCharacterMeta(character, force = false) {
     if (!character?.prefix) return {};
     if (!force && character.metaLoaded) return character.meta || {};
 
-    const res = await fetch(`${getAssetUrl(getCharacterMetaKey(character))}?_t=${Date.now()}`, { cache: 'no-store' });
+    const metaKey = getCharacterMetaKey(character);
+    const res = await fetch(`/api/db/json-document?type=character_meta&key=${encodeURIComponent(metaKey)}&fallbackKey=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) {
         character.meta = {};
         character.metaLoaded = true;
@@ -532,22 +533,20 @@ export async function loadCharacterMeta(character, force = false) {
     }
     if (!res.ok) throw new Error('캐릭터 프롬프트를 불러오지 못했습니다.');
 
-    character.meta = await res.json();
+    const payload = await res.json();
+    character.meta = payload.data || {};
     character.metaLoaded = true;
     return character.meta;
 }
 
 export async function saveCharacterMeta(character, meta) {
     const metaKey = getCharacterMetaKey(character);
-    const content = JSON.stringify(meta || {}, null, 2);
-    const res = await fetch('/api/upload?_t=' + Date.now(), {
+    const res = await fetch('/api/db/json-document?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'X-File-Name': encodeURIComponent('_character_meta.json'),
-            'X-Absolute-Path': encodeURIComponent(metaKey)
+            'Content-Type': 'application/json; charset=utf-8'
         },
-        body: new Blob([content], { type: 'application/json; charset=utf-8' }),
+        body: JSON.stringify({ type: 'character_meta', key: metaKey, fallbackKey: metaKey, data: meta || {} }),
         cache: 'no-store'
     });
 
@@ -637,7 +636,7 @@ export async function loadProjectSituations(project, force = false) {
     if (!force && project.situationsLoaded) return getProjectItems(project, 'situations');
 
     const metaKey = getSituationMetaKey(project);
-    const res = await fetch(`${getAssetUrl(metaKey)}?_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(metaKey)}&fallbackKey=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
 
     if (res.status === 404) {
         project.situations = [];
@@ -647,7 +646,8 @@ export async function loadProjectSituations(project, force = false) {
 
     if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
 
-    const data = await res.json();
+    const payload = await res.json();
+    const data = payload.data || {};
     project.situations = normalizeProjectSituations(Array.isArray(data.situations) ? data.situations : []);
     project.situationsLoaded = true;
 
@@ -685,15 +685,17 @@ export function normalizeProjectSituations(situations) {
 
 export async function saveProjectSituations(project) {
     const metaKey = getSituationMetaKey(project);
-    const content = JSON.stringify({ situations: getProjectItems(project, 'situations') }, null, 2);
-    const res = await fetch('/api/upload?_t=' + Date.now(), {
+    const res = await fetch('/api/db/json-document?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
-            'Content-Type': 'application/json; charset=utf-8',
-            'X-File-Name': encodeURIComponent('_situations_meta.json'),
-            'X-Absolute-Path': encodeURIComponent(metaKey)
+            'Content-Type': 'application/json; charset=utf-8'
         },
-        body: new Blob([content], { type: 'application/json; charset=utf-8' }),
+        body: JSON.stringify({
+            type: 'situations_meta',
+            key: metaKey,
+            fallbackKey: metaKey,
+            data: { situations: getProjectItems(project, 'situations') }
+        }),
         cache: 'no-store'
     });
 

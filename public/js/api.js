@@ -22,19 +22,11 @@ function sanitizeMetadataForStorage(metaDataObj) {
  * 반환값: 정리된 메타데이터 객체, 없거나 실패하면 null.
  */
 export async function loadMetadataFromDB(folderPrefix, fileName) {
-    const metaPath = folderPrefix + '_meta.json';
     try {
-        const res = await fetch(`/${metaPath}?_t=${Date.now()}`);
+        const res = await fetch(`/api/db/file-metadata?folderPrefix=${encodeURIComponent(folderPrefix)}&fileName=${encodeURIComponent(fileName)}&_t=${Date.now()}`, { cache: 'no-store' });
         if (!res.ok) return null;
-        const db = await res.json();
-        if (db[fileName]) return sanitizeMetadataForStorage(db[fileName]);
-
-        const baseName = fileName.replace(/\.[^/.]+$/, "");
-        const extFallbacks = ['.png', '.webp', '.jpg', '.jpeg'];
-        for (const ext of extFallbacks) {
-            const fallbackName = baseName + ext;
-            if (fallbackName !== fileName && db[fallbackName]) return sanitizeMetadataForStorage(db[fallbackName]);
-        }
+        const result = await res.json();
+        return result.data ? sanitizeMetadataForStorage(result.data) : null;
     } catch(e) {}
     return null;
 }
@@ -47,25 +39,13 @@ export async function loadMetadataFromDB(folderPrefix, fileName) {
  */
 export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
     if (!metaDataObj) return;
-    const metaPath = folderPrefix + '_meta.json';
-    let db = {};
-    try {
-        const res = await fetch(`/${metaPath}?_t=${Date.now()}`);
-        if (res.ok) db = await res.json();
-    } catch(e) {}
     const sanitizedMetaData = sanitizeMetadataForStorage(metaDataObj);
 
-    db[fileName] = sanitizedMetaData;
-    
-    const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json;charset=utf-8' });
-    const buffer = await new Promise((resolve, reject) => {
-        const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsArrayBuffer(blob);
-    });
-    
-    const uploadRes = await fetch('/api/upload?_t=' + Date.now(), {
+    const uploadRes = await fetch('/api/db/file-metadata?_t=' + Date.now(), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-File-Name': '_meta.json', 'X-Absolute-Path': encodeURIComponent(metaPath) },
-        body: buffer, cache: 'no-store'
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({ folderPrefix, fileName, metadata: sanitizedMetaData }),
+        cache: 'no-store'
     });
     if (!uploadRes.ok) throw new Error(`메타데이터 저장 실패 (${uploadRes.status})`);
 }
@@ -77,31 +57,13 @@ export async function saveMetadataToDB(folderPrefix, fileName, metaDataObj) {
  * 반환값: 명시 반환 없음. 실패는 내부에서 무시한다.
  */
 export async function removeMetadataFromDB(folderPrefix, fileName) {
-    const metaPath = folderPrefix + '_meta.json';
     try {
-        const res = await fetch(`/${metaPath}?_t=${Date.now()}`);
-        if (!res.ok) return;
-        let db = await res.json();
-        const baseName = fileName.replace(/\.[^/.]+$/, "");
-        const namesToDelete = new Set([fileName, `${baseName}.png`, `${baseName}.webp`, `${baseName}.jpg`, `${baseName}.jpeg`]);
-        let changed = false;
-        namesToDelete.forEach(name => {
-            if (db[name]) {
-                delete db[name];
-                changed = true;
-            }
+        await fetch('/api/db/file-metadata?_t=' + Date.now(), {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ folderPrefix, fileNames: [fileName] }),
+            cache: 'no-store'
         });
-        if (changed) {
-            const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json;charset=utf-8' });
-            const buffer = await new Promise((resolve, reject) => {
-                const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsArrayBuffer(blob);
-            });
-            await fetch('/api/upload?_t=' + Date.now(), {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-File-Name': '_meta.json', 'X-Absolute-Path': encodeURIComponent(metaPath) },
-                body: buffer, cache: 'no-store'
-            });
-        }
     } catch(e) {}
 }
 
@@ -112,26 +74,13 @@ export async function removeMetadataFromDB(folderPrefix, fileName) {
  * 반환값: 명시 반환 없음. 실패는 내부에서 무시한다.
  */
 export async function removeMultipleMetadataFromDB(folderPrefix, fileNamesArray) {
-    const metaPath = folderPrefix + '_meta.json';
     try {
-        const res = await fetch(`/${metaPath}?_t=${Date.now()}`);
-        if (!res.ok) return;
-        let db = await res.json();
-        let changed = false;
-        for(let name of fileNamesArray) {
-            if (db[name]) { delete db[name]; changed = true; }
-        }
-        if (changed) {
-            const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json;charset=utf-8' });
-            const buffer = await new Promise((resolve, reject) => {
-                const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = reject; r.readAsArrayBuffer(blob);
-            });
-            await fetch('/api/upload?_t=' + Date.now(), {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-File-Name': '_meta.json', 'X-Absolute-Path': encodeURIComponent(metaPath) },
-                body: buffer, cache: 'no-store'
-            });
-        }
+        await fetch('/api/db/file-metadata?_t=' + Date.now(), {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ folderPrefix, fileNames: fileNamesArray || [] }),
+            cache: 'no-store'
+        });
     } catch(e) {}
 }
 
@@ -142,28 +91,14 @@ export async function removeMultipleMetadataFromDB(folderPrefix, fileNamesArray)
  * 반환값: 명시 반환 없음. 이동할 메타데이터가 있으면 saveMetadataToDB를 호출한다.
  */
 export async function moveMetadataInDB(oldPrefix, oldName, newPrefix, newName) {
-    let metaDataObj = null;
-    const oldMetaPath = oldPrefix + '_meta.json';
     try {
-        const res = await fetch(`/${oldMetaPath}?_t=${Date.now()}`);
-        if (res.ok) {
-            let db = await res.json();
-            if (db[oldName]) {
-                metaDataObj = db[oldName];
-                delete db[oldName];
-                const blob = new Blob([JSON.stringify(db, null, 2)], { type: 'application/json;charset=utf-8' });
-                const buffer = await new Promise((resolve) => {
-                    const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsArrayBuffer(blob);
-                });
-                await fetch('/api/upload?_t=' + Date.now(), {
-                    method: 'PUT',
-                    headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-File-Name': '_meta.json', 'X-Absolute-Path': encodeURIComponent(oldMetaPath) },
-                    body: buffer, cache: 'no-store'
-                });
-            }
-        }
+        await fetch('/api/db/file-metadata/move?_t=' + Date.now(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ oldPrefix, oldName, newPrefix, newName }),
+            cache: 'no-store'
+        });
     } catch(e) {}
-    if (metaDataObj) { await window.saveMetadataToDB(newPrefix, newName, metaDataObj); }
 }
 
 /**

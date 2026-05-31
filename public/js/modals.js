@@ -151,10 +151,10 @@ window.importMetadata = async function(fileKey) {
     const metaPath = prefix + '_meta.json';
     
     try {
-        const res = await fetch(`/${metaPath}?_t=${Date.now()}`);
+        const res = await fetch(`/api/db/file-metadata?folderPrefix=${encodeURIComponent(prefix)}&fileName=${encodeURIComponent(fileName)}&_t=${Date.now()}`, { cache: 'no-store' });
         if (!res.ok) throw new Error("해당 폴더에 메타데이터 파일(_meta.json)이 없거나 접근할 수 없습니다.");
-        const db = await res.json();
-        const meta = db[fileName];
+        const payload = await res.json();
+        const meta = payload.data;
         if (!meta) throw new Error("해당 이미지에 저장된 설정(프롬프트)이 없습니다.");
         
         if (meta['Raw Data'] && !meta['Prompt'] && !meta['Split Prompts']) {

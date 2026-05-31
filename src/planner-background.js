@@ -781,6 +781,30 @@ async function putJsonObject(bucket, key, value) {
     });
 }
 
+async function putJsonDocument(env, docType, objectKey, value) {
+    if (!env?.DB) return;
+    const timestamp = nowIso();
+    await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS json_documents (
+            doc_type TEXT NOT NULL,
+            object_key TEXT NOT NULL,
+            data_json TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'db',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (doc_type, object_key)
+        )
+    `).run();
+    await env.DB.prepare(`
+        INSERT INTO json_documents (doc_type, object_key, data_json, source, created_at, updated_at)
+        VALUES (?, ?, ?, 'background_worker', ?, ?)
+        ON CONFLICT(doc_type, object_key) DO UPDATE SET
+            data_json = excluded.data_json,
+            source = excluded.source,
+            updated_at = excluded.updated_at
+    `).bind(docType, objectKey, JSON.stringify(value || {}), timestamp, timestamp).run();
+}
+
 async function saveMetadata(env, outputPrefix, fileName, metadata) {
     const key = `${outputPrefix}_meta.json`;
     const db = await readJsonObject(env.imgBucket, key, {});
@@ -866,6 +890,7 @@ export async function syncPlannerMetaToR2(env, jobId) {
     });
 
     await putJsonObject(env.imgBucket, metaKey, meta);
+    await putJsonDocument(env, "planner_meta", metaKey, meta).catch(() => null);
 }
 
 async function syncPlannerMetaToR2Safely(env, jobId, context = {}) {

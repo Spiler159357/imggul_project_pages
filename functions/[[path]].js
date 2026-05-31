@@ -36,6 +36,152 @@ function splitPath(key) {
     return { prefix, fileName };
 }
 
+function nowIso() {
+    return new Date().toISOString();
+}
+
+async function ensureJsonDbSchema(env) {
+    if (!env.DB) throw new Error('DB binding is not configured');
+    await env.DB.batch([
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS json_documents (
+                doc_type TEXT NOT NULL,
+                object_key TEXT NOT NULL,
+                data_json TEXT NOT NULL,
+                source TEXT NOT NULL DEFAULT 'db',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (doc_type, object_key)
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS file_metadata (
+                folder_prefix TEXT NOT NULL,
+                file_name TEXT NOT NULL,
+                metadata_json TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (folder_prefix, file_name)
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS aliases (
+                scope TEXT NOT NULL,
+                project_name TEXT NOT NULL DEFAULT '',
+                target_key TEXT NOT NULL,
+                alias TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (scope, project_name, target_key)
+            )
+        `)
+    ]);
+}
+
+async function readR2Json(env, key, fallback = null) {
+    try {
+        const object = await env.imgBucket.get(key);
+        return object ? await object.json() : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+async function writeR2Json(env, key, value) {
+    await env.imgBucket.put(key, JSON.stringify(value, null, 2), {
+        httpMetadata: { contentType: 'application/json; charset=utf-8' },
+        customMetadata: { ispublic: 'false' }
+    });
+}
+
+async function getJsonDocument(env, docType, objectKey, fallbackKey = objectKey, fallbackValue = null) {
+    await ensureJsonDbSchema(env);
+    const row = await env.DB.prepare(
+        'SELECT data_json FROM json_documents WHERE doc_type = ? AND object_key = ?'
+    ).bind(docType, objectKey).first();
+    if (row?.data_json) {
+        try {
+            return JSON.parse(row.data_json);
+        } catch {}
+    }
+
+    const fallback = fallbackKey ? await readR2Json(env, fallbackKey, fallbackValue) : fallbackValue;
+    if (fallback !== null && fallback !== undefined) {
+        await putJsonDocument(env, docType, objectKey, fallback, 'r2_import');
+    }
+    return fallback;
+}
+
+async function putJsonDocument(env, docType, objectKey, value, source = 'db') {
+    await ensureJsonDbSchema(env);
+    const timestamp = nowIso();
+    await env.DB.prepare(`
+        INSERT INTO json_documents (doc_type, object_key, data_json, source, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(doc_type, object_key) DO UPDATE SET
+            data_json = excluded.data_json,
+            source = excluded.source,
+            updated_at = excluded.updated_at
+    `).bind(docType, objectKey, JSON.stringify(value || {}), source, timestamp, timestamp).run();
+}
+
+async function getDbAliases(env, scope, projectName = '') {
+    await ensureJsonDbSchema(env);
+    const rows = await env.DB.prepare(
+        'SELECT target_key, alias FROM aliases WHERE scope = ? AND project_name = ?'
+    ).bind(scope, projectName || '').all();
+    return Object.fromEntries((rows.results || []).map(row => [row.target_key, row.alias]));
+}
+
+async function putDbAlias(env, scope, projectName, targetKey, alias) {
+    await ensureJsonDbSchema(env);
+    if (!alias) {
+        await env.DB.prepare(
+            'DELETE FROM aliases WHERE scope = ? AND project_name = ? AND target_key = ?'
+        ).bind(scope, projectName || '', targetKey).run();
+        return;
+    }
+    const timestamp = nowIso();
+    await env.DB.prepare(`
+        INSERT INTO aliases (scope, project_name, target_key, alias, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(scope, project_name, target_key) DO UPDATE SET
+            alias = excluded.alias,
+            updated_at = excluded.updated_at
+    `).bind(scope, projectName || '', targetKey, alias, timestamp, timestamp).run();
+}
+
+async function deleteAliasPrefix(env, prefix) {
+    await ensureJsonDbSchema(env);
+    const parts = String(prefix || '').split('/').filter(Boolean);
+    if (parts.length === 1) {
+        await env.DB.prepare(
+            'DELETE FROM aliases WHERE scope = ? AND project_name = ? AND target_key = ?'
+        ).bind('global', '', prefix).run();
+    } else if (parts.length > 1) {
+        await env.DB.prepare(
+            'DELETE FROM aliases WHERE scope = ? AND project_name = ? AND target_key = ?'
+        ).bind('project', parts[0], parts[parts.length - 1]).run();
+    }
+}
+
+async function moveAliasPrefix(env, oldPrefix, newPrefix) {
+    await ensureJsonDbSchema(env);
+    const oldParts = String(oldPrefix || '').split('/').filter(Boolean);
+    const newParts = String(newPrefix || '').split('/').filter(Boolean);
+    if (oldParts.length === 1 && newParts.length === 1) {
+        await env.DB.prepare(`
+            UPDATE aliases SET target_key = ?, updated_at = ?
+            WHERE scope = ? AND project_name = ? AND target_key = ?
+        `).bind(newPrefix, nowIso(), 'global', '', oldPrefix).run();
+    } else if (oldParts.length > 1 && newParts.length > 1 && oldParts[0] === newParts[0]) {
+        await env.DB.prepare(`
+            UPDATE aliases SET target_key = ?, updated_at = ?
+            WHERE scope = ? AND project_name = ? AND target_key = ?
+        `).bind(newParts[newParts.length - 1], nowIso(), 'project', oldParts[0], oldParts[oldParts.length - 1]).run();
+    }
+}
+
 // Pages Functions의 Entry Point (모든 Method 요청을 처리하는 Catch-all 핸들러)
 /**
  * 역할: Cloudflare Pages catch-all 요청을 라우팅하고 인증, API, 정적/R2 파일 응답을 처리한다.
@@ -222,22 +368,314 @@ export async function onRequest(context) {
         }
     }
 
+    if (path === "/api/db/json-document" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const docType = url.searchParams.get('type') || '';
+            const key = url.searchParams.get('key') || '';
+            const fallbackKey = url.searchParams.get('fallbackKey') || key;
+            if (!docType || !key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
+            const data = await getJsonDocument(env, docType, key, fallbackKey, null);
+            if (data === null || data === undefined) return jsonResponse({ data: null }, { status: 404 });
+            return jsonResponse({ data });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/db/json-document" && method === "PUT") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            if (!body?.type || !body?.key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
+            await putJsonDocument(env, body.type, body.key, body.data || {});
+            if (body.fallbackKey) await writeR2Json(env, body.fallbackKey, body.data || {});
+            return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/db/json-document" && method === "DELETE") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            if (!body?.type || !body?.key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
+            await ensureJsonDbSchema(env);
+            await env.DB.prepare(
+                'DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?'
+            ).bind(body.type, body.key).run();
+            if (body.fallbackKey) await env.imgBucket.delete(body.fallbackKey).catch(() => null);
+            return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/db/file-metadata" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            await ensureJsonDbSchema(env);
+            const folderPrefix = url.searchParams.get('folderPrefix') || '';
+            const fileName = url.searchParams.get('fileName') || '';
+            if (!folderPrefix || !fileName) return jsonResponse({ error: 'folderPrefix and fileName are required' }, { status: 400 });
+
+            const names = [fileName];
+            const baseName = fileName.replace(/\.[^/.]+$/, '');
+            for (const ext of ['.png', '.webp', '.jpg', '.jpeg']) {
+                const fallbackName = baseName + ext;
+                if (!names.includes(fallbackName)) names.push(fallbackName);
+            }
+            const placeholders = names.map(() => '?').join(',');
+            const row = await env.DB.prepare(
+                `SELECT metadata_json FROM file_metadata WHERE folder_prefix = ? AND file_name IN (${placeholders}) ORDER BY CASE file_name WHEN ? THEN 0 ELSE 1 END LIMIT 1`
+            ).bind(folderPrefix, ...names, fileName).first();
+            if (row?.metadata_json) return jsonResponse({ data: JSON.parse(row.metadata_json) });
+
+            const legacy = await readR2Json(env, `${folderPrefix}_meta.json`, {});
+            for (const name of names) {
+                if (legacy?.[name]) {
+                    const timestamp = nowIso();
+                    await env.DB.prepare(`
+                        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+                            metadata_json = excluded.metadata_json,
+                            updated_at = excluded.updated_at
+                    `).bind(folderPrefix, name, JSON.stringify(legacy[name]), timestamp, timestamp).run();
+                    return jsonResponse({ data: legacy[name] });
+                }
+            }
+            return jsonResponse({ data: null }, { status: 404 });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/db/file-metadata" && method === "PUT") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            await ensureJsonDbSchema(env);
+            const body = await request.json();
+            if (!body?.folderPrefix || !body?.fileName) return jsonResponse({ error: 'folderPrefix and fileName are required' }, { status: 400 });
+            const timestamp = nowIso();
+            await env.DB.prepare(`
+                INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+                    metadata_json = excluded.metadata_json,
+                    updated_at = excluded.updated_at
+            `).bind(body.folderPrefix, body.fileName, JSON.stringify(body.metadata || {}), timestamp, timestamp).run();
+
+            const metaKey = `${body.folderPrefix}_meta.json`;
+            const legacy = await readR2Json(env, metaKey, {});
+            legacy[body.fileName] = body.metadata || {};
+            await writeR2Json(env, metaKey, legacy);
+            return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/db/file-metadata" && method === "DELETE") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            await ensureJsonDbSchema(env);
+            const body = await request.json();
+            if (!body?.folderPrefix || !Array.isArray(body.fileNames)) return jsonResponse({ error: 'folderPrefix and fileNames are required' }, { status: 400 });
+            const names = new Set();
+            body.fileNames.forEach(name => {
+                const baseName = String(name || '').replace(/\.[^/.]+$/, '');
+                [name, `${baseName}.png`, `${baseName}.webp`, `${baseName}.jpg`, `${baseName}.jpeg`].forEach(value => names.add(value));
+            });
+            const fileNames = [...names].filter(Boolean);
+            if (fileNames.length) {
+                const placeholders = fileNames.map(() => '?').join(',');
+                await env.DB.prepare(
+                    `DELETE FROM file_metadata WHERE folder_prefix = ? AND file_name IN (${placeholders})`
+                ).bind(body.folderPrefix, ...fileNames).run();
+
+                const metaKey = `${body.folderPrefix}_meta.json`;
+                const legacy = await readR2Json(env, metaKey, {});
+                fileNames.forEach(name => delete legacy[name]);
+                await writeR2Json(env, metaKey, legacy);
+            }
+            return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/db/file-metadata/move" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            await ensureJsonDbSchema(env);
+            const body = await request.json();
+            if (!body?.oldPrefix || !body?.oldName || !body?.newPrefix || !body?.newName) {
+                return jsonResponse({ error: 'oldPrefix, oldName, newPrefix and newName are required' }, { status: 400 });
+            }
+            const row = await env.DB.prepare(
+                'SELECT metadata_json FROM file_metadata WHERE folder_prefix = ? AND file_name = ?'
+            ).bind(body.oldPrefix, body.oldName).first();
+            let metadata = row?.metadata_json ? JSON.parse(row.metadata_json) : null;
+            if (!metadata) {
+                const legacy = await readR2Json(env, `${body.oldPrefix}_meta.json`, {});
+                metadata = legacy?.[body.oldName] || null;
+            }
+            if (metadata) {
+                const timestamp = nowIso();
+                await env.DB.batch([
+                    env.DB.prepare('DELETE FROM file_metadata WHERE folder_prefix = ? AND file_name = ?').bind(body.oldPrefix, body.oldName),
+                    env.DB.prepare(`
+                        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+                        VALUES (?, ?, ?, ?, ?)
+                        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+                            metadata_json = excluded.metadata_json,
+                            updated_at = excluded.updated_at
+                    `).bind(body.newPrefix, body.newName, JSON.stringify(metadata), timestamp, timestamp)
+                ]);
+
+                const oldLegacy = await readR2Json(env, `${body.oldPrefix}_meta.json`, {});
+                delete oldLegacy[body.oldName];
+                await writeR2Json(env, `${body.oldPrefix}_meta.json`, oldLegacy);
+                const newLegacy = await readR2Json(env, `${body.newPrefix}_meta.json`, {});
+                newLegacy[body.newName] = metadata;
+                await writeR2Json(env, `${body.newPrefix}_meta.json`, newLegacy);
+            }
+            return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/db/migrate-r2-json" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            await ensureJsonDbSchema(env);
+            const body = await request.json().catch(() => ({}));
+            const dryRun = body?.dryRun !== false;
+            const prefix = body?.prefix || '';
+            const summary = {
+                scanned: 0,
+                aliases: 0,
+                jsonDocuments: 0,
+                fileMetadata: 0,
+                skipped: 0,
+                errors: []
+            };
+
+            let truncated = true;
+            let cursor = undefined;
+            while (truncated) {
+                const list = await env.imgBucket.list({ prefix, cursor });
+                truncated = list.truncated;
+                cursor = list.cursor;
+                for (const objectInfo of list.objects || []) {
+                    const key = objectInfo.key;
+                    if (!key.endsWith('.json')) continue;
+                    summary.scanned += 1;
+                    try {
+                        const data = await readR2Json(env, key, null);
+                        if (data === null || data === undefined) {
+                            summary.skipped += 1;
+                            continue;
+                        }
+
+                        if (key === '.imggul_aliases.json') {
+                            for (const [targetKey, alias] of Object.entries(data || {})) {
+                                summary.aliases += 1;
+                                if (!dryRun) await putDbAlias(env, 'global', '', targetKey, alias);
+                            }
+                            continue;
+                        }
+
+                        if (key.endsWith('/.aliases.json')) {
+                            const projectName = key.split('/')[0] || '';
+                            for (const [targetKey, alias] of Object.entries(data || {})) {
+                                summary.aliases += 1;
+                                if (!dryRun) await putDbAlias(env, 'project', projectName, targetKey, alias);
+                            }
+                            continue;
+                        }
+
+                        if (key.endsWith('_character_meta.json')) {
+                            summary.jsonDocuments += 1;
+                            if (!dryRun) await putJsonDocument(env, 'character_meta', key, data, 'r2_migration');
+                            continue;
+                        }
+
+                        if (key.endsWith('_situations_meta.json')) {
+                            summary.jsonDocuments += 1;
+                            if (!dryRun) await putJsonDocument(env, 'situations_meta', key, data, 'r2_migration');
+                            continue;
+                        }
+
+                        if (key.endsWith('_planner_settings.json')) {
+                            summary.jsonDocuments += 1;
+                            if (!dryRun) await putJsonDocument(env, 'planner_settings', key, data, 'r2_migration');
+                            continue;
+                        }
+
+                        if (key.endsWith('_planner_meta.json')) {
+                            summary.jsonDocuments += 1;
+                            if (!dryRun) await putJsonDocument(env, 'planner_meta', key, data, 'r2_migration');
+                            continue;
+                        }
+
+                        if (key.endsWith('_meta.json')) {
+                            const folderPrefix = key.slice(0, -'_meta.json'.length);
+                            for (const [fileName, metadata] of Object.entries(data || {})) {
+                                summary.fileMetadata += 1;
+                                if (!dryRun) {
+                                    const timestamp = nowIso();
+                                    await env.DB.prepare(`
+                                        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+                                        VALUES (?, ?, ?, ?, ?)
+                                        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+                                            metadata_json = excluded.metadata_json,
+                                            updated_at = excluded.updated_at
+                                    `).bind(folderPrefix, fileName, JSON.stringify(metadata || {}), timestamp, timestamp).run();
+                                }
+                            }
+                            continue;
+                        }
+
+                        summary.skipped += 1;
+                    } catch (e) {
+                        summary.errors.push({ key, error: e.message || String(e) });
+                    }
+                }
+            }
+
+            return jsonResponse({ success: true, dryRun, summary });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
     if (path === "/api/aliases" && method === "GET") {
         const prefix = url.searchParams.get('prefix') || '';
         let globalAliases = {};
         let projectAliases = {};
         
         try {
+            globalAliases = await getDbAliases(env, 'global', '');
+        } catch(e){}
+
+        try {
             const gObj = await env.imgBucket.get('.imggul_aliases.json');
-            if (gObj) globalAliases = await gObj.json();
+            if (gObj) globalAliases = { ...(await gObj.json()), ...globalAliases };
         } catch(e){}
 
         const parts = prefix.split('/').filter(Boolean);
         if (parts.length > 0) {
             const projectName = parts[0];
             try {
+                projectAliases = await getDbAliases(env, 'project', projectName);
+            } catch(e){}
+            try {
                 const pObj = await env.imgBucket.get(`${projectName}/.aliases.json`);
-                if (pObj) projectAliases = await pObj.json();
+                if (pObj) projectAliases = { ...(await pObj.json()), ...projectAliases };
             } catch(e){}
         }
 
@@ -260,6 +698,7 @@ export async function onRequest(context) {
                 
                 if (newAlias) aliases[fullPath] = newAlias;
                 else delete aliases[fullPath];
+                await putDbAlias(env, 'global', '', fullPath, newAlias);
                 
                 await env.imgBucket.put('.imggul_aliases.json', JSON.stringify(aliases), {
                     httpMetadata: { contentType: 'application/json' }
@@ -277,6 +716,7 @@ export async function onRequest(context) {
                 
                 if (newAlias) aliases[targetName] = newAlias;
                 else delete aliases[targetName];
+                await putDbAlias(env, 'project', projectName, targetName, newAlias);
                 
                 await env.imgBucket.put(aliasPath, JSON.stringify(aliases), {
                     httpMetadata: { contentType: 'application/json' }
@@ -356,6 +796,7 @@ export async function onRequest(context) {
                     if (keysToDelete.length > 0) await env.imgBucket.delete(keysToDelete);
                 }
                 try {
+                    await deleteAliasPrefix(env, prefix).catch(() => null);
                     const obj = await env.imgBucket.get('.imggul_aliases.json');
                     if (obj) {
                         let aliases = await obj.json();
@@ -438,6 +879,7 @@ export async function onRequest(context) {
                 }
 
                 try {
+                    await moveAliasPrefix(env, oldPrefix, newPrefix).catch(() => null);
                     const obj = await env.imgBucket.get('.imggul_aliases.json');
                     if (obj) {
                         let aliases = await obj.json();
@@ -519,6 +961,7 @@ export async function onRequest(context) {
                 }
                 
                 try {
+                    await moveAliasPrefix(env, key, newKey).catch(() => null);
                     const obj = await env.imgBucket.get('.imggul_aliases.json');
                     if (obj) {
                         let al = await obj.json();

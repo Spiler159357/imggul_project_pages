@@ -542,9 +542,7 @@ export async function clearTempGallery() {
         const res = await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete_multiple', keys: keysToDelete }) });
         if (!res.ok) throw new Error('파일 삭제 처리 중 서버 오류가 발생했습니다.');
         
-        const blob = new Blob([JSON.stringify({}, null, 2)], { type: 'application/json;charset=utf-8' });
-        const buffer = await new Promise((resolve) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.readAsArrayBuffer(blob); });
-        await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: { 'Content-Type': 'application/json; charset=utf-8', 'X-File-Name': '_meta.json', 'X-Absolute-Path': encodeURIComponent(window.TEMP_FOLDER + '_meta.json') }, body: buffer, cache: 'no-store' });
+        await window.removeMultipleMetadataFromDB(window.TEMP_FOLDER, keysToDelete.map(key => key.split('/').pop())).catch(() => null);
         
         window.TEMP_IMAGES = []; window.CRAFT_ACTIVE_INDEX = null; window.renderTempGallery();
         alert('임시 보관함이 성공적으로 완전히 비워졌습니다!');
@@ -744,10 +742,12 @@ function getCraftUploadSelectedContext() {
 
 async function getCraftUploadSituation(projectPath, situationId) {
     if (!projectPath || !situationId) return null;
-    const res = await fetch(`/${encodeURI(`${projectPath}_situations_meta.json`)}?_t=${Date.now()}`, { cache: 'no-store' });
+    const key = `${projectPath}_situations_meta.json`;
+    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(key)}&fallbackKey=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) return null;
 
-    const data = await res.json().catch(() => ({}));
+    const payload = await res.json().catch(() => ({}));
+    const data = payload.data || {};
     const situations = Array.isArray(data.situations) ? data.situations : [];
     return situations.find(situation => situation?.id === situationId || situation?.folderName === situationId) || null;
 }
