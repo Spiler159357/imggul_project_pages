@@ -46,6 +46,7 @@ export function renderProjectManageShell(projects, state = {}) {
                     `).join('') : ''}
                     ${!state.loading && !state.error && !projects.length ? renderEmptyState('프로젝트가 없습니다.') : ''}
                 </div>
+                ${renderR2JsonMigrationPanel()}
             </section>
         </div>
 
@@ -86,6 +87,84 @@ export function renderProjectCreateModal() {
             </div>
         </div>
     `;
+}
+
+export function renderR2JsonMigrationPanel() {
+    return `
+        <div class="mt-5 border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 p-4">
+            <div class="flex items-start justify-between gap-3">
+                <div class="min-w-0">
+                    <h3 class="text-sm font-bold text-gray-900 dark:text-white flex items-center gap-2">
+                        <i data-lucide="database" class="w-4 h-4 text-indigo-600 dark:text-indigo-400"></i>
+                        R2 JSON DB Migration
+                    </h3>
+                    <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">R2에 남아 있는 JSON 메타데이터를 D1 DB로 일괄 upsert합니다.</p>
+                </div>
+                <div class="flex flex-shrink-0 gap-2">
+                    <button id="r2-json-migration-dryrun-btn" type="button" onclick="window.runR2JsonMigration(true)" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-300 dark:hover:border-indigo-600 transition">
+                        Dry run
+                    </button>
+                    <button id="r2-json-migration-run-btn" type="button" onclick="window.runR2JsonMigration(false)" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
+                        Run
+                    </button>
+                </div>
+            </div>
+            <pre id="r2-json-migration-result" class="mt-3 hidden max-h-48 overflow-auto rounded-md bg-gray-50 dark:bg-gray-900/60 border border-gray-100 dark:border-gray-700 p-3 text-[11px] leading-5 text-gray-700 dark:text-gray-200 whitespace-pre-wrap"></pre>
+        </div>
+    `;
+}
+
+export async function runR2JsonMigration(dryRun = true) {
+    const dryRunBtn = document.getElementById('r2-json-migration-dryrun-btn');
+    const runBtn = document.getElementById('r2-json-migration-run-btn');
+    const resultBox = document.getElementById('r2-json-migration-result');
+    if (!resultBox) return;
+
+    if (!dryRun && !confirm('R2 JSON 메타데이터를 DB로 일괄 이관할까요? 기존 DB 행은 같은 key 기준으로 갱신됩니다.')) return;
+
+    const activeBtn = dryRun ? dryRunBtn : runBtn;
+    const previousDryRunText = dryRunBtn?.textContent || '';
+    const previousRunText = runBtn?.textContent || '';
+    if (dryRunBtn) dryRunBtn.disabled = true;
+    if (runBtn) runBtn.disabled = true;
+    if (activeBtn) activeBtn.textContent = dryRun ? 'Checking...' : 'Running...';
+    resultBox.classList.remove('hidden');
+    resultBox.textContent = dryRun ? 'Scanning R2 JSON objects...' : 'Migrating R2 JSON objects to DB...';
+
+    try {
+        const res = await fetch('/api/db/migrate-r2-json', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ dryRun }),
+            cache: 'no-store'
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `Migration failed (${res.status})`);
+
+        const summary = data.summary || {};
+        resultBox.textContent = [
+            dryRun ? '[DRY RUN]' : '[DONE]',
+            `scanned: ${summary.scanned || 0}`,
+            `jsonDocuments: ${summary.jsonDocuments || 0}`,
+            `fileMetadata: ${summary.fileMetadata || 0}`,
+            `aliases: ${summary.aliases || 0}`,
+            `skipped: ${summary.skipped || 0}`,
+            `errors: ${(summary.errors || []).length}`,
+            ...(summary.errors || []).slice(0, 20).map(item => `- ${item.key}: ${item.error}`)
+        ].join('\n');
+    } catch (err) {
+        resultBox.textContent = `[ERROR]\n${err.message || String(err)}`;
+    } finally {
+        if (dryRunBtn) {
+            dryRunBtn.disabled = false;
+            dryRunBtn.textContent = previousDryRunText;
+        }
+        if (runBtn) {
+            runBtn.disabled = false;
+            runBtn.textContent = previousRunText;
+        }
+        refreshProjectIcons();
+    }
 }
 
 export function openProjectCreateModal() {
