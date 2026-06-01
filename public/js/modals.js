@@ -646,18 +646,203 @@ function applyImportedMetadataObject(meta) {
     return true;
 }
 
+const IMPORT_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
+
+function normalizeImportPath(path) {
+    return path && !path.endsWith('/') ? `${path}/` : (path || '');
+}
+
+function readImportContextCache() {
+    try {
+        return JSON.parse(localStorage.getItem(IMPORT_CONTEXT_STORAGE_KEY) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function writeImportContextCache(cache) {
+    try {
+        localStorage.setItem(IMPORT_CONTEXT_STORAGE_KEY, JSON.stringify(cache || {}));
+    } catch {}
+}
+
+function cacheImportProjectContext({ projectPath, characterPath, situationId } = {}) {
+    const normalizedProject = normalizeImportPath(projectPath);
+    if (!normalizedProject) return;
+    const cache = readImportContextCache();
+    cache.projectPath = normalizedProject;
+    cache.byProject = cache.byProject || {};
+    cache.byProject[normalizedProject] = {
+        ...(cache.byProject[normalizedProject] || {}),
+        characterPath: normalizeImportPath(characterPath),
+        situationId: situationId || ''
+    };
+    writeImportContextCache(cache);
+    if (window.cacheCraftUploadSelection) {
+        window.cacheCraftUploadSelection({ projectPath: normalizedProject, characterPath, situationId });
+    }
+}
+
+function makeImportPickerItem({ type, label, subLabel = '', active = false, onClick }) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.pickerType = type;
+    button.dataset.searchText = `${label} ${subLabel}`.toLowerCase();
+    button.className = 'w-full flex items-center text-left gap-2 px-2.5 py-2 rounded-md border border-transparent hover:border-indigo-300 dark:hover:border-indigo-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 transition min-w-0';
+    button.onclick = onClick;
+    button.innerHTML = `
+        <span class="min-w-0 flex-1">
+            <span class="block text-xs font-bold truncate">${label}</span>
+            ${subLabel ? `<span class="block text-[10px] text-gray-500 dark:text-gray-400 truncate">${subLabel}</span>` : ''}
+        </span>
+        <i data-lucide="check" class="w-3.5 h-3.5 text-indigo-500 ${active ? '' : 'invisible'}"></i>
+    `;
+    return button;
+}
+
+function setImportListMessage(id, message) {
+    const list = document.getElementById(id);
+    if (list) list.innerHTML = `<div class="py-5 text-center text-xs text-gray-500 dark:text-gray-400">${message}</div>`;
+}
+
+function getImportSituationLabel(situation, index) {
+    const number = Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index;
+    const name = situation?.alias || situation?.name || situation?.id || `상황 ${number}`;
+    return `${number} - ${name}`;
+}
+
+async function initImportProjectPicker() {
+    const cache = readImportContextCache();
+    const projectPath = normalizeImportPath(cache.projectPath || document.getElementById('craft-project-select')?.value || '');
+    const projectCache = cache.byProject?.[projectPath] || {};
+    window.IMPORT_PROJECT_PICKER_STATE = {
+        projects: [],
+        characters: [],
+        situations: [],
+        projectPath,
+        characterPath: normalizeImportPath(projectCache.characterPath || document.getElementById('craft-char-select')?.value || ''),
+        situationId: projectCache.situationId || document.getElementById('craft-situation-select')?.value || ''
+    };
+    await loadImportProjectList();
+    if (projectPath) await loadImportProjectTargets(projectPath, true);
+    updateImportProjectSummary();
+}
+
+async function loadImportProjectList() {
+    setImportListMessage('import-project-list', '불러오는 중...');
+    try {
+        const state = window.IMPORT_PROJECT_PICKER_STATE || {};
+        state.projects = window.loadProjects ? await window.loadProjects() : [];
+        window.IMPORT_PROJECT_PICKER_STATE = state;
+        renderImportProjectList('project');
+    } catch (err) {
+        setImportListMessage('import-project-list', err.message || '프로젝트 목록을 불러오지 못했습니다.');
+    }
+}
+
+async function loadImportProjectTargets(projectPath, restoreCached = false) {
+    const state = window.IMPORT_PROJECT_PICKER_STATE || {};
+    state.projectPath = normalizeImportPath(projectPath);
+    if (!restoreCached) {
+        state.characterPath = '';
+        state.situationId = '';
+    }
+    window.IMPORT_PROJECT_PICKER_STATE = state;
+    setImportListMessage('import-character-list', '불러오는 중...');
+    setImportListMessage('import-situation-list', '불러오는 중...');
+
+    try {
+        const project = window.getProjectByPrefix ? window.getProjectByPrefix(state.projectPath) : null;
+        if (!project) throw new Error('선택한 프로젝트를 찾을 수 없습니다.');
+        const cache = readImportContextCache();
+        const projectCache = cache.byProject?.[state.projectPath] || {};
+        await Promise.all([
+            window.loadProjectCharacters(project, true),
+            window.loadProjectSituations(project, true)
+        ]);
+        state.characters = window.getProjectItems ? window.getProjectItems(project, 'characters') : [];
+        state.situations = window.getProjectItems ? window.getProjectItems(project, 'situations') : [];
+        if (restoreCached && projectCache.characterPath && state.characters.some(item => item.prefix === projectCache.characterPath)) state.characterPath = projectCache.characterPath;
+        if (restoreCached && projectCache.situationId && state.situations.some(item => String(item.id || item.folderName) === String(projectCache.situationId))) state.situationId = projectCache.situationId;
+        window.IMPORT_PROJECT_PICKER_STATE = state;
+        renderImportProjectList('project');
+        renderImportProjectList('character');
+        renderImportProjectList('situation');
+        updateImportProjectSummary();
+    } catch (err) {
+        setImportListMessage('import-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
+        setImportListMessage('import-situation-list', err.message || '상황 목록을 불러오지 못했습니다.');
+    }
+}
+
+function renderImportProjectList(type) {
+    const state = window.IMPORT_PROJECT_PICKER_STATE || {};
+    const list = document.getElementById(`import-${type}-list`);
+    if (!list) return;
+    list.innerHTML = '';
+    if (type === 'project') {
+        (state.projects || []).forEach(project => {
+            list.appendChild(makeImportPickerItem({
+                type,
+                label: project.name || project.folderName,
+                subLabel: project.prefix,
+                active: project.prefix === state.projectPath,
+                onClick: async () => loadImportProjectTargets(project.prefix)
+            }));
+        });
+    } else if (type === 'character') {
+        (state.characters || []).forEach(character => {
+            list.appendChild(makeImportPickerItem({
+                type,
+                label: character.name || character.alias || character.folderName || character.id,
+                subLabel: character.prefix,
+                active: character.prefix === state.characterPath,
+                onClick: () => {
+                    state.characterPath = character.prefix;
+                    window.IMPORT_PROJECT_PICKER_STATE = state;
+                    renderImportProjectList('character');
+                    updateImportProjectSummary();
+                }
+            }));
+        });
+    } else if (type === 'situation') {
+        (state.situations || []).forEach((situation, index) => {
+            const id = situation.id || situation.folderName || `situation-${index + 1}`;
+            list.appendChild(makeImportPickerItem({
+                type,
+                label: getImportSituationLabel(situation, index),
+                subLabel: String(id),
+                active: String(id) === String(state.situationId),
+                onClick: () => {
+                    state.situationId = String(id);
+                    window.IMPORT_PROJECT_PICKER_STATE = state;
+                    renderImportProjectList('situation');
+                    updateImportProjectSummary();
+                }
+            }));
+        });
+    }
+    if (!list.children.length) setImportListMessage(list.id, '선택 가능한 항목이 없습니다.');
+    if (window.lucide) window.lucide.createIcons();
+}
+
+window.filterImportProjectList = function(type, value = '') {
+    const q = String(value || '').trim().toLowerCase();
+    document.querySelectorAll(`#import-${type}-list [data-picker-type="${type}"]`).forEach(item => {
+        item.classList.toggle('hidden', q && !item.dataset.searchText.includes(q));
+    });
+};
+
 function updateImportProjectSummary() {
-    const projectSelect = document.getElementById('craft-project-select');
-    const characterSelect = document.getElementById('craft-char-select');
-    const situationSelect = document.getElementById('craft-situation-select');
+    const state = window.IMPORT_PROJECT_PICKER_STATE || {};
     const setText = (id, value) => {
         const el = document.getElementById(id);
         if (el) el.textContent = value || '-';
     };
 
-    setText('import-project-current', projectSelect?.value || '');
-    setText('import-character-current', characterSelect?.value || '');
-    setText('import-situation-current', situationSelect?.value || '');
+    setText('import-project-current', state.projectPath || '');
+    setText('import-character-current', state.characterPath || '');
+    setText('import-situation-current', state.situationId || '');
 }
 
 window.showImportMode = async function(mode = 'hub') {
@@ -701,7 +886,7 @@ window.showImportMode = async function(mode = 'hub') {
         if (title) title.textContent = '프로젝트 데이터 조합';
         if (subtitle) subtitle.textContent = 'D1에 저장된 그림체, 캐릭터, 상황 데이터를 조합합니다.';
         if (projectPanel) projectPanel.classList.remove('hidden');
-        updateImportProjectSummary();
+        await initImportProjectPicker();
     } else if (mode === 'external') {
         if (title) title.textContent = '외부 이미지에서 추출';
         if (subtitle) subtitle.textContent = '로컬 이미지 파일에 포함된 메타데이터를 읽습니다.';
@@ -723,15 +908,18 @@ window.openImportModal = async function() {
 
 window.importProjectPromptData = async function() {
     try {
-        const project = await window.getCraftSelectedProject();
+        const pickerState = window.IMPORT_PROJECT_PICKER_STATE || {};
+        if (!pickerState.projectPath) throw new Error('프로젝트를 선택하세요.');
+        const project = window.getProjectByPrefix ? window.getProjectByPrefix(pickerState.projectPath) : null;
+        if (!project) throw new Error('선택한 프로젝트를 찾을 수 없습니다.');
         await Promise.all([
             window.loadProjectCharacters(project, true).catch(() => []),
             window.loadProjectSituations(project, true).catch(() => [])
         ]);
 
         const options = getImportApplyOptions();
-        const characterPrefix = document.getElementById('craft-char-select')?.value || '';
-        const situationId = document.getElementById('craft-situation-select')?.value || '';
+        const characterPrefix = pickerState.characterPath || '';
+        const situationId = pickerState.situationId || '';
         const character = characterPrefix && window.getCharacterById ? window.getCharacterById(project, characterPrefix) : null;
         const situation = situationId && window.getSituationById ? window.getSituationById(project, situationId) : null;
         const [projectStyle, characterMeta] = await Promise.all([
@@ -770,6 +958,7 @@ window.importProjectPromptData = async function() {
         if (window.updateModelSpecificUI) window.updateModelSpecificUI();
         if (window.saveCraftSettings) window.saveCraftSettings();
         if (window.switchTab) window.switchTab('craft');
+        cacheImportProjectContext({ projectPath: project.prefix, characterPath: characterPrefix, situationId });
         window.closeImportModal(null, true);
         alert('프로젝트 데이터를 조합해서 불러왔습니다.');
     } catch (err) {

@@ -609,7 +609,7 @@
     </div>
 
     <div id="craft-upload-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeCraftUploadModal(event)">
-        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-200" onclick="event.stopPropagation()">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col transition-colors duration-200" onclick="event.stopPropagation()">
             <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white flex items-center">
                     <i data-lucide="upload-cloud" class="w-5 h-5 mr-2 text-indigo-500"></i> 생성 이미지 업로드
@@ -618,7 +618,7 @@
                     <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
                 </button>
             </div>
-            <div class="p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
+            <div class="p-4 sm:p-6 flex-1 overflow-y-auto">
                 <div class="flex gap-4 mb-5">
                     <div class="w-24 h-32 sm:w-28 sm:h-36 rounded-lg overflow-hidden bg-gray-100 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 flex-shrink-0">
                         <img id="craft-upload-preview" src="" class="w-full h-full object-cover" alt="">
@@ -642,28 +642,28 @@
                         <button id="craft-upload-mode-direct" type="button" onclick="window.setCraftUploadMode('direct')" class="px-3 py-2 rounded-md border text-xs font-bold transition">직접 경로</button>
                     </div>
 
-                    <div id="craft-upload-structured-panel" class="space-y-3">
+                    <div id="craft-upload-structured-panel" class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                         <div>
                             <div class="flex items-center justify-between mb-1">
                                 <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">프로젝트</p>
                                 <input id="craft-upload-project-search" type="search" oninput="window.filterCraftUploadList('project', this.value)" class="w-40 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
                             </div>
-                            <div id="craft-upload-project-list" class="max-h-28 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1 space-y-1"></div>
+                            <div id="craft-upload-project-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1 max-h-[48vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
                         </div>
-                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3 lg:col-span-2">
                             <div>
                                 <div class="flex items-center justify-between mb-1">
                                     <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">캐릭터</p>
                                     <input id="craft-upload-character-search" type="search" oninput="window.filterCraftUploadList('character', this.value)" class="w-32 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
                                 </div>
-                                <div id="craft-upload-character-list" class="max-h-44 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1 space-y-1"></div>
+                                <div id="craft-upload-character-list" class="grid grid-cols-1 xl:grid-cols-2 gap-1 max-h-[48vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
                             </div>
                             <div>
                                 <div class="flex items-center justify-between mb-1">
                                     <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">상황</p>
                                     <input id="craft-upload-situation-search" type="search" oninput="window.filterCraftUploadList('situation', this.value)" class="w-32 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
                                 </div>
-                                <div id="craft-upload-situation-list" class="max-h-44 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1 space-y-1"></div>
+                                <div id="craft-upload-situation-list" class="grid grid-cols-1 xl:grid-cols-2 gap-1 max-h-[48vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
                             </div>
                         </div>
                     </div>
@@ -682,7 +682,7 @@
     </div>
 
     <div id="craft-prompt-save-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeCraftPromptSaveModal(event)">
-        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-2xl transition-colors duration-200" onclick="event.stopPropagation()">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-6xl h-[90vh] flex flex-col transition-colors duration-200" onclick="event.stopPropagation()">
             <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white flex items-center">
                     <i data-lucide="save" class="w-5 h-5 mr-2 text-indigo-500"></i> 프롬프트 저장
@@ -691,34 +691,34 @@
                     <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
                 </button>
             </div>
-            <div class="p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
+            <div class="p-4 sm:p-6 flex-1 overflow-y-auto">
                 <div class="grid grid-cols-3 gap-2 mb-4">
                     <button id="craft-save-mode-style" type="button" onclick="window.setCraftPromptSaveMode('style')" class="px-3 py-2 rounded-md border text-xs font-bold transition">그림체</button>
                     <button id="craft-save-mode-character" type="button" onclick="window.setCraftPromptSaveMode('character')" class="px-3 py-2 rounded-md border text-xs font-bold transition">캐릭터</button>
                     <button id="craft-save-mode-situation" type="button" onclick="window.setCraftPromptSaveMode('situation')" class="px-3 py-2 rounded-md border text-xs font-bold transition">상황</button>
                 </div>
 
-                <div class="space-y-3">
+                <div class="grid grid-cols-1 lg:grid-cols-3 gap-3">
                     <div>
                         <div class="flex items-center justify-between mb-1">
                             <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">프로젝트</p>
                             <input id="craft-save-project-search" type="search" oninput="window.filterCraftPromptSaveList('project', this.value)" class="w-40 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
                         </div>
-                        <div id="craft-save-project-list" class="max-h-28 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1 space-y-1"></div>
+                        <div id="craft-save-project-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1 max-h-[52vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
                     </div>
                     <div id="craft-save-character-panel">
                         <div class="flex items-center justify-between mb-1">
                             <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">캐릭터</p>
                             <input id="craft-save-character-search" type="search" oninput="window.filterCraftPromptSaveList('character', this.value)" class="w-40 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
                         </div>
-                        <div id="craft-save-character-list" class="max-h-40 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1 space-y-1"></div>
+                        <div id="craft-save-character-list" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1 max-h-[52vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
                     </div>
                     <div id="craft-save-situation-panel">
                         <div class="flex items-center justify-between mb-1">
                             <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">상황</p>
                             <input id="craft-save-situation-search" type="search" oninput="window.filterCraftPromptSaveList('situation', this.value)" class="w-40 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
                         </div>
-                        <div id="craft-save-situation-list" class="max-h-40 overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1 space-y-1"></div>
+                        <div id="craft-save-situation-list" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1 max-h-[52vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
                     </div>
                 </div>
 
@@ -892,12 +892,35 @@
             </div>
 
             <div id="import-project-panel" class="hidden flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 dark:bg-gray-900/30">
-                <div class="max-w-2xl mx-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 sm:p-5 shadow-sm">
+                <div class="max-w-6xl mx-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 sm:p-5 shadow-sm">
                     <div class="flex items-start gap-3">
                         <i data-lucide="blocks" class="w-5 h-5 text-emerald-500 mt-0.5"></i>
                         <div class="min-w-0 flex-1">
                             <h4 class="text-sm font-bold text-gray-900 dark:text-white">현재 선택된 프로젝트 데이터 조합</h4>
                             <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">최근 선택된 프로젝트, 캐릭터, 상황 값을 기준으로 저장된 프롬프트 데이터를 가져옵니다.</p>
+                        </div>
+                    </div>
+                    <div class="mt-4 grid grid-cols-1 lg:grid-cols-3 gap-3">
+                        <div>
+                            <div class="flex items-center justify-between mb-1">
+                                <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">프로젝트</p>
+                                <input id="import-project-search" type="search" oninput="window.filterImportProjectList('project', this.value)" class="w-40 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
+                            </div>
+                            <div id="import-project-list" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 gap-1 max-h-[42vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-1">
+                                <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">캐릭터</p>
+                                <input id="import-character-search" type="search" oninput="window.filterImportProjectList('character', this.value)" class="w-40 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
+                            </div>
+                            <div id="import-character-list" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1 max-h-[42vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-1">
+                                <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">상황</p>
+                                <input id="import-situation-search" type="search" oninput="window.filterImportProjectList('situation', this.value)" class="w-40 p-1.5 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100" placeholder="검색">
+                            </div>
+                            <div id="import-situation-list" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-1 max-h-[42vh] overflow-y-auto rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-1"></div>
                         </div>
                     </div>
                     <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
