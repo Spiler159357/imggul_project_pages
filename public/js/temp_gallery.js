@@ -732,6 +732,21 @@ function normalizeUploadPath(path) {
     return path && !path.endsWith('/') ? path + '/' : path;
 }
 
+function getParentUploadPathFromKey(key) {
+    const parts = String(key || '').split('/').filter(Boolean);
+    if (parts.length <= 1) return '';
+    parts.pop();
+    return normalizeUploadPath(parts.join('/'));
+}
+
+async function getTempImageInpaintSourceKey(imgData) {
+    if (imgData?.inpaintSourceKey) return imgData.inpaintSourceKey;
+    const tempFileName = String(imgData?.key || '').split('/').pop();
+    if (!tempFileName || !window.loadMetadataFromDB) return '';
+    const metadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, tempFileName).catch(() => null);
+    return metadata?.['Inpaint Source Key'] || '';
+}
+
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
 const CRAFT_UPLOAD_EXCLUDED_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 
@@ -881,6 +896,8 @@ function getCraftUploadSituationImageNumber(situation, fallbackId) {
 export async function prepareUploadActiveTempImage() {
     if (window.CRAFT_ACTIVE_INDEX === null) return;
     const index = window.CRAFT_ACTIVE_INDEX; const imgData = window.TEMP_IMAGES[index]; if (!imgData) return;
+    const inpaintSourceKey = await getTempImageInpaintSourceKey(imgData);
+    const inpaintSourcePath = getParentUploadPathFromKey(inpaintSourceKey);
 
     window.CRAFT_UPLOAD_ACTIVE_INDEX = index;
     window.CRAFT_UPLOAD_TARGET_PATH = '';
@@ -897,6 +914,15 @@ export async function prepareUploadActiveTempImage() {
     uploadNameInput.value = 'nai_' + Date.now();
     uploadModal.classList.remove('hidden');
     await window.initCraftUploadPicker();
+    if (inpaintSourcePath) {
+        const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+        state.mode = 'direct';
+        state.directPath = inpaintSourcePath;
+        window.CRAFT_UPLOAD_PICKER_STATE = state;
+        const directInput = document.getElementById('craft-upload-direct-path');
+        if (directInput) directInput.value = inpaintSourcePath;
+        window.setCraftUploadMode('direct');
+    }
     if (window.lucide) window.lucide.createIcons();
     return;
 

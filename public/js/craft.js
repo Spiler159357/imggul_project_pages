@@ -664,6 +664,13 @@ export async function generateNaiImage(options = {}) {
     };
 
     let preloadedVibeBase64 = null; let preloadedDirectorBase64 = null; let inpaintPayload = null;
+    const inpaintSource = window.INPAINT_IMAGE_SOURCE
+        ? {
+            type: window.INPAINT_IMAGE_SOURCE.type || '',
+            key: window.INPAINT_IMAGE_SOURCE.key || '',
+            name: window.INPAINT_IMAGE_SOURCE.name || ''
+        }
+        : null;
     try {
         if (model.includes('nai-diffusion-3') || model.includes('nai-diffusion-4')) { if (window.VIBE_IMAGE_FILE) preloadedVibeBase64 = await processVibeImage(window.VIBE_IMAGE_FILE); }
         if (model.includes('nai-diffusion-4-5') && window.PRECISE_IMAGE_FILE) { preloadedDirectorBase64 = await processDirectorImage(window.PRECISE_IMAGE_FILE); }
@@ -690,7 +697,7 @@ export async function generateNaiImage(options = {}) {
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < batchCount; i++) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
-        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix: options.outputPrefix || window.TEMP_FOLDER, planner: options.planner || null });
+        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix: options.outputPrefix || window.TEMP_FOLDER, planner: options.planner || null });
     }
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }
@@ -814,6 +821,10 @@ export async function processNextQueueItem() {
         updateProgress('최적화 및 임시 저장소 업로드 중...', 99);
         let extractedMetadata = await window.extractMetadata(generatedFile);
         if (extractedMetadata && task.splitPrompts && Object.keys(task.splitPrompts).length > 0) { extractedMetadata["Split Prompts"] = task.splitPrompts; delete extractedMetadata["Prompt"]; }
+        if (extractedMetadata && task.inpaintSource?.key) {
+            extractedMetadata["Inpaint Source Key"] = task.inpaintSource.key;
+            extractedMetadata["Inpaint Source Name"] = task.inpaintSource.name || task.inpaintSource.key.split('/').pop() || '';
+        }
 
         const outputPrefix = task.outputPrefix || window.TEMP_FOLDER;
         let uploadFile = generatedFile;
@@ -835,7 +846,7 @@ export async function processNextQueueItem() {
         if (extractedMetadata) await window.saveMetadataToDB(outputPrefix, uploadFileName, extractedMetadata);
 
         updateProgress('완료!', 100);
-        if (outputPrefix === window.TEMP_FOLDER) window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString() });
+        if (outputPrefix === window.TEMP_FOLDER) window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString(), inpaintSourceKey: task.inpaintSource?.key || '' });
         
         if (outputPrefix === window.TEMP_FOLDER && window.TEMP_IMAGES.length > 100) {
             const toDelete = window.TEMP_IMAGES.pop();
