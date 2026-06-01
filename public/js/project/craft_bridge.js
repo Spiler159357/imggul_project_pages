@@ -61,7 +61,7 @@ function writeCraftContextCache(cache) {
     } catch {}
 }
 
-function cacheCraftPromptSaveLocation({ projectPath, characterPath, situationId } = {}) {
+function cacheCraftPromptSaveLocation({ projectPath, characterPath, situationId, characterVariantId, situationVariantId } = {}) {
     const normalizedProject = normalizeCraftContextPath(projectPath);
     if (!normalizedProject) return;
     const cache = readCraftContextCache();
@@ -72,6 +72,8 @@ function cacheCraftPromptSaveLocation({ projectPath, characterPath, situationId 
     };
     if (characterPath !== undefined) projectCache.characterPath = normalizeCraftContextPath(characterPath);
     if (situationId !== undefined) projectCache.situationId = situationId || '';
+    if (characterVariantId !== undefined) projectCache.characterVariantId = characterVariantId || '';
+    if (situationVariantId !== undefined) projectCache.situationVariantId = situationVariantId || '';
     cache.byProject[normalizedProject] = projectCache;
     writeCraftContextCache(cache);
     if (window.cacheCraftUploadSelection && (characterPath !== undefined || situationId !== undefined)) {
@@ -111,6 +113,83 @@ function getSituationSaveLabel(situation, index) {
     return `${number} - ${name}`;
 }
 
+function setCraftSaveVariantSelect(type, variants = [], selectedId = '') {
+    const select = document.getElementById(`craft-save-${type}-variant-select`);
+    if (!select) return;
+    const fallbackMessage = type === 'character' ? '캐릭터를 먼저 선택하세요' : '상황을 먼저 선택하세요';
+    select.innerHTML = '';
+    if (!variants.length) {
+        select.disabled = true;
+        select.appendChild(new Option(fallbackMessage, ''));
+        return;
+    }
+    select.disabled = false;
+    variants.forEach(variant => {
+        const option = new Option(variant.name || variant.id || 'Default', variant.id || 'default');
+        select.appendChild(option);
+    });
+    select.value = variants.some(variant => variant.id === selectedId) ? selectedId : variants[0].id;
+}
+
+function getSelectedCraftSaveCharacter(state = window.CRAFT_PROMPT_SAVE_STATE || {}) {
+    return (state.characters || []).find(character => character.prefix === state.characterPath) || null;
+}
+
+function getSelectedCraftSaveSituation(state = window.CRAFT_PROMPT_SAVE_STATE || {}) {
+    return (state.situations || []).find((situation, index) => {
+        const id = situation.id || situation.folderName || `situation-${index + 1}`;
+        return String(id) === String(state.situationId);
+    }) || null;
+}
+
+async function loadCraftPromptSaveCharacterVariants(characterPath, restoreCached = false) {
+    const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+    state.characterPath = normalizeCraftContextPath(characterPath);
+    state.characterVariants = [];
+    state.characterVariantId = '';
+    window.CRAFT_PROMPT_SAVE_STATE = state;
+    setCraftSaveVariantSelect('character', []);
+
+    const character = getSelectedCraftSaveCharacter(state);
+    if (!character) {
+        window.updateCraftPromptSaveSummary();
+        return;
+    }
+
+    const meta = await loadCharacterMeta(character).catch(() => ({}));
+    const variants = normalizeCharacterPromptVariants(meta);
+    const cache = readCraftContextCache();
+    const projectCache = cache.byProject?.[state.projectPath] || {};
+    const cachedId = restoreCached ? projectCache.characterVariantId : '';
+    const selectedId = variants.some(variant => variant.id === cachedId)
+        ? cachedId
+        : (meta.activePromptVariantId || variants[0]?.id || 'default');
+    state.characterMeta = meta;
+    state.characterVariants = variants;
+    state.characterVariantId = selectedId;
+    window.CRAFT_PROMPT_SAVE_STATE = state;
+    setCraftSaveVariantSelect('character', variants, selectedId);
+    window.updateCraftPromptSaveSummary();
+}
+
+function loadCraftPromptSaveSituationVariants(situationId, restoreCached = false) {
+    const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+    state.situationId = situationId || '';
+    const situation = getSelectedCraftSaveSituation(state);
+    const variants = situation ? normalizeSituationPromptVariants(situation) : [];
+    const cache = readCraftContextCache();
+    const projectCache = cache.byProject?.[state.projectPath] || {};
+    const cachedId = restoreCached ? projectCache.situationVariantId : '';
+    const selectedId = variants.some(variant => variant.id === cachedId)
+        ? cachedId
+        : (situation?.activePromptVariantId || variants[0]?.id || 'default');
+    state.situationVariants = variants;
+    state.situationVariantId = selectedId;
+    window.CRAFT_PROMPT_SAVE_STATE = state;
+    setCraftSaveVariantSelect('situation', variants, selectedId);
+    window.updateCraftPromptSaveSummary();
+}
+
 export async function openCraftPromptSaveModal() {
     const modal = document.getElementById('craft-prompt-save-modal');
     if (!modal) return;
@@ -124,7 +203,11 @@ export async function openCraftPromptSaveModal() {
         situations: [],
         projectPath,
         characterPath: normalizeCraftContextPath(projectCache.characterPath || getCraftSelectedPrefix('craft-char-select')),
-        situationId: projectCache.situationId || getCraftSelectedPrefix('craft-situation-select')
+        situationId: projectCache.situationId || getCraftSelectedPrefix('craft-situation-select'),
+        characterVariants: [],
+        situationVariants: [],
+        characterVariantId: projectCache.characterVariantId || '',
+        situationVariantId: projectCache.situationVariantId || ''
     };
     modal.classList.remove('hidden');
     window.setCraftPromptSaveMode('style');
@@ -183,8 +266,14 @@ export async function loadCraftPromptSaveTargets(projectPath, restoreCached = fa
     if (!restoreCached) {
         state.characterPath = '';
         state.situationId = '';
+        state.characterVariantId = '';
+        state.situationVariantId = '';
     }
+    state.characterVariants = [];
+    state.situationVariants = [];
     window.CRAFT_PROMPT_SAVE_STATE = state;
+    setCraftSaveVariantSelect('character', []);
+    setCraftSaveVariantSelect('situation', []);
     try {
         const project = getProjectByPrefix(state.projectPath);
         if (!project) throw new Error('선택한 프로젝트를 찾을 수 없습니다.');
@@ -202,6 +291,8 @@ export async function loadCraftPromptSaveTargets(projectPath, restoreCached = fa
         window.renderCraftPromptSaveList('project');
         window.renderCraftPromptSaveList('character');
         window.renderCraftPromptSaveList('situation');
+        if (state.characterPath) await loadCraftPromptSaveCharacterVariants(state.characterPath, restoreCached);
+        if (state.situationId) loadCraftPromptSaveSituationVariants(state.situationId, restoreCached);
         window.updateCraftPromptSaveSummary();
     } catch (err) {
         setCraftSaveListEmpty('craft-save-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
@@ -231,10 +322,12 @@ export function renderCraftPromptSaveList(type) {
                 label: character.name || character.alias || character.folderName || character.id,
                 subLabel: character.prefix,
                 active: character.prefix === state.characterPath,
-                onClick: () => {
+                onClick: async () => {
                     state.characterPath = character.prefix;
+                    state.characterVariantId = '';
                     window.CRAFT_PROMPT_SAVE_STATE = state;
                     window.renderCraftPromptSaveList('character');
+                    await loadCraftPromptSaveCharacterVariants(character.prefix);
                     window.updateCraftPromptSaveSummary();
                 }
             }));
@@ -249,8 +342,10 @@ export function renderCraftPromptSaveList(type) {
                 active: String(id) === String(state.situationId),
                 onClick: () => {
                     state.situationId = String(id);
+                    state.situationVariantId = '';
                     window.CRAFT_PROMPT_SAVE_STATE = state;
                     window.renderCraftPromptSaveList('situation');
+                    loadCraftPromptSaveSituationVariants(String(id));
                     window.updateCraftPromptSaveSummary();
                 }
             }));
@@ -258,6 +353,14 @@ export function renderCraftPromptSaveList(type) {
     }
     if (!list.children.length) setCraftSaveListEmpty(list.id, '선택 가능한 항목이 없습니다.');
     if (window.lucide) window.lucide.createIcons();
+}
+
+export function selectCraftPromptSaveVariant(type, value = '') {
+    const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+    if (type === 'character') state.characterVariantId = value || '';
+    if (type === 'situation') state.situationVariantId = value || '';
+    window.CRAFT_PROMPT_SAVE_STATE = state;
+    window.updateCraftPromptSaveSummary();
 }
 
 export function filterCraftPromptSaveList(type, value = '') {
@@ -272,10 +375,19 @@ export function updateCraftPromptSaveSummary() {
     const summary = document.getElementById('craft-save-target-summary');
     const submit = document.getElementById('craft-prompt-save-submit-btn');
     let valid = !!state.projectPath;
-    if (state.mode === 'character') valid = valid && !!state.characterPath;
-    if (state.mode === 'situation') valid = valid && !!state.situationId;
+    if (state.mode === 'character') valid = valid && !!state.characterPath && !!state.characterVariantId;
+    if (state.mode === 'situation') valid = valid && !!state.situationId && !!state.situationVariantId;
     if (summary) {
-        summary.textContent = [state.mode, state.projectPath, state.mode === 'character' ? state.characterPath : '', state.mode === 'situation' ? state.situationId : '']
+        const characterVariant = (state.characterVariants || []).find(variant => variant.id === state.characterVariantId);
+        const situationVariant = (state.situationVariants || []).find(variant => variant.id === state.situationVariantId);
+        summary.textContent = [
+            state.mode,
+            state.projectPath,
+            state.mode === 'character' ? state.characterPath : '',
+            state.mode === 'character' ? (characterVariant?.name || state.characterVariantId || '') : '',
+            state.mode === 'situation' ? state.situationId : '',
+            state.mode === 'situation' ? (situationVariant?.name || state.situationVariantId || '') : ''
+        ]
             .filter(Boolean)
             .join(' · ') || '-';
     }
@@ -301,15 +413,18 @@ export async function submitCraftPromptSaveModal() {
             if (!character) throw new Error('선택한 캐릭터를 찾을 수 없습니다.');
             const meta = await loadCharacterMeta(character).catch(() => ({}));
             const variants = normalizeCharacterPromptVariants(meta);
-            const activeVariantId = meta.activePromptVariantId || variants[0]?.id || 'default';
+            const targetVariantId = variants.some(variant => variant.id === state.characterVariantId)
+                ? state.characterVariantId
+                : (meta.activePromptVariantId || variants[0]?.id || 'default');
+            const baseVariant = variants.find(variant => variant.id === targetVariantId) || variants[0] || {};
             const parts = {
-                ...(meta.parts || {}),
+                ...(baseVariant.parts || meta.parts || {}),
                 character: fields.character,
                 clothing: fields.clothing,
                 expression: fields.expression,
                 negative: fields.negative
             };
-            const nextVariants = variants.map(variant => variant.id === activeVariantId
+            const nextVariants = variants.map(variant => variant.id === targetVariantId
                 ? { ...variant, prompt: parts.character, parts, updatedAt: Date.now() }
                 : variant
             );
@@ -318,42 +433,45 @@ export async function submitCraftPromptSaveModal() {
                 prompt: parts.character,
                 parts,
                 promptVariants: nextVariants,
-                activePromptVariantId: activeVariantId,
+                activePromptVariantId: targetVariantId,
                 updatedAt: Date.now()
             });
-            cacheCraftPromptSaveLocation({ projectPath: project.prefix, characterPath: character.prefix });
+            cacheCraftPromptSaveLocation({ projectPath: project.prefix, characterPath: character.prefix, characterVariantId: targetVariantId });
             setCraftPromptSaveStatus('캐릭터 프롬프트 저장 완료');
         } else {
             if (!state.situationId) throw new Error('상황을 선택하세요.');
             await loadProjectSituations(project, true);
             const situation = getSituationById(project, state.situationId);
             if (!situation) throw new Error('선택한 상황을 찾을 수 없습니다.');
+            const variants = normalizeSituationPromptVariants(situation);
+            const targetVariantId = variants.some(variant => variant.id === state.situationVariantId)
+                ? state.situationVariantId
+                : (situation.activePromptVariantId || variants[0]?.id || 'default');
+            const baseVariant = variants.find(variant => variant.id === targetVariantId) || variants[0] || {};
             const prompt = {
-                ...(situation.prompt || {}),
+                ...(baseVariant.prompt || situation.prompt || {}),
                 composition: fields.composition,
                 expression: fields.expression,
                 action: fields.action,
                 background: fields.background,
                 negative: fields.negative
             };
-            const currentGeneration = getSituationGeneration(situation);
+            const currentGeneration = baseVariant.generation || getSituationGeneration(situation);
             const v4PromptCharacters = window.readCraftV4PromptRows ? normalizePlannerV4PromptRows(window.readCraftV4PromptRows()) : [];
             const generation = { ...currentGeneration, v4PromptCharacters, v4_prompt: v4PromptCharacters };
-            const variants = normalizeSituationPromptVariants(situation);
-            const activeVariantId = situation.activePromptVariantId || variants[0]?.id || 'default';
-            const nextVariants = variants.map(variant => variant.id === activeVariantId
+            const nextVariants = variants.map(variant => variant.id === targetVariantId
                 ? { ...variant, prompt, generation, updatedAt: Date.now() }
                 : variant
             );
             situation.prompt = prompt;
             situation.generation = generation;
             situation.promptVariants = nextVariants;
-            situation.activePromptVariantId = activeVariantId;
+            situation.activePromptVariantId = targetVariantId;
             situation.v4PromptCharacters = v4PromptCharacters;
             situation.v4_prompt = v4PromptCharacters;
             situation.updatedAt = Date.now();
             await saveProjectSituations(project);
-            cacheCraftPromptSaveLocation({ projectPath: project.prefix, situationId: state.situationId });
+            cacheCraftPromptSaveLocation({ projectPath: project.prefix, situationId: state.situationId, situationVariantId: targetVariantId });
             setCraftPromptSaveStatus('상황 프롬프트 저장 완료');
         }
 
