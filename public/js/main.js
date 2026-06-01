@@ -334,6 +334,12 @@ window.addEventListener('popstate', (e) => {
 
     if (modalClosed) return; 
 
+    if (window.SKIP_NEXT_MODAL_CLOSE_ROUTE_RESTORE) {
+        window.SKIP_NEXT_MODAL_CLOSE_ROUTE_RESTORE = false;
+        if (window.restorePreviewModalScrollState) window.restorePreviewModalScrollState();
+        return;
+    }
+
     if (e.state && e.state.tab === 'craft') { window.switchTab('craft', true); return; } 
     else if (e.state && e.state.tab === 'project') {
         window.switchTab('project', true);

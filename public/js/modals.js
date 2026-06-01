@@ -435,6 +435,8 @@ function restorePreviewModalScrollState() {
     setTimeout(restore, 0);
 }
 
+window.restorePreviewModalScrollState = restorePreviewModalScrollState;
+
 /**
  * 역할: 파일 종류에 맞춰 미리보기 모달을 열고 이미지/텍스트/기타 파일 UI를 구성한다.
  * 매개변수: key - 파일 경로, url - 파일 URL, isImage - 이미지 여부, isText - 텍스트 여부, isPublic - 공개 여부, skipHistory - history push 생략 여부.
@@ -508,7 +510,10 @@ window.closeModal = function(e, skipHistory = false) {
         const replaceInput = document.getElementById('replace-input'); if(replaceInput) replaceInput.value = '';
         window.currentFileKey = '';
         restorePreviewModalScrollState();
-        if (!skipHistory) history.back();
+        if (!skipHistory) {
+            window.SKIP_NEXT_MODAL_CLOSE_ROUTE_RESTORE = true;
+            history.back();
+        }
     }
 };
 
