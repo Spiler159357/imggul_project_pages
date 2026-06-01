@@ -26,14 +26,16 @@ export function renderSituationSection(section, state = {}) {
                     ${state.loading ? renderEmptyState('상황을 불러오는 중입니다.') : ''}
                     ${state.error ? renderEmptyState(state.error) : ''}
                     ${!state.loading && !state.error && situations.length ? `
-                        <div class="grid min-h-0 flex-1 grid-cols-2 gap-2.5 overflow-y-auto pr-1">
+                        <div class="grid min-h-0 flex-1 grid-cols-2 gap-2.5 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
                             ${situations.map(situation => `
-                                <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group w-full min-h-[74px] self-start text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 flex items-center gap-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
-                                    <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationImageNumber(project, situation))}</span>
-                                    <span class="min-w-0 flex-1">
-                                        <span class="block text-sm font-bold text-gray-800 dark:text-gray-100 truncate">${escapeHtml(getSituationDisplayName(situation))}</span>
+                                <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group flex min-h-[112px] w-full flex-col justify-between self-start text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
+                                    <span class="flex items-start justify-between gap-2">
+                                        <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationImageNumber(project, situation))}</span>
+                                        <span class="min-w-0 text-right text-[10px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition truncate">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
                                     </span>
-                                    <span class="hidden sm:inline-flex flex-shrink-0 items-center text-[11px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
+                                    <span class="mt-3 min-w-0">
+                                        <span class="block text-sm font-bold leading-5 text-gray-800 dark:text-gray-100 line-clamp-2">${escapeHtml(getSituationDisplayName(situation))}</span>
+                                    </span>
                                 </button>
                             `).join('')}
                         </div>
