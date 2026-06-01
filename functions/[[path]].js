@@ -3,6 +3,7 @@ import {
     cancelPlannerBackgroundJob,
     getPlannerBackgroundStatus,
     jsonResponse,
+    pausePlannerBackgroundJob,
     startPlannerBackgroundJob,
     writeBackgroundErrorLog
 } from "../src/planner-background.js";
@@ -291,6 +292,23 @@ export async function onRequest(context) {
                 route: path,
                 method,
                 stage: "background_cancel_api"
+            });
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/planner/background/pause" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            if (!body?.jobId) return jsonResponse({ error: 'jobId is required' }, { status: 400 });
+            const result = await pausePlannerBackgroundJob(env, body.jobId);
+            return jsonResponse(result);
+        } catch (e) {
+            await writeBackgroundErrorLog(env, e, {
+                route: path,
+                method,
+                stage: "background_pause_api"
             });
             return jsonResponse({ error: e.message }, { status: 500 });
         }

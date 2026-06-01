@@ -1774,13 +1774,52 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
     await refreshPlannerBackgroundStatus(targetJobId);
 }
 
+export async function pausePlannerBackgroundGeneration(jobId = null) {
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const targetJobId = jobId || meta?.backgroundJobId;
+    if (!targetJobId) return;
+
+    if (meta) {
+        meta.status = 'paused';
+        meta.stage = 'paused';
+        meta.stageLabel = getPlannerStageLabel('paused');
+        delete meta.runningSituationIds;
+        if (Array.isArray(meta.items)) {
+            meta.items = meta.items.map(item => ['queued', 'running', 'cancel_requested'].includes(item.status)
+                ? { ...item, status: 'paused', stage: 'paused', stageLabel: getPlannerStageLabel('paused') }
+                : item
+            );
+        }
+        meta.updatedAt = Date.now();
+        window.PROJECT_PLANNER_META = meta;
+        await savePlannerMeta(project, meta).catch(() => null);
+        renderPlannerIfVisible();
+    }
+
+    const res = await fetch('/api/planner/background/pause', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: targetJobId })
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPlannerStatus(data.error || '백그라운드 일시정지 요청에 실패했습니다.');
+        return;
+    }
+
+    stopPlannerBackgroundPolling();
+    setPlannerStatus('일시정지되었습니다.');
+    await refreshPlannerBackgroundStatus(targetJobId).catch(() => null);
+}
+
 export async function pausePlannerGeneration() {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     window.PROJECT_PLANNER_PAUSE_REQUESTED = true;
-    if (window.IS_GENERATING && window.cancelNaiGeneration) window.cancelNaiGeneration();
     if (meta?.backgroundJobId && ['queued', 'running'].includes(meta.status)) {
-        await cancelPlannerBackgroundGeneration(meta.backgroundJobId);
+        await pausePlannerBackgroundGeneration(meta.backgroundJobId);
+        return;
     }
     if (meta) {
         meta.status = 'paused';
