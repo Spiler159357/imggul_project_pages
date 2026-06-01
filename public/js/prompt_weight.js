@@ -144,6 +144,7 @@ function renderEditor(editor, value, preserveCaret = true) {
     editor.innerHTML = value ? parsePromptSegment(value) : '';
     setTextOffset(editor, offset);
     resizeEditor(editor);
+    scheduleEditorResize(editor);
 }
 
 function syncTextareaFromEditor(textarea, editor) {
@@ -156,6 +157,11 @@ function resizeEditor(editor) {
     editor.style.height = `${editor.scrollHeight}px`;
 }
 
+function scheduleEditorResize(editor) {
+    if (!editor) return;
+    requestAnimationFrame(() => resizeEditor(editor));
+}
+
 function syncEditorFromTextarea(textarea) {
     const editor = document.getElementById(textarea.dataset.naiWeightEditorId || '');
     if (!editor) return;
@@ -166,6 +172,7 @@ function syncEditorFromTextarea(textarea) {
     const value = textarea.value || '';
     if (normalizeEditorText(editor) === value) {
         resizeEditor(editor);
+        scheduleEditorResize(editor);
         return;
     }
     renderEditor(editor, value, false);
@@ -202,6 +209,7 @@ function createEditor(textarea) {
     editor.classList.toggle('hidden', textarea.classList.contains('hidden'));
     editor.classList.toggle('block', textarea.classList.contains('block'));
     renderEditor(editor, textarea.value || '', false);
+    scheduleEditorResize(editor);
 
     editor.addEventListener('input', () => {
         syncTextareaFromEditor(textarea, editor);
@@ -262,5 +270,11 @@ export function initNaiPromptWeightPreviews() {
     window.refreshNaiPromptWeightPreviews = () => {
         scanPromptWeightInputs();
         document.querySelectorAll('textarea[data-nai-weight-editor-id]').forEach(syncEditorFromTextarea);
+        requestAnimationFrame(() => {
+            document.querySelectorAll('.nai-weight-editor').forEach(resizeEditor);
+        });
     };
+    window.refreshNaiPromptWeightPreviews();
+    window.addEventListener('load', window.refreshNaiPromptWeightPreviews);
+    window.addEventListener('resize', window.refreshNaiPromptWeightPreviews);
 }

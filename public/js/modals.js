@@ -474,7 +474,7 @@ window.openModal = async function(key, url, isImage, isText, isPublic, skipHisto
             if (window.IS_ADMIN && !document.getElementById('import-meta-btn')) {
                 const importBtn = document.createElement('button'); importBtn.id = 'import-meta-btn'; importBtn.className = 'modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-300 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition';
                 importBtn.title = '메타데이터 불러오기';
-                importBtn.innerHTML = `<i data-lucide="import" class="w-4 h-4"></i><span class="modal-action-label">메타</span>`; importBtn.onclick = () => window.importMetadata(window.currentFileKey);
+                importBtn.innerHTML = `<i data-lucide="import" class="w-4 h-4"></i><span class="modal-action-label">메타데이터</span>`; importBtn.onclick = () => window.importMetadata(window.currentFileKey);
                 imgActions.appendChild(importBtn); if (window.lucide) window.lucide.createIcons();
             }
             if (window.lucide) window.lucide.createIcons();

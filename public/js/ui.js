@@ -221,6 +221,7 @@ export function switchTab(tabName, skipHistory = false) {
         if (rawEl) { rawEl.style.height = 'auto'; rawEl.style.height = rawEl.scrollHeight + 'px'; }
         const negEl = document.getElementById('nai-negative');
         if (negEl) { negEl.style.height = 'auto'; negEl.style.height = negEl.scrollHeight + 'px'; }
+        if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
 
         if (!skipHistory) history.pushState({ tab: 'craft' }, '', '#craft');
     } else if (tabName === 'project') {
