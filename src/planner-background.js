@@ -55,6 +55,26 @@ function nowIso() {
     return new Date().toISOString();
 }
 
+function getKstDateParts(date = new Date()) {
+    const kstDate = new Date(date.getTime() + (9 * 60 * 60 * 1000));
+    const pad = value => String(value).padStart(2, "0");
+    const padMs = value => String(value).padStart(3, "0");
+    return {
+        year: kstDate.getUTCFullYear(),
+        month: pad(kstDate.getUTCMonth() + 1),
+        day: pad(kstDate.getUTCDate()),
+        hour: pad(kstDate.getUTCHours()),
+        minute: pad(kstDate.getUTCMinutes()),
+        second: pad(kstDate.getUTCSeconds()),
+        millisecond: padMs(kstDate.getUTCMilliseconds())
+    };
+}
+
+function nowKstIso() {
+    const parts = getKstDateParts();
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.millisecond}+09:00`;
+}
+
 function isoBeforeNow(ms) {
     return new Date(Date.now() - ms).toISOString();
 }
@@ -109,10 +129,9 @@ function makeId(prefix) {
 }
 
 function makeLogKey(jobId = "unknown") {
-    const d = new Date();
-    const pad = value => String(value).padStart(2, "0");
-    const day = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}`;
-    const stamp = `${day}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}_${crypto.randomUUID().slice(0, 8)}`;
+    const parts = getKstDateParts();
+    const day = `${parts.year}${parts.month}${parts.day}`;
+    const stamp = `${day}_${parts.hour}${parts.minute}${parts.second}_${crypto.randomUUID().slice(0, 8)}`;
     return `logs/background-generation/${day}/${stamp}_${jobId}.log`;
 }
 
@@ -125,7 +144,7 @@ export async function writeBackgroundErrorLog(env, error, context = {}) {
             .map(([key, value]) => `${key}: ${typeof value === "string" ? value : JSON.stringify(value)}`)
             .join("\n");
         const logText = [
-            `[${nowIso()}] background-generation-error`,
+            `[${nowKstIso()}] background-generation-error`,
             "",
             "Message:",
             message,

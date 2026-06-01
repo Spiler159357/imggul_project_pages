@@ -248,16 +248,24 @@ export function switchTab(tabName, skipHistory = false) {
 export async function logErrorToStorage(errContext, error) {
     try {
         const stack = error && error.stack ? error.stack : (error && error.message ? error.message : String(error));
-        const logContent = `[${new Date().toISOString()}]\nContext: ${errContext}\n\nStacktrace:\n${stack}\n`;
-        const d = new Date();
-        /**
-         * 역할: 날짜/시간 숫자를 두 자리 문자열로 맞춘다.
-         * 매개변수: n - 변환할 숫자.
-         * 주요 변수: n - 문자열 변환 후 padStart 대상.
-         * 반환값: 두 자리 숫자 문자열.
-         */
-        const pad = (n) => n.toString().padStart(2, '0');
-        const dateString = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
+        const getKstDateParts = (date = new Date()) => {
+            const kstDate = new Date(date.getTime() + (9 * 60 * 60 * 1000));
+            const pad = (value) => value.toString().padStart(2, '0');
+            const padMs = (value) => value.toString().padStart(3, '0');
+            return {
+                year: kstDate.getUTCFullYear(),
+                month: pad(kstDate.getUTCMonth() + 1),
+                day: pad(kstDate.getUTCDate()),
+                hour: pad(kstDate.getUTCHours()),
+                minute: pad(kstDate.getUTCMinutes()),
+                second: pad(kstDate.getUTCSeconds()),
+                millisecond: padMs(kstDate.getUTCMilliseconds())
+            };
+        };
+        const kstParts = getKstDateParts();
+        const kstTimestamp = `${kstParts.year}-${kstParts.month}-${kstParts.day}T${kstParts.hour}:${kstParts.minute}:${kstParts.second}.${kstParts.millisecond}+09:00`;
+        const logContent = `[${kstTimestamp}]\nContext: ${errContext}\n\nStacktrace:\n${stack}\n`;
+        const dateString = `${kstParts.year}${kstParts.month}${kstParts.day}_${kstParts.hour}${kstParts.minute}${kstParts.second}`;
         const fileName = `logs/error_${dateString}_${Date.now().toString().slice(-4)}.txt`;
 
         const blob = new Blob([logContent], { type: 'text/plain;charset=utf-8' });
