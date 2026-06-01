@@ -17,7 +17,7 @@ window.downloadModalImage = async function() {
     let originalHtml = '';
     if (btn) {
         originalHtml = btn.innerHTML;
-        btn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 mr-1 animate-spin"></i> 변환 중...`;
+        btn.innerHTML = `<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span class="modal-action-label">변환</span>`;
         btn.disabled = true;
         if (window.lucide) window.lucide.createIcons();
     }
@@ -464,15 +464,17 @@ window.openModal = async function(key, url, isImage, isText, isPublic, skipHisto
             if (!document.getElementById('modal-inpaint-craft-btn')) {
                 const inpaintBtn = document.createElement('button');
                 inpaintBtn.id = 'modal-inpaint-craft-btn';
-                inpaintBtn.className = 'flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition';
-                inpaintBtn.innerHTML = `<i data-lucide="paintbrush" class="w-4 h-4 mr-1"></i> 인페인트로 생성`;
+                inpaintBtn.className = 'modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition';
+                inpaintBtn.title = '인페인트로 생성';
+                inpaintBtn.innerHTML = `<i data-lucide="paintbrush" class="w-4 h-4"></i><span class="modal-action-label">인페인트</span>`;
                 imgActions.appendChild(inpaintBtn);
             }
             const inpaintBtn = document.getElementById('modal-inpaint-craft-btn');
             if (inpaintBtn) inpaintBtn.onclick = () => window.openModalImageInInpaint(key);
             if (window.IS_ADMIN && !document.getElementById('import-meta-btn')) {
-                const importBtn = document.createElement('button'); importBtn.id = 'import-meta-btn'; importBtn.className = 'flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-300 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition';
-                importBtn.innerHTML = `<i data-lucide="import" class="w-4 h-4 mr-1"></i> 메타데이터 불러오기`; importBtn.onclick = () => window.importMetadata(window.currentFileKey);
+                const importBtn = document.createElement('button'); importBtn.id = 'import-meta-btn'; importBtn.className = 'modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-300 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition';
+                importBtn.title = '메타데이터 불러오기';
+                importBtn.innerHTML = `<i data-lucide="import" class="w-4 h-4"></i><span class="modal-action-label">메타</span>`; importBtn.onclick = () => window.importMetadata(window.currentFileKey);
                 imgActions.appendChild(importBtn); if (window.lucide) window.lucide.createIcons();
             }
             if (window.lucide) window.lucide.createIcons();
@@ -686,7 +688,7 @@ window.openModalImageInInpaint = async function(fileKey = window.currentFileKey)
     const originalHtml = btn?.innerHTML || '';
     if (btn) {
         btn.disabled = true;
-        btn.innerHTML = '<i data-lucide="loader" class="w-4 h-4 mr-1 animate-spin"></i> 준비 중...';
+        btn.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span class="modal-action-label">준비</span>';
         if (window.lucide) window.lucide.createIcons();
     }
 

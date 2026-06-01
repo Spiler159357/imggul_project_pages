@@ -308,6 +308,37 @@ body {
         linear-gradient(-45deg, transparent 75%, #262626 75%);
 }
 
+.preview-modal-actions {
+    container-type: inline-size;
+}
+
+.modal-action-button {
+    min-width: 2.5rem;
+    white-space: nowrap;
+}
+
+.modal-action-button i {
+    flex: 0 0 auto;
+}
+
+.modal-action-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+@container (max-width: 520px) {
+    .modal-action-label {
+        display: none;
+    }
+
+    .modal-action-button {
+        flex: 0 0 2.5rem;
+        width: 2.5rem;
+        padding-left: 0.625rem;
+        padding-right: 0.625rem;
+    }
+}
+
 .dark .tab-active {
     color: #818cf8 !important; 
     border-bottom-color: #818cf8 !important;

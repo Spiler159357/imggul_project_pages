@@ -1029,41 +1029,33 @@
                     </button>
                 </div>
                 
-                <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center pt-2 sm:pt-2 border-t border-gray-100 dark:border-gray-700 admin-only-ui gap-3 sm:gap-0">
+                <div class="preview-modal-actions flex flex-col sm:flex-row justify-between items-start sm:items-center pt-2 sm:pt-2 border-t border-gray-100 dark:border-gray-700 admin-only-ui gap-3 sm:gap-0">
                     <div class="flex flex-wrap gap-2 w-full sm:w-auto">
-                         <button id="modal-download-btn" onclick="window.downloadModalImage()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
-                            <i data-lucide="download" class="w-4 h-4 mr-1"></i> 다운로드
+                         <button id="modal-download-btn" onclick="window.downloadModalImage()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="다운로드">
+                            <i data-lucide="download" class="w-4 h-4"></i><span class="modal-action-label">다운로드</span>
                          </button>
                          <div id="img-actions" class="hidden flex gap-2 w-full sm:w-auto">
                              <input type="file" id="replace-input" class="hidden" accept="image/*" onchange="window.handleReplaceFile(this)">
-                             <button onclick="document.getElementById('replace-input').click()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
-                                <i data-lucide="upload" class="w-4 h-4 mr-1"></i> 교체
+                             <button onclick="document.getElementById('replace-input').click()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="교체">
+                                <i data-lucide="upload" class="w-4 h-4"></i><span class="modal-action-label">교체</span>
                              </button>
                          </div>
 
                          <div id="text-actions" class="hidden flex gap-2 w-full sm:w-auto">
-                            <button onclick="window.copyTextContent()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
-                                <i data-lucide="copy" class="w-4 h-4 mr-1"></i> 내용 복사
+                            <button onclick="window.copyTextContent()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="내용 복사">
+                                <i data-lucide="copy" class="w-4 h-4"></i><span class="modal-action-label">복사</span>
                             </button>
-                            <button onclick="window.saveEditedText()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 px-3 py-2 rounded transition">
-                                <i data-lucide="save" class="w-4 h-4 mr-1"></i> 내용 저장
+                            <button onclick="window.saveEditedText()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-white bg-indigo-600 hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 px-3 py-2 rounded transition" title="내용 저장">
+                                <i data-lucide="save" class="w-4 h-4"></i><span class="modal-action-label">저장</span>
                             </button>
                          </div>
-                         
-                         <button onclick="window.setModalFileAlias()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-purple-600 dark:hover:text-purple-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
-                            <i data-lucide="tag" class="w-4 h-4 mr-1"></i> 이름 설정
-                         </button>
 
-                         <button onclick="window.renameCurrentFileOnly()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
-                            <i data-lucide="edit-2" class="w-4 h-4 mr-1"></i> 파일명 변경
-                         </button>
-                         
-                         <button onclick="window.moveCurrentFile()" class="flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition">
-                            <i data-lucide="folder-output" class="w-4 h-4 mr-1"></i> 경로 이동
+                         <button onclick="window.moveCurrentFile()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="경로 이동">
+                            <i data-lucide="folder-output" class="w-4 h-4"></i><span class="modal-action-label">이동</span>
                          </button>
                     </div>
-                    <button onclick="window.deleteCurrentFile()" class="w-full sm:w-auto mt-2 sm:mt-0 flex justify-center items-center text-xs sm:text-sm text-red-500 hover:text-white hover:bg-red-500 dark:text-red-400 dark:hover:text-white dark:hover:bg-red-600 px-3 py-2 border border-red-200 dark:border-red-900 sm:border-transparent rounded transition">
-                        <i data-lucide="trash-2" class="w-4 h-4 mr-1"></i> 삭제
+                    <button onclick="window.deleteCurrentFile()" class="modal-action-button w-full sm:w-auto mt-2 sm:mt-0 flex justify-center items-center gap-1.5 text-xs sm:text-sm text-red-500 hover:text-white hover:bg-red-500 dark:text-red-400 dark:hover:text-white dark:hover:bg-red-600 px-3 py-2 border border-red-200 dark:border-red-900 sm:border-transparent rounded transition" title="삭제">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i><span class="modal-action-label">삭제</span>
                     </button>
                 </div>
             </div>
