@@ -732,11 +732,26 @@ function normalizeUploadPath(path) {
     return path && !path.endsWith('/') ? path + '/' : path;
 }
 
-function getParentUploadPathFromKey(key) {
+function getStructuredUploadContextFromSourceKey(key) {
     const parts = String(key || '').split('/').filter(Boolean);
-    if (parts.length <= 1) return '';
-    parts.pop();
-    return normalizeUploadPath(parts.join('/'));
+    if (parts.length < 3) return null;
+    const fileName = parts[parts.length - 1] || '';
+    const imageNumber = fileName.replace(/\.[^/.]+$/, '');
+    if (!imageNumber) return null;
+
+    return {
+        projectPath: normalizeUploadPath(parts[0]),
+        characterPath: normalizeUploadPath(parts.slice(0, -1).join('/')),
+        imageNumber
+    };
+}
+
+function findUploadSituationByImageNumber(situations = [], imageNumber = '') {
+    const normalized = String(imageNumber || '').trim();
+    return situations.find((situation, index) => {
+        const id = situation?.id || situation?.folderName || `situation-${index + 1}`;
+        return getCraftUploadSituationImageNumber(situation, id) === normalized;
+    }) || null;
 }
 
 async function getTempImageInpaintSourceKey(imgData) {
@@ -745,6 +760,31 @@ async function getTempImageInpaintSourceKey(imgData) {
     if (!tempFileName || !window.loadMetadataFromDB) return '';
     const metadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, tempFileName).catch(() => null);
     return metadata?.['Inpaint Source Key'] || '';
+}
+
+async function applyInpaintSourceUploadContext(sourceKey) {
+    const context = getStructuredUploadContextFromSourceKey(sourceKey);
+    if (!context) return false;
+
+    await window.loadCraftUploadDependentLists(context.projectPath);
+    const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+    const situation = findUploadSituationByImageNumber(state.situations || [], context.imageNumber);
+    const situationId = situation
+        ? String(situation.id || situation.folderName || context.imageNumber)
+        : '';
+
+    state.mode = 'structured';
+    state.projectPath = context.projectPath;
+    state.characterPath = (state.characters || []).includes(context.characterPath) ? context.characterPath : '';
+    state.situationId = situationId;
+    window.CRAFT_UPLOAD_PICKER_STATE = state;
+
+    window.renderCraftUploadPickerList('project');
+    window.renderCraftUploadPickerList('character');
+    window.renderCraftUploadPickerList('situation');
+    window.setCraftUploadMode('structured');
+    window.updateCraftUploadTargetSummary();
+    return !!(state.projectPath && state.characterPath && state.situationId);
 }
 
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
@@ -897,7 +937,6 @@ export async function prepareUploadActiveTempImage() {
     if (window.CRAFT_ACTIVE_INDEX === null) return;
     const index = window.CRAFT_ACTIVE_INDEX; const imgData = window.TEMP_IMAGES[index]; if (!imgData) return;
     const inpaintSourceKey = await getTempImageInpaintSourceKey(imgData);
-    const inpaintSourcePath = getParentUploadPathFromKey(inpaintSourceKey);
 
     window.CRAFT_UPLOAD_ACTIVE_INDEX = index;
     window.CRAFT_UPLOAD_TARGET_PATH = '';
@@ -914,15 +953,7 @@ export async function prepareUploadActiveTempImage() {
     uploadNameInput.value = 'nai_' + Date.now();
     uploadModal.classList.remove('hidden');
     await window.initCraftUploadPicker();
-    if (inpaintSourcePath) {
-        const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
-        state.mode = 'direct';
-        state.directPath = inpaintSourcePath;
-        window.CRAFT_UPLOAD_PICKER_STATE = state;
-        const directInput = document.getElementById('craft-upload-direct-path');
-        if (directInput) directInput.value = inpaintSourcePath;
-        window.setCraftUploadMode('direct');
-    }
+    if (inpaintSourceKey) await applyInpaintSourceUploadContext(inpaintSourceKey);
     if (window.lucide) window.lucide.createIcons();
     return;
 
