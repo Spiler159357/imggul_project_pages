@@ -257,15 +257,6 @@ function clearFolderCacheByPrefix(prefix) {
     });
 }
 
-function usesSameProjectAliasKey(oldKey, newKey) {
-    const oldParts = oldKey.split('/').filter(Boolean);
-    const newParts = newKey.split('/').filter(Boolean);
-    return oldParts.length > 1
-        && newParts.length > 1
-        && oldParts[0] === newParts[0]
-        && oldParts[oldParts.length - 1] === newParts[newParts.length - 1];
-}
-
 async function saveAlias(key, alias) {
     const res = await fetch('/api/aliases', {
         method: 'POST',
@@ -415,13 +406,8 @@ export async function renameCurrentFileOnly() {
     const newKey = prefix + cleanName;
 
     try {
-        const alias = window.getAliasOnly(oldKey, false) || '';
         await moveFileKey(oldKey, newKey);
         await window.moveMetadataInDB(prefix, fileName, prefix, cleanName);
-        if (alias) {
-            await saveAlias(newKey, alias);
-            if (!usesSameProjectAliasKey(oldKey, newKey)) await saveAlias(oldKey, '');
-        }
 
         window.currentFileKey = newKey;
         clearFolderCache(prefix, window.currentPrefix);
@@ -446,13 +432,8 @@ export async function moveCurrentFile() {
     if (newKey === oldKey) return;
 
     try {
-        const alias = window.getAliasOnly(oldKey, false) || '';
         await moveFileKey(oldKey, newKey);
         await window.moveMetadataInDB(oldPrefix, fileName, newPrefix, fileName);
-        if (alias) {
-            await saveAlias(newKey, alias);
-            if (!usesSameProjectAliasKey(oldKey, newKey)) await saveAlias(oldKey, '');
-        }
 
         window.currentFileKey = newKey;
         clearFolderCache(oldPrefix, newPrefix, window.currentPrefix);

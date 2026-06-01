@@ -855,19 +855,6 @@ export async function onRequest(context) {
                     throw new Error('File not found');
                 }
                 
-                try {
-                    await moveAliasPrefix(env, key, newKey).catch(() => null);
-                    const obj = await env.imgBucket.get('.imggul_aliases.json');
-                    if (obj) {
-                        let al = await obj.json();
-                        if (al[key]) {
-                            al[newKey] = al[key];
-                            delete al[key];
-                            await env.imgBucket.put('.imggul_aliases.json', JSON.stringify(al), {httpMetadata:{contentType:'application/json'}});
-                        }
-                    }
-                } catch(e){}
-
                 return new Response(JSON.stringify({ success: true, newKey }));
             }
 
