@@ -250,6 +250,24 @@ function getPromptParts(generation = {}) {
     return ids.map(id => String(prompts[id] || "").trim()).filter(Boolean);
 }
 
+function getSplitPrompts(generation = {}) {
+    const fields = generation.fields || {};
+    const prompts = generation.prompts || {};
+    const splitPrompts = {
+        style: fields.style || prompts["prompt-style"] || "",
+        composition: fields.composition || prompts["prompt-composition"] || "",
+        character: fields.character || prompts["prompt-character"] || "",
+        clothing: fields.clothing || prompts["prompt-clothing"] || "",
+        expression: fields.expression || prompts["prompt-expression"] || "",
+        action: fields.action || prompts["prompt-action"] || "",
+        background: fields.background || prompts["prompt-background"] || ""
+    };
+    Object.keys(splitPrompts).forEach(key => {
+        if (!splitPrompts[key]) delete splitPrompts[key];
+    });
+    return splitPrompts;
+}
+
 function buildNovelAiPayload(generation = {}, seed) {
     const promptParts = getPromptParts(generation);
     const prompt = promptParts.length ? `${promptParts.join(", ")}, ${QUALITY_TAGS}` : QUALITY_TAGS;
@@ -300,7 +318,7 @@ function buildNovelAiPayload(generation = {}, seed) {
         };
     }
 
-    return { payload, prompt, negative, width, height, model, steps, sampler, scale };
+    return { payload, prompt, splitPrompts: getSplitPrompts(generation), negative, width, height, model, steps, sampler, scale };
 }
 
 async function queryAll(db, sql, ...params) {
@@ -1026,7 +1044,6 @@ export async function processPlannerQueueMessage(env, message) {
         await updateProgressStage(env, jobId, itemId, "metadata_put");
         await abortIfBackgroundJobCancelled(env, jobId, itemId);
         const metadata = {
-            Prompt: request.prompt,
             "Negative Prompt": request.negative,
             Resolution: `${request.width} x ${request.height}`,
             Seed: seed,
@@ -1037,6 +1054,11 @@ export async function processPlannerQueueMessage(env, message) {
             "Background Job": jobId,
             "Generated At": generatedAt
         };
+        if (Object.keys(request.splitPrompts || {}).length) {
+            metadata["Split Prompts"] = request.splitPrompts;
+        } else {
+            metadata.Prompt = request.prompt;
+        }
         await saveMetadata(env, item.output_prefix, fileName, metadata).catch(error => writeBackgroundErrorLog(env, error, {
             jobId,
             itemId,

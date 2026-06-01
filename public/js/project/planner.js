@@ -13,6 +13,42 @@ function clampPlannerImageCount(value, fallback = PLANNER_DEFAULT_IMAGE_COUNT) {
     return Math.min(PLANNER_MAX_IMAGE_COUNT, Math.max(PLANNER_MIN_IMAGE_COUNT, count));
 }
 
+export function buildPlannerSplitPrompts(generation = {}) {
+    const fields = generation.fields || {};
+    const prompts = generation.prompts || {};
+    const splitPrompts = {
+        style: fields.style || prompts['prompt-style'] || '',
+        composition: fields.composition || prompts['prompt-composition'] || '',
+        character: fields.character || prompts['prompt-character'] || '',
+        clothing: fields.clothing || prompts['prompt-clothing'] || '',
+        expression: fields.expression || prompts['prompt-expression'] || '',
+        action: fields.action || prompts['prompt-action'] || '',
+        background: fields.background || prompts['prompt-background'] || ''
+    };
+    Object.keys(splitPrompts).forEach(key => {
+        if (!splitPrompts[key]) delete splitPrompts[key];
+    });
+    return splitPrompts;
+}
+
+export function mergePlannerSplitMetadata(item, metadata = {}, imageKey = '') {
+    const source = metadata && typeof metadata === 'object' ? metadata : {};
+    const snapshot = imageKey && item?.imagePromptSnapshots?.[imageKey]
+        ? item.imagePromptSnapshots[imageKey]
+        : null;
+    const fallback = buildPlannerMetadataFallback(item);
+    const splitPrompts = snapshot?.['Split Prompts'] || source['Split Prompts'] || fallback?.['Split Prompts'] || {};
+    const merged = {
+        ...source,
+        ...(snapshot || {})
+    };
+    if (Object.keys(splitPrompts).length) {
+        merged['Split Prompts'] = splitPrompts;
+        delete merged.Prompt;
+    }
+    return merged;
+}
+
 export async function loadPlannerMeta(project, characterId = '') {
     if (!project?.prefix) return null;
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
@@ -1595,6 +1631,7 @@ export async function deletePlannerImage(key) {
     const prefix = key.slice(0, key.lastIndexOf('/') + 1);
     await window.removeMetadataFromDB(prefix, getFileNameFromKey(key)).catch(() => null);
     item.images = item.images.filter(imageKey => imageKey !== key);
+    if (item.imagePromptSnapshots) delete item.imagePromptSnapshots[key];
     if (item.selectedImage === key) item.selectedImage = null;
     item.status = item.images.length ? item.status : 'pending';
     meta.updatedAt = Date.now();
@@ -1625,6 +1662,7 @@ export async function clearPlannerItemImages(project, item) {
         body: JSON.stringify({ action: 'delete_folder', key: prefix })
     }).catch(() => null);
     item.images = [];
+    item.imagePromptSnapshots = {};
     item.selectedImage = null;
     item.status = 'pending';
 }
@@ -1951,6 +1989,7 @@ export async function startPlannerGeneration(situationId = null) {
 
             if (window.applyCraftSettings) window.applyCraftSettings(generation);
             await applyPlannerReferenceFiles(generation);
+            const beforeImages = new Set(await listPlannerImages(project, item.imageNumber));
             window.generateNaiImage({
                 outputPrefix: getPlannerImagePrefix(project, item.imageNumber),
                 v4PromptCharacters: generation.v4PromptCharacters || [],
@@ -1964,6 +2003,17 @@ export async function startPlannerGeneration(situationId = null) {
 
             result = await waitForPlannerQueueComplete();
             if (result.cancelled) break;
+            const afterImages = await listPlannerImages(project, item.imageNumber);
+            const metadataSnapshot = buildPlannerMetadataFallback({ generation });
+            item.imagePromptSnapshots = item.imagePromptSnapshots || {};
+            afterImages
+                .filter(key => !beforeImages.has(key))
+                .forEach(key => {
+                    item.imagePromptSnapshots[key] = metadataSnapshot;
+                });
+            item.images = afterImages;
+            meta.updatedAt = Date.now();
+            await savePlannerMeta(project, meta);
             }
             item.images = await listPlannerImages(project, item.imageNumber);
             item.status = result.cancelled
@@ -2026,19 +2076,7 @@ export async function selectPlannerImageFromPreview(key) {
 export function buildPlannerMetadataFallback(item) {
     const generation = item?.generation || {};
     const fields = generation.fields || {};
-    const prompts = generation.prompts || {};
-    const splitPrompts = {
-        style: fields.style || prompts['prompt-style'] || '',
-        composition: fields.composition || prompts['prompt-composition'] || '',
-        character: fields.character || prompts['prompt-character'] || '',
-        clothing: fields.clothing || prompts['prompt-clothing'] || '',
-        expression: fields.expression || prompts['prompt-expression'] || '',
-        action: fields.action || prompts['prompt-action'] || '',
-        background: fields.background || prompts['prompt-background'] || ''
-    };
-    Object.keys(splitPrompts).forEach(key => {
-        if (!splitPrompts[key]) delete splitPrompts[key];
-    });
+    const splitPrompts = buildPlannerSplitPrompts(generation);
 
     const [width, height] = String(generation.res || DEFAULT_PLANNER_RESOLUTION).split('x').map(Number);
     const metadata = {
@@ -2130,8 +2168,8 @@ export async function confirmPlannerSelection(situationId = null) {
         if (window.loadMetadataFromDB && window.saveMetadataToDB) {
             const sourcePrefix = item.selectedImage.slice(0, item.selectedImage.lastIndexOf('/') + 1);
             const sourceFileName = getFileNameFromKey(item.selectedImage);
-            const metadata = await window.loadMetadataFromDB(sourcePrefix, sourceFileName).catch(() => null)
-                || buildPlannerMetadataFallback(item);
+            const sourceMetadata = await window.loadMetadataFromDB(sourcePrefix, sourceFileName).catch(() => null);
+            const metadata = mergePlannerSplitMetadata(item, sourceMetadata, item.selectedImage);
             if (metadata && Object.keys(metadata).length) await window.saveMetadataToDB(character.prefix, `${item.imageNumber}.webp`, metadata);
         }
         item.finalImage = newKey;
