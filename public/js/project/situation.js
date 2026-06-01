@@ -16,7 +16,7 @@ export function renderSituationSection(section, state = {}) {
         ${renderSectionHeader(section.title)}
         <div class="flex-1 overflow-hidden p-4 sm:p-6 min-h-0">
             <section class="h-full min-h-0">
-                <div class="min-h-0 flex flex-col">
+                <div class="h-full min-h-0 flex flex-col">
                     <div class="flex items-center justify-between mb-4 flex-shrink-0">
                         <h3 class="font-bold text-base text-gray-900 dark:text-white">상황 목록</h3>
                         <button type="button" onclick="window.openProjectItemCreateModal('situation')" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="상황 추가" aria-label="상황 추가">
