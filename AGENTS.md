@@ -7,3 +7,7 @@
 - Do not add a BOM marker to any file.
 - Preserve existing file encoding unless explicitly asked otherwise.
 - Before finishing a task, check that modified text files do not start with the UTF-8 BOM bytes EF BB BF.
+
+## Browser Testing
+
+- Do not validate browser behavior only through localhost-based checks or indirect previews.

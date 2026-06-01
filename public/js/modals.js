@@ -461,11 +461,21 @@ window.openModal = async function(key, url, isImage, isText, isPublic, skipHisto
         if(imgEl) { imgEl.src = url; imgEl.classList.remove('hidden'); }
         if(imgActions) {
             imgActions.classList.remove('hidden'); imgActions.classList.add('flex');
+            if (!document.getElementById('modal-inpaint-craft-btn')) {
+                const inpaintBtn = document.createElement('button');
+                inpaintBtn.id = 'modal-inpaint-craft-btn';
+                inpaintBtn.className = 'flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition';
+                inpaintBtn.innerHTML = `<i data-lucide="paintbrush" class="w-4 h-4 mr-1"></i> 인페인트로 생성`;
+                imgActions.appendChild(inpaintBtn);
+            }
+            const inpaintBtn = document.getElementById('modal-inpaint-craft-btn');
+            if (inpaintBtn) inpaintBtn.onclick = () => window.openModalImageInInpaint(key);
             if (window.IS_ADMIN && !document.getElementById('import-meta-btn')) {
                 const importBtn = document.createElement('button'); importBtn.id = 'import-meta-btn'; importBtn.className = 'flex-1 sm:flex-none flex justify-center items-center text-xs sm:text-sm text-purple-600 dark:text-purple-400 hover:text-purple-800 dark:hover:text-purple-300 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition';
                 importBtn.innerHTML = `<i data-lucide="import" class="w-4 h-4 mr-1"></i> 메타데이터 불러오기`; importBtn.onclick = () => window.importMetadata(window.currentFileKey);
                 imgActions.appendChild(importBtn); if (window.lucide) window.lucide.createIcons();
             }
+            if (window.lucide) window.lucide.createIcons();
         }
     } else if (isText) {
         if(textEl) {
@@ -650,6 +660,57 @@ function applyImportedMetadataObject(meta) {
     if (window.switchTab) window.switchTab('craft');
     return true;
 }
+
+async function loadFileMetadataForImport(fileKey) {
+    const parts = String(fileKey || '').split('/');
+    const fileName = parts.pop();
+    const prefix = parts.length > 0 ? parts.join('/') + '/' : '';
+    if (!fileName) throw new Error('파일 경로가 올바르지 않습니다.');
+
+    const res = await fetch(`/api/db/file-metadata?folderPrefix=${encodeURIComponent(prefix)}&fileName=${encodeURIComponent(fileName)}&_t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) throw new Error('해당 이미지에 저장된 메타데이터가 없습니다.');
+
+    const payload = await res.json();
+    if (!payload.data) throw new Error('해당 이미지에 저장된 메타데이터가 없습니다.');
+    return payload.data;
+}
+
+window.openModalImageInInpaint = async function(fileKey = window.currentFileKey) {
+    const key = String(fileKey || '');
+    if (!/\.(jpg|jpeg|png|webp)$/i.test(key.split('/').pop() || '')) {
+        alert('이미지 파일만 인페인트로 보낼 수 있습니다.');
+        return;
+    }
+
+    const btn = document.getElementById('modal-inpaint-craft-btn');
+    const originalHtml = btn?.innerHTML || '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i data-lucide="loader" class="w-4 h-4 mr-1 animate-spin"></i> 준비 중...';
+        if (window.lucide) window.lucide.createIcons();
+    }
+
+    try {
+        try {
+            const meta = await loadFileMetadataForImport(key);
+            const applied = applyImportedMetadataObject(meta);
+            if (!applied && window.switchTab) window.switchTab('craft');
+        } catch (err) {
+            console.warn('Prompt metadata could not be imported for inpaint handoff:', err);
+            if (window.switchTab) window.switchTab('craft');
+        }
+
+        if (window.closeModal) window.closeModal(null, true);
+        if (window.setInpaintImageFromKey) window.setInpaintImageFromKey(key);
+        else alert('인페인트 기능을 초기화할 수 없습니다.');
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+            if (window.lucide) window.lucide.createIcons();
+        }
+    }
+};
 
 const IMPORT_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
 
