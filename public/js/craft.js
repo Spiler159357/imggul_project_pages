@@ -52,7 +52,7 @@ function getCachedCraftProjectContext(projectPath) {
     return cache.byProject?.[normalizeCraftPath(projectPath)] || {};
 }
 
-function cacheCraftUploadSelection({ projectPath, characterPath, situationId } = {}) {
+export function cacheCraftUploadSelection({ projectPath, characterPath, situationId } = {}) {
     const normalizedProject = normalizeCraftPath(projectPath);
     if (!normalizedProject) return;
     const cache = readCraftUploadContextCache();
@@ -442,11 +442,11 @@ export async function onCraftProjectChange() {
     }
 
     charSelect.disabled = false;
-    charSelect.classList.remove('hidden');
+    charSelect.classList.add('hidden');
     charSelect.innerHTML = '<option value="">스캔 중...</option>';
     if (situationSelect) {
         situationSelect.disabled = false;
-        situationSelect.classList.remove('hidden');
+        situationSelect.classList.add('hidden');
         situationSelect.innerHTML = '<option value="">스캔 중...</option>';
     }
     try {

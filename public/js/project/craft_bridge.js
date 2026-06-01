@@ -1,4 +1,4 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js';
 import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js';
 import { applyCraftPromptValues, openCharacterDetail } from './character.js';
 import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js';
@@ -39,6 +39,325 @@ export function setCraftPromptSaveStatus(message, isError = false) {
     status.classList.toggle('dark:text-red-400', isError);
     status.classList.toggle('text-gray-500', !isError);
     status.classList.toggle('dark:text-gray-400', !isError);
+}
+
+const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
+
+function normalizeCraftContextPath(path) {
+    return path && !path.endsWith('/') ? `${path}/` : (path || '');
+}
+
+function readCraftContextCache() {
+    try {
+        return JSON.parse(localStorage.getItem(CRAFT_UPLOAD_CONTEXT_STORAGE_KEY) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function writeCraftContextCache(cache) {
+    try {
+        localStorage.setItem(CRAFT_UPLOAD_CONTEXT_STORAGE_KEY, JSON.stringify(cache || {}));
+    } catch {}
+}
+
+function cacheCraftPromptSaveLocation({ projectPath, characterPath, situationId } = {}) {
+    const normalizedProject = normalizeCraftContextPath(projectPath);
+    if (!normalizedProject) return;
+    const cache = readCraftContextCache();
+    cache.projectPath = normalizedProject;
+    cache.byProject = cache.byProject || {};
+    const projectCache = {
+        ...(cache.byProject[normalizedProject] || {})
+    };
+    if (characterPath !== undefined) projectCache.characterPath = normalizeCraftContextPath(characterPath);
+    if (situationId !== undefined) projectCache.situationId = situationId || '';
+    cache.byProject[normalizedProject] = projectCache;
+    writeCraftContextCache(cache);
+    if (window.cacheCraftUploadSelection && (characterPath !== undefined || situationId !== undefined)) {
+        window.cacheCraftUploadSelection({
+            projectPath: normalizedProject,
+            characterPath: projectCache.characterPath || '',
+            situationId: projectCache.situationId || ''
+        });
+    }
+}
+
+function makeCraftSavePickerItem({ type, label, subLabel = '', active = false, onClick }) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.pickerType = type;
+    button.dataset.searchText = `${label} ${subLabel}`.toLowerCase();
+    button.className = 'w-full flex items-center text-left gap-2 px-2.5 py-2 rounded-md border border-transparent hover:border-indigo-300 dark:hover:border-indigo-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 transition min-w-0';
+    button.onclick = onClick;
+    button.innerHTML = `
+        <span class="min-w-0 flex-1">
+            <span class="block text-xs font-bold truncate">${label}</span>
+            ${subLabel ? `<span class="block text-[10px] text-gray-500 dark:text-gray-400 truncate">${subLabel}</span>` : ''}
+        </span>
+        <i data-lucide="check" class="w-3.5 h-3.5 text-indigo-500 ${active ? '' : 'invisible'}"></i>
+    `;
+    return button;
+}
+
+function setCraftSaveListEmpty(id, message) {
+    const list = document.getElementById(id);
+    if (list) list.innerHTML = `<div class="py-5 text-center text-xs text-gray-500 dark:text-gray-400">${message}</div>`;
+}
+
+function getSituationSaveLabel(situation, index) {
+    const number = Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index;
+    const name = situation?.alias || situation?.name || situation?.id || `상황 ${number}`;
+    return `${number} - ${name}`;
+}
+
+export async function openCraftPromptSaveModal() {
+    const modal = document.getElementById('craft-prompt-save-modal');
+    if (!modal) return;
+    const cache = readCraftContextCache();
+    const projectPath = normalizeCraftContextPath(cache.projectPath || getCraftSelectedPrefix('craft-project-select'));
+    const projectCache = cache.byProject?.[projectPath] || {};
+    window.CRAFT_PROMPT_SAVE_STATE = {
+        mode: 'style',
+        projects: [],
+        characters: [],
+        situations: [],
+        projectPath,
+        characterPath: normalizeCraftContextPath(projectCache.characterPath || getCraftSelectedPrefix('craft-char-select')),
+        situationId: projectCache.situationId || getCraftSelectedPrefix('craft-situation-select')
+    };
+    modal.classList.remove('hidden');
+    window.setCraftPromptSaveMode('style');
+    await window.loadCraftPromptSaveProjects();
+    if (projectPath) await window.loadCraftPromptSaveTargets(projectPath, true);
+    window.updateCraftPromptSaveSummary();
+    if (window.lucide) window.lucide.createIcons();
+}
+
+export function closeCraftPromptSaveModal(e) {
+    if (e && e.target !== e.currentTarget && e.target.id !== 'close-craft-prompt-save-btn') return;
+    document.getElementById('craft-prompt-save-modal')?.classList.add('hidden');
+}
+
+export function setCraftPromptSaveMode(mode) {
+    const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+    state.mode = ['style', 'character', 'situation'].includes(mode) ? mode : 'style';
+    window.CRAFT_PROMPT_SAVE_STATE = state;
+    document.getElementById('craft-save-character-panel')?.classList.toggle('hidden', state.mode !== 'character');
+    document.getElementById('craft-save-situation-panel')?.classList.toggle('hidden', state.mode !== 'situation');
+    ['style', 'character', 'situation'].forEach(item => {
+        const btn = document.getElementById(`craft-save-mode-${item}`);
+        const active = item === state.mode;
+        btn?.classList.toggle('border-indigo-500', active);
+        btn?.classList.toggle('bg-indigo-50', active);
+        btn?.classList.toggle('dark:bg-indigo-900/30', active);
+        btn?.classList.toggle('text-indigo-700', active);
+        btn?.classList.toggle('dark:text-indigo-300', active);
+        btn?.classList.toggle('border-gray-200', !active);
+        btn?.classList.toggle('dark:border-gray-700', !active);
+    });
+    window.updateCraftPromptSaveSummary();
+}
+
+export async function loadCraftPromptSaveProjects() {
+    const list = document.getElementById('craft-save-project-list');
+    if (list) list.innerHTML = '<div class="py-5 text-center text-xs text-gray-500 dark:text-gray-400">불러오는 중...</div>';
+    try {
+        const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+        state.projects = await loadProjects();
+        window.CRAFT_PROMPT_SAVE_STATE = state;
+        window.renderCraftPromptSaveList('project');
+    } catch (err) {
+        setCraftSaveListEmpty('craft-save-project-list', err.message || '프로젝트 목록을 불러오지 못했습니다.');
+    }
+}
+
+export async function loadCraftPromptSaveTargets(projectPath, restoreCached = false) {
+    const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+    state.projectPath = normalizeCraftContextPath(projectPath);
+    if (!restoreCached) {
+        state.characterPath = '';
+        state.situationId = '';
+    }
+    window.CRAFT_PROMPT_SAVE_STATE = state;
+    try {
+        const project = getProjectByPrefix(state.projectPath);
+        if (!project) throw new Error('선택한 프로젝트를 찾을 수 없습니다.');
+        const cache = readCraftContextCache();
+        const projectCache = cache.byProject?.[state.projectPath] || {};
+        await Promise.all([
+            loadProjectCharacters(project, true),
+            loadProjectSituations(project, true)
+        ]);
+        state.characters = getProjectItems(project, 'characters');
+        state.situations = getProjectItems(project, 'situations');
+        if (restoreCached && projectCache.characterPath && state.characters.some(item => item.prefix === projectCache.characterPath)) state.characterPath = projectCache.characterPath;
+        if (restoreCached && projectCache.situationId && state.situations.some(item => String(item.id || item.folderName) === String(projectCache.situationId))) state.situationId = projectCache.situationId;
+        window.CRAFT_PROMPT_SAVE_STATE = state;
+        window.renderCraftPromptSaveList('project');
+        window.renderCraftPromptSaveList('character');
+        window.renderCraftPromptSaveList('situation');
+        window.updateCraftPromptSaveSummary();
+    } catch (err) {
+        setCraftSaveListEmpty('craft-save-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
+        setCraftSaveListEmpty('craft-save-situation-list', err.message || '상황 목록을 불러오지 못했습니다.');
+    }
+}
+
+export function renderCraftPromptSaveList(type) {
+    const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+    const list = document.getElementById(`craft-save-${type}-list`);
+    if (!list) return;
+    list.innerHTML = '';
+    if (type === 'project') {
+        (state.projects || []).forEach(project => {
+            list.appendChild(makeCraftSavePickerItem({
+                type,
+                label: project.name || project.folderName,
+                subLabel: project.prefix,
+                active: project.prefix === state.projectPath,
+                onClick: async () => window.loadCraftPromptSaveTargets(project.prefix)
+            }));
+        });
+    } else if (type === 'character') {
+        (state.characters || []).forEach(character => {
+            list.appendChild(makeCraftSavePickerItem({
+                type,
+                label: character.name || character.alias || character.folderName || character.id,
+                subLabel: character.prefix,
+                active: character.prefix === state.characterPath,
+                onClick: () => {
+                    state.characterPath = character.prefix;
+                    window.CRAFT_PROMPT_SAVE_STATE = state;
+                    window.renderCraftPromptSaveList('character');
+                    window.updateCraftPromptSaveSummary();
+                }
+            }));
+        });
+    } else if (type === 'situation') {
+        (state.situations || []).forEach((situation, index) => {
+            const id = situation.id || situation.folderName || `situation-${index + 1}`;
+            list.appendChild(makeCraftSavePickerItem({
+                type,
+                label: getSituationSaveLabel(situation, index),
+                subLabel: String(id),
+                active: String(id) === String(state.situationId),
+                onClick: () => {
+                    state.situationId = String(id);
+                    window.CRAFT_PROMPT_SAVE_STATE = state;
+                    window.renderCraftPromptSaveList('situation');
+                    window.updateCraftPromptSaveSummary();
+                }
+            }));
+        });
+    }
+    if (!list.children.length) setCraftSaveListEmpty(list.id, '선택 가능한 항목이 없습니다.');
+    if (window.lucide) window.lucide.createIcons();
+}
+
+export function filterCraftPromptSaveList(type, value = '') {
+    const q = String(value || '').trim().toLowerCase();
+    document.querySelectorAll(`#craft-save-${type}-list [data-picker-type="${type}"]`).forEach(item => {
+        item.classList.toggle('hidden', q && !item.dataset.searchText.includes(q));
+    });
+}
+
+export function updateCraftPromptSaveSummary() {
+    const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+    const summary = document.getElementById('craft-save-target-summary');
+    const submit = document.getElementById('craft-prompt-save-submit-btn');
+    let valid = !!state.projectPath;
+    if (state.mode === 'character') valid = valid && !!state.characterPath;
+    if (state.mode === 'situation') valid = valid && !!state.situationId;
+    if (summary) {
+        summary.textContent = [state.mode, state.projectPath, state.mode === 'character' ? state.characterPath : '', state.mode === 'situation' ? state.situationId : '']
+            .filter(Boolean)
+            .join(' · ') || '-';
+    }
+    if (submit) submit.disabled = !valid;
+}
+
+export async function submitCraftPromptSaveModal() {
+    const state = window.CRAFT_PROMPT_SAVE_STATE || {};
+    try {
+        if (!state.projectPath) throw new Error('프로젝트를 선택하세요.');
+        const project = getProjectByPrefix(state.projectPath);
+        if (!project) throw new Error('선택한 프로젝트를 찾을 수 없습니다.');
+        const fields = getCraftPromptFields();
+
+        if (state.mode === 'style') {
+            await uploadProjectStylePrompt(project, fields.style);
+            cacheCraftPromptSaveLocation({ projectPath: project.prefix });
+            setCraftPromptSaveStatus('프로젝트 그림체 저장 완료');
+        } else if (state.mode === 'character') {
+            if (!state.characterPath) throw new Error('캐릭터를 선택하세요.');
+            await loadProjectCharacters(project, true);
+            const character = getCharacterById(project, state.characterPath);
+            if (!character) throw new Error('선택한 캐릭터를 찾을 수 없습니다.');
+            const meta = await loadCharacterMeta(character).catch(() => ({}));
+            const variants = normalizeCharacterPromptVariants(meta);
+            const activeVariantId = meta.activePromptVariantId || variants[0]?.id || 'default';
+            const parts = {
+                ...(meta.parts || {}),
+                character: fields.character,
+                clothing: fields.clothing,
+                expression: fields.expression,
+                negative: fields.negative
+            };
+            const nextVariants = variants.map(variant => variant.id === activeVariantId
+                ? { ...variant, prompt: parts.character, parts, updatedAt: Date.now() }
+                : variant
+            );
+            await saveCharacterMeta(character, {
+                ...meta,
+                prompt: parts.character,
+                parts,
+                promptVariants: nextVariants,
+                activePromptVariantId: activeVariantId,
+                updatedAt: Date.now()
+            });
+            cacheCraftPromptSaveLocation({ projectPath: project.prefix, characterPath: character.prefix });
+            setCraftPromptSaveStatus('캐릭터 프롬프트 저장 완료');
+        } else {
+            if (!state.situationId) throw new Error('상황을 선택하세요.');
+            await loadProjectSituations(project, true);
+            const situation = getSituationById(project, state.situationId);
+            if (!situation) throw new Error('선택한 상황을 찾을 수 없습니다.');
+            const prompt = {
+                ...(situation.prompt || {}),
+                composition: fields.composition,
+                expression: fields.expression,
+                action: fields.action,
+                background: fields.background,
+                negative: fields.negative
+            };
+            const currentGeneration = getSituationGeneration(situation);
+            const v4PromptCharacters = window.readCraftV4PromptRows ? normalizePlannerV4PromptRows(window.readCraftV4PromptRows()) : [];
+            const generation = { ...currentGeneration, v4PromptCharacters, v4_prompt: v4PromptCharacters };
+            const variants = normalizeSituationPromptVariants(situation);
+            const activeVariantId = situation.activePromptVariantId || variants[0]?.id || 'default';
+            const nextVariants = variants.map(variant => variant.id === activeVariantId
+                ? { ...variant, prompt, generation, updatedAt: Date.now() }
+                : variant
+            );
+            situation.prompt = prompt;
+            situation.generation = generation;
+            situation.promptVariants = nextVariants;
+            situation.activePromptVariantId = activeVariantId;
+            situation.v4PromptCharacters = v4PromptCharacters;
+            situation.v4_prompt = v4PromptCharacters;
+            situation.updatedAt = Date.now();
+            await saveProjectSituations(project);
+            cacheCraftPromptSaveLocation({ projectPath: project.prefix, situationId: state.situationId });
+            setCraftPromptSaveStatus('상황 프롬프트 저장 완료');
+        }
+
+        if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
+        window.closeCraftPromptSaveModal(null);
+    } catch (err) {
+        setCraftPromptSaveStatus(err.message || '프롬프트 저장 실패', true);
+        alert(err.message || '프롬프트 저장 실패');
+    }
 }
 
 export async function saveCraftPromptToProjectStyle() {

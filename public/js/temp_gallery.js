@@ -732,6 +732,118 @@ function normalizeUploadPath(path) {
     return path && !path.endsWith('/') ? path + '/' : path;
 }
 
+const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
+const CRAFT_UPLOAD_EXCLUDED_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
+
+function readCraftUploadContextCache() {
+    try {
+        return JSON.parse(localStorage.getItem(CRAFT_UPLOAD_CONTEXT_STORAGE_KEY) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function writeCraftUploadContextCache(cache) {
+    try {
+        localStorage.setItem(CRAFT_UPLOAD_CONTEXT_STORAGE_KEY, JSON.stringify(cache || {}));
+    } catch {}
+}
+
+function cacheCraftUploadLocation({ projectPath, characterPath, situationId, directPath } = {}) {
+    const normalizedProject = normalizeUploadPath(projectPath || '');
+    const normalizedCharacter = normalizeUploadPath(characterPath || '');
+    const cache = readCraftUploadContextCache();
+    if (normalizedProject) {
+        cache.projectPath = normalizedProject;
+        cache.byProject = cache.byProject || {};
+        cache.byProject[normalizedProject] = {
+            ...(cache.byProject[normalizedProject] || {}),
+            characterPath: normalizedCharacter,
+            situationId: situationId || ''
+        };
+    }
+    if (directPath) cache.directPath = normalizeUploadPath(directPath);
+    writeCraftUploadContextCache(cache);
+    if (window.cacheCraftUploadSelection && normalizedProject) {
+        window.cacheCraftUploadSelection({ projectPath: normalizedProject, characterPath: normalizedCharacter, situationId });
+    }
+}
+
+function isVisibleUploadFolder(folderPrefix) {
+    const folderName = String(folderPrefix || '').split('/').filter(Boolean).pop();
+    return folderName && !folderName.startsWith('.') && !CRAFT_UPLOAD_EXCLUDED_FOLDERS.has(folderName);
+}
+
+function getSituationUploadLabel(situation, index) {
+    const imageNumber = Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index;
+    const name = situation?.alias || situation?.name || situation?.id || `상황 ${imageNumber}`;
+    return `${imageNumber} - ${name}`;
+}
+
+function makeUploadPickerItem({ type, label, subLabel = '', active = false, onClick }) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.pickerType = type;
+    button.dataset.searchText = `${label} ${subLabel}`.toLowerCase();
+    button.className = 'w-full flex items-center text-left gap-2 px-2.5 py-2 rounded-md border border-transparent hover:border-indigo-300 dark:hover:border-indigo-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 transition min-w-0';
+    button.onclick = onClick;
+    button.innerHTML = `
+        <span class="min-w-0 flex-1">
+            <span class="block text-xs font-bold truncate">${label}</span>
+            ${subLabel ? `<span class="block text-[10px] text-gray-500 dark:text-gray-400 truncate">${subLabel}</span>` : ''}
+        </span>
+        <i data-lucide="check" class="w-3.5 h-3.5 text-indigo-500 ${active ? '' : 'invisible'}"></i>
+    `;
+    return button;
+}
+
+function setUploadListLoading(id) {
+    const list = document.getElementById(id);
+    if (!list) return;
+    list.innerHTML = '<div class="flex items-center justify-center py-5 text-xs text-gray-500 dark:text-gray-400"><i data-lucide="loader" class="w-3.5 h-3.5 mr-1.5 animate-spin"></i>불러오는 중...</div>';
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function setUploadListEmpty(id, message) {
+    const list = document.getElementById(id);
+    if (!list) return;
+    list.innerHTML = `<div class="py-5 text-center text-xs text-gray-500 dark:text-gray-400">${message}</div>`;
+}
+
+async function loadUploadProjects() {
+    const res = await fetch('/api/list?prefix=&_t=' + Date.now(), { cache: 'no-store' });
+    if (!res.ok) throw new Error('프로젝트 목록을 불러오지 못했습니다.');
+    const data = await res.json();
+    return (data.folders || []).filter(folder => !folder.startsWith(window.TEMP_FOLDER) && isVisibleUploadFolder(folder));
+}
+
+async function loadUploadCharacters(projectPath) {
+    if (!projectPath) return [];
+    const [listRes, aliasRes] = await Promise.all([
+        fetch(`/api/list?prefix=${encodeURIComponent(projectPath)}&_t=${Date.now()}`, { cache: 'no-store' }),
+        fetch(`/api/aliases?prefix=${encodeURIComponent(projectPath)}&_t=${Date.now()}`, { cache: 'no-store' }).catch(() => null)
+    ]);
+    if (aliasRes?.ok) {
+        const aliasData = await aliasRes.json();
+        window.GLOBAL_ALIASES = Object.assign(window.GLOBAL_ALIASES || {}, aliasData.global || {});
+        window.PROJECT_ALIASES = Object.assign(window.PROJECT_ALIASES || {}, aliasData.project || {});
+    }
+    if (!listRes.ok) throw new Error('캐릭터 목록을 불러오지 못했습니다.');
+    const data = await listRes.json();
+    return (data.folders || []).filter(isVisibleUploadFolder);
+}
+
+async function getCraftUploadSituations(projectPath) {
+    if (!projectPath) return [];
+    const key = `${projectPath}_situations_meta.json`;
+    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(key)}&fallbackKey=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.status === 404) return [];
+    if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
+    const payload = await res.json().catch(() => ({}));
+    const data = payload.data || {};
+    return Array.isArray(data.situations) ? data.situations : [];
+}
+
 function getCraftUploadSelectedContext() {
     return {
         projectPath: normalizeUploadPath(document.getElementById('craft-project-select')?.value || ''),
@@ -769,6 +881,24 @@ function getCraftUploadSituationImageNumber(situation, fallbackId) {
 export async function prepareUploadActiveTempImage() {
     if (window.CRAFT_ACTIVE_INDEX === null) return;
     const index = window.CRAFT_ACTIVE_INDEX; const imgData = window.TEMP_IMAGES[index]; if (!imgData) return;
+
+    window.CRAFT_UPLOAD_ACTIVE_INDEX = index;
+    window.CRAFT_UPLOAD_TARGET_PATH = '';
+    window.CRAFT_UPLOAD_SELECTED_SITUATION = null;
+
+    const uploadModal = document.getElementById('craft-upload-modal');
+    const uploadPreview = document.getElementById('craft-upload-preview');
+    const uploadProjectLabel = document.getElementById('craft-upload-project-label');
+    const uploadNameInput = document.getElementById('craft-upload-filename');
+    if (!uploadModal || !uploadNameInput) return;
+
+    if (uploadPreview) uploadPreview.src = `/${imgData.key}?t=${new Date(imgData.uploaded).getTime()}`;
+    if (uploadProjectLabel) uploadProjectLabel.textContent = '업로드 위치를 선택하세요';
+    uploadNameInput.value = 'nai_' + Date.now();
+    uploadModal.classList.remove('hidden');
+    await window.initCraftUploadPicker();
+    if (window.lucide) window.lucide.createIcons();
+    return;
 
     const selectedProjectEl = document.getElementById('craft-project-select');
     const selectedProject = selectedProjectEl ? selectedProjectEl.value : '';
@@ -817,6 +947,204 @@ export function closeCraftUploadModal(e) {
     if (modal) modal.classList.add('hidden');
     const preview = document.getElementById('craft-upload-preview');
     if (preview) preview.src = '';
+}
+
+export async function initCraftUploadPicker() {
+    const cache = readCraftUploadContextCache();
+    const projectPath = normalizeUploadPath(cache.projectPath || document.getElementById('craft-project-select')?.value || '');
+    const projectCache = cache.byProject?.[projectPath] || {};
+    window.CRAFT_UPLOAD_PICKER_STATE = {
+        mode: 'structured',
+        projects: [],
+        characters: [],
+        situations: [],
+        projectPath,
+        characterPath: normalizeUploadPath(projectCache.characterPath || document.getElementById('craft-char-select')?.value || ''),
+        situationId: projectCache.situationId || document.getElementById('craft-situation-select')?.value || '',
+        directPath: normalizeUploadPath(cache.directPath || projectPath || '')
+    };
+    const directInput = document.getElementById('craft-upload-direct-path');
+    if (directInput) directInput.value = window.CRAFT_UPLOAD_PICKER_STATE.directPath;
+    window.setCraftUploadMode('structured');
+    await window.loadCraftUploadProjectList();
+    if (window.CRAFT_UPLOAD_PICKER_STATE.projectPath) {
+        await window.loadCraftUploadDependentLists(window.CRAFT_UPLOAD_PICKER_STATE.projectPath, true);
+    }
+    window.updateCraftUploadTargetSummary();
+}
+
+export function setCraftUploadMode(mode) {
+    const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+    state.mode = mode === 'direct' ? 'direct' : 'structured';
+    window.CRAFT_UPLOAD_PICKER_STATE = state;
+    document.getElementById('craft-upload-structured-panel')?.classList.toggle('hidden', state.mode !== 'structured');
+    document.getElementById('craft-upload-direct-panel')?.classList.toggle('hidden', state.mode !== 'direct');
+    ['structured', 'direct'].forEach(item => {
+        const btn = document.getElementById(`craft-upload-mode-${item}`);
+        const active = item === state.mode;
+        btn?.classList.toggle('border-indigo-500', active);
+        btn?.classList.toggle('bg-indigo-50', active);
+        btn?.classList.toggle('dark:bg-indigo-900/30', active);
+        btn?.classList.toggle('text-indigo-700', active);
+        btn?.classList.toggle('dark:text-indigo-300', active);
+        btn?.classList.toggle('border-gray-200', !active);
+        btn?.classList.toggle('dark:border-gray-700', !active);
+    });
+    window.updateCraftUploadTargetSummary();
+}
+
+export async function loadCraftUploadProjectList() {
+    setUploadListLoading('craft-upload-project-list');
+    try {
+        const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+        state.projects = await loadUploadProjects();
+        window.CRAFT_UPLOAD_PICKER_STATE = state;
+        window.renderCraftUploadPickerList('project');
+    } catch (err) {
+        setUploadListEmpty('craft-upload-project-list', err.message || '프로젝트 목록을 불러오지 못했습니다.');
+    }
+}
+
+export async function loadCraftUploadDependentLists(projectPath, restoreCached = false) {
+    const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+    state.projectPath = normalizeUploadPath(projectPath);
+    if (!restoreCached) {
+        state.characterPath = '';
+        state.situationId = '';
+    }
+    state.characters = [];
+    state.situations = [];
+    window.CRAFT_UPLOAD_PICKER_STATE = state;
+    setUploadListLoading('craft-upload-character-list');
+    setUploadListLoading('craft-upload-situation-list');
+
+    try {
+        const cache = readCraftUploadContextCache();
+        const projectCache = cache.byProject?.[state.projectPath] || {};
+        const [characters, situations] = await Promise.all([
+            loadUploadCharacters(state.projectPath),
+            getCraftUploadSituations(state.projectPath)
+        ]);
+        state.characters = characters;
+        state.situations = situations;
+        if (restoreCached && projectCache.characterPath && characters.includes(projectCache.characterPath)) {
+            state.characterPath = projectCache.characterPath;
+        }
+        if (restoreCached && projectCache.situationId && situations.some((item, index) => String(item?.id || item?.folderName || `situation-${index + 1}`) === String(projectCache.situationId))) {
+            state.situationId = projectCache.situationId;
+        }
+        window.CRAFT_UPLOAD_PICKER_STATE = state;
+        window.renderCraftUploadPickerList('project');
+        window.renderCraftUploadPickerList('character');
+        window.renderCraftUploadPickerList('situation');
+        window.updateCraftUploadTargetSummary();
+    } catch (err) {
+        setUploadListEmpty('craft-upload-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
+        setUploadListEmpty('craft-upload-situation-list', err.message || '상황 목록을 불러오지 못했습니다.');
+    }
+}
+
+export function renderCraftUploadPickerList(type) {
+    const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+    const list = document.getElementById(`craft-upload-${type}-list`);
+    if (!list) return;
+    list.innerHTML = '';
+    if (type === 'project') {
+        (state.projects || []).forEach(projectPath => {
+            const label = window.getDisplayName(projectPath, true) || projectPath.split('/').filter(Boolean).pop();
+            list.appendChild(makeUploadPickerItem({
+                type,
+                label,
+                subLabel: projectPath,
+                active: normalizeUploadPath(projectPath) === state.projectPath,
+                onClick: async () => window.loadCraftUploadDependentLists(projectPath)
+            }));
+        });
+    } else if (type === 'character') {
+        (state.characters || []).forEach(characterPath => {
+            const label = window.getDisplayName(characterPath, true) || characterPath.split('/').filter(Boolean).pop();
+            list.appendChild(makeUploadPickerItem({
+                type,
+                label,
+                subLabel: characterPath,
+                active: normalizeUploadPath(characterPath) === state.characterPath,
+                onClick: () => {
+                    state.characterPath = normalizeUploadPath(characterPath);
+                    window.CRAFT_UPLOAD_PICKER_STATE = state;
+                    window.renderCraftUploadPickerList('character');
+                    window.updateCraftUploadTargetSummary();
+                }
+            }));
+        });
+    } else if (type === 'situation') {
+        (state.situations || []).forEach((situation, index) => {
+            const id = situation?.id || situation?.folderName || `situation-${index + 1}`;
+            list.appendChild(makeUploadPickerItem({
+                type,
+                label: getSituationUploadLabel(situation, index),
+                subLabel: String(id),
+                active: String(id) === String(state.situationId),
+                onClick: () => {
+                    state.situationId = String(id);
+                    window.CRAFT_UPLOAD_PICKER_STATE = state;
+                    window.renderCraftUploadPickerList('situation');
+                    window.updateCraftUploadTargetSummary();
+                }
+            }));
+        });
+    }
+    if (!list.children.length) setUploadListEmpty(list.id, '선택 가능한 항목이 없습니다.');
+    if (window.lucide) window.lucide.createIcons();
+}
+
+export function filterCraftUploadList(type, value = '') {
+    const q = String(value || '').trim().toLowerCase();
+    document.querySelectorAll(`#craft-upload-${type}-list [data-picker-type="${type}"]`).forEach(item => {
+        item.classList.toggle('hidden', q && !item.dataset.searchText.includes(q));
+    });
+}
+
+export function updateCraftUploadTargetFromDirectPath() {
+    const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+    state.directPath = normalizeUploadPath(document.getElementById('craft-upload-direct-path')?.value.trim() || '');
+    window.CRAFT_UPLOAD_PICKER_STATE = state;
+    window.updateCraftUploadTargetSummary();
+}
+
+export function updateCraftUploadTargetSummary() {
+    const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+    const selectedPath = document.getElementById('craft-upload-selected-path');
+    const projectLabel = document.getElementById('craft-upload-project-label');
+    const fileInput = document.getElementById('craft-upload-filename');
+    const submitBtn = document.getElementById('craft-upload-submit-btn');
+    let targetPath = '';
+    let valid = false;
+
+    if (state.mode === 'direct') {
+        targetPath = normalizeUploadPath(state.directPath || '');
+        valid = !!targetPath;
+    } else {
+        const situation = (state.situations || []).find((item, index) => {
+            const id = item?.id || item?.folderName || `situation-${index + 1}`;
+            return String(id) === String(state.situationId);
+        });
+        const imageNumber = getCraftUploadSituationImageNumber(situation, state.situationId);
+        targetPath = state.projectPath && state.characterPath && state.situationId ? state.characterPath : '';
+        valid = !!(state.projectPath && state.characterPath && state.situationId && targetPath);
+        window.CRAFT_UPLOAD_SELECTED_SITUATION = situation ? { ...situation, imageNumber } : null;
+        if (valid && fileInput && (!fileInput.value || /^nai_\d+$/.test(fileInput.value))) {
+            fileInput.value = imageNumber || ('nai_' + Date.now());
+        }
+    }
+
+    window.CRAFT_UPLOAD_TARGET_PATH = targetPath;
+    if (selectedPath) selectedPath.textContent = targetPath ? '/' + targetPath : '프로젝트, 캐릭터, 상황을 모두 선택하세요';
+    if (projectLabel) {
+        projectLabel.textContent = state.mode === 'direct'
+            ? (targetPath || '직접 경로를 입력하세요')
+            : [state.projectPath, state.characterPath, state.situationId].filter(Boolean).join(' · ') || '업로드 위치를 선택하세요';
+    }
+    if (submitBtn) submitBtn.disabled = !valid;
 }
 
 /**
@@ -929,6 +1257,10 @@ export async function submitCraftUploadModal() {
     const input = document.getElementById('craft-upload-filename');
     let fileNameInput = input ? input.value.trim() : '';
     fileNameInput = fileNameInput.replace(/\.[^/.]+$/, '') || ('nai_' + Date.now());
+    const uploadState = window.CRAFT_UPLOAD_PICKER_STATE || {};
+    if (uploadState.mode !== 'direct' && !(uploadState.projectPath && uploadState.characterPath && uploadState.situationId)) {
+        return alert('프로젝트, 캐릭터, 상황을 모두 선택해야 업로드할 수 있습니다.');
+    }
     if (!window.CRAFT_UPLOAD_TARGET_PATH) return alert('업로드 위치를 선택해주세요.');
     await uploadActiveTempImageToTarget(window.CRAFT_UPLOAD_TARGET_PATH, fileNameInput);
 }
@@ -974,6 +1306,16 @@ async function uploadActiveTempImageToTarget(targetPath, fileNameInput) {
         if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
 
         await window.saveMetadataToDB(targetPath, fileName, extractedMetadata);
+        const uploadState = window.CRAFT_UPLOAD_PICKER_STATE || {};
+        if (uploadState.mode === 'direct') {
+            cacheCraftUploadLocation({ directPath: targetPath });
+        } else {
+            cacheCraftUploadLocation({
+                projectPath: uploadState.projectPath,
+                characterPath: uploadState.characterPath,
+                situationId: uploadState.situationId
+            });
+        }
         await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: imgData.key }) });
         await window.removeMetadataFromDB(window.TEMP_FOLDER, tempFileName);
 
