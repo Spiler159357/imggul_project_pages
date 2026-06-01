@@ -595,17 +595,233 @@ window.saveEditedText = async function() {
  * 주요 변수: projSelect, charSelect, proj, char, IMPORT_BASE_PREFIX, targetPath - 탐색 시작 경로.
  * 반환값: 명시 반환 없음.
  */
+function getImportApplyOptions() {
+    return {
+        optStyle: document.getElementById('import-opt-style')?.checked ?? true,
+        optComp: document.getElementById('import-opt-composition')?.checked ?? true,
+        optChar: document.getElementById('import-opt-character')?.checked ?? true,
+        optCloth: document.getElementById('import-opt-clothing')?.checked ?? true,
+        optExp: document.getElementById('import-opt-expression')?.checked ?? true,
+        optAct: document.getElementById('import-opt-action')?.checked ?? true,
+        optBg: document.getElementById('import-opt-background')?.checked ?? true,
+        optNegative: document.getElementById('import-opt-negative')?.checked ?? true,
+        optRes: document.getElementById('import-opt-res')?.checked ?? true,
+        optSettings: document.getElementById('import-opt-settings')?.checked ?? false,
+        optSeed: document.getElementById('import-opt-seed')?.checked ?? false
+    };
+}
+
+function applyImportedMetadataObject(meta) {
+    if (!meta) throw new Error('불러올 메타데이터가 없습니다.');
+    if (meta['Raw Data'] && !meta['Prompt'] && !meta['Split Prompts']) {
+        alert('지원되는 NovelAI 메타데이터 형식이 아닙니다. 원본 텍스트:\n' + meta['Raw Data']);
+        return false;
+    }
+
+    const options = getImportApplyOptions();
+    applyImportedMetadataToCraft(meta, options);
+
+    if (options.optRes && meta['Resolution']) {
+        const resVal = meta['Resolution'].replace(' x ', 'x');
+        const radio = document.querySelector(`input[name="nai-res"][value="${resVal}"]`);
+        if (radio) radio.checked = true;
+    }
+
+    if (options.optSeed && meta['Seed'] !== undefined) {
+        const el = document.getElementById('nai-seed');
+        if (el) el.value = meta['Seed'];
+    }
+
+    if (options.optSettings) {
+        if (meta['Steps']) { const el = document.getElementById('nai-steps'); if (el) el.value = meta['Steps']; }
+        if (meta['CFG Scale']) { const el = document.getElementById('nai-scale'); if (el) el.value = meta['CFG Scale']; }
+        if (meta['Sampler']) { const el = document.getElementById('nai-sampler'); if (el) el.value = meta['Sampler']; }
+        if (meta['SMEA'] !== undefined) { const el = document.getElementById('nai-sm'); if (el) el.checked = meta['SMEA']; }
+        if (meta['SMEA DYN'] !== undefined) { const el = document.getElementById('nai-sm-dyn'); if (el) el.checked = meta['SMEA DYN']; }
+    }
+
+    if (window.updateModelSpecificUI) window.updateModelSpecificUI();
+    if (window.saveCraftSettings) window.saveCraftSettings();
+    if (window.switchTab) window.switchTab('craft');
+    return true;
+}
+
+function updateImportProjectSummary() {
+    const projectSelect = document.getElementById('craft-project-select');
+    const characterSelect = document.getElementById('craft-char-select');
+    const situationSelect = document.getElementById('craft-situation-select');
+    const setText = (id, value) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = value || '-';
+    };
+
+    setText('import-project-current', projectSelect?.value || '');
+    setText('import-character-current', characterSelect?.value || '');
+    setText('import-situation-current', situationSelect?.value || '');
+}
+
+window.showImportMode = async function(mode = 'hub') {
+    const hub = document.getElementById('import-hub');
+    const options = document.getElementById('import-options-panel');
+    const r2Panel = document.getElementById('import-modal-content');
+    const projectPanel = document.getElementById('import-project-panel');
+    const externalPanel = document.getElementById('import-external-panel');
+    const backBtn = document.getElementById('import-back-btn');
+    const title = document.getElementById('import-modal-title');
+    const subtitle = document.getElementById('import-modal-subtitle');
+    const pathPanel = document.getElementById('import-path-panel');
+
+    [hub, options, r2Panel, projectPanel, externalPanel].forEach(el => {
+        if (!el) return;
+        el.classList.add('hidden');
+        if (el === options) el.classList.remove('flex');
+    });
+    if (backBtn) backBtn.classList.toggle('hidden', mode === 'hub');
+
+    if (mode !== 'hub' && options) {
+        options.classList.remove('hidden');
+        options.classList.add('flex');
+    }
+    if (pathPanel) pathPanel.classList.toggle('hidden', mode !== 'r2');
+
+    if (mode === 'r2') {
+        if (title) title.textContent = '저장 이미지에서 불러오기';
+        if (subtitle) subtitle.textContent = '프로젝트 R2 저장소 이미지의 메타데이터를 읽습니다.';
+        if (r2Panel) r2Panel.classList.remove('hidden');
+        const projSelect = document.getElementById('craft-project-select');
+        const charSelect = document.getElementById('craft-char-select');
+        const proj = projSelect ? projSelect.value : '';
+        const char = charSelect ? charSelect.value : '';
+        if (!proj) return alert('먼저 상단 바에서 프로젝트를 선택해주세요.');
+        window.IMPORT_BASE_PREFIX = proj.endsWith('/') ? proj : proj + '/';
+        let targetPath = char ? char : proj;
+        if (targetPath && !targetPath.endsWith('/')) targetPath += '/';
+        await window.loadImportPath(targetPath);
+    } else if (mode === 'project') {
+        if (title) title.textContent = '프로젝트 데이터 조합';
+        if (subtitle) subtitle.textContent = 'D1에 저장된 그림체, 캐릭터, 상황 데이터를 조합합니다.';
+        if (projectPanel) projectPanel.classList.remove('hidden');
+        updateImportProjectSummary();
+    } else if (mode === 'external') {
+        if (title) title.textContent = '외부 이미지에서 추출';
+        if (subtitle) subtitle.textContent = '로컬 이미지 파일에 포함된 메타데이터를 읽습니다.';
+        if (externalPanel) externalPanel.classList.remove('hidden');
+    } else {
+        if (title) title.textContent = 'Import';
+        if (subtitle) subtitle.textContent = '불러올 데이터의 출처를 선택하세요.';
+        if (hub) hub.classList.remove('hidden');
+    }
+
+    if (window.lucide) window.lucide.createIcons();
+};
+
 window.openImportModal = async function() {
-    const projSelect = document.getElementById('craft-project-select'); const charSelect = document.getElementById('craft-char-select');
-    const proj = projSelect ? projSelect.value : ''; const char = charSelect ? charSelect.value : '';
-    if (!proj) return alert('먼저 상단 툴바에서 메타데이터를 불러올 업로드 타겟(프로젝트)을 선택해주세요.');
-    
-    window.IMPORT_BASE_PREFIX = proj.endsWith('/') ? proj : proj + '/';
-    let targetPath = char ? char : proj; if (targetPath && !targetPath.endsWith('/')) targetPath += '/';
-    
     const modal = document.getElementById('import-modal'); if (!modal) return;
     modal.classList.remove('hidden'); history.pushState({ modal: 'import' }, '', '#import');
-    await window.loadImportPath(targetPath);
+    await window.showImportMode('hub');
+};
+
+window.importProjectPromptData = async function() {
+    try {
+        const project = await window.getCraftSelectedProject();
+        await Promise.all([
+            window.loadProjectCharacters(project, true).catch(() => []),
+            window.loadProjectSituations(project, true).catch(() => [])
+        ]);
+
+        const options = getImportApplyOptions();
+        const characterPrefix = document.getElementById('craft-char-select')?.value || '';
+        const situationId = document.getElementById('craft-situation-select')?.value || '';
+        const character = characterPrefix && window.getCharacterById ? window.getCharacterById(project, characterPrefix) : null;
+        const situation = situationId && window.getSituationById ? window.getSituationById(project, situationId) : null;
+        const [projectStyle, characterMeta] = await Promise.all([
+            window.loadProjectStylePrompt ? window.loadProjectStylePrompt(project).catch(() => '') : Promise.resolve(''),
+            character && window.loadCharacterMeta ? window.loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
+        ]);
+
+        const characterParts = characterMeta.parts || {};
+        const situationPrompt = window.getSituationPrompt ? window.getSituationPrompt(situation) : {};
+        const situationGeneration = window.getSituationGeneration ? window.getSituationGeneration(situation) : {};
+        const promptValues = {};
+
+        if (options.optStyle) promptValues['prompt-style'] = projectStyle || '';
+        if (options.optComp) promptValues['prompt-composition'] = situationPrompt.composition || '';
+        if (options.optChar) promptValues['prompt-character'] = characterParts.character || characterMeta.prompt || '';
+        if (options.optCloth) promptValues['prompt-clothing'] = characterParts.clothing || '';
+        if (options.optExp) promptValues['prompt-expression'] = situationPrompt.expression || '';
+        if (options.optAct) promptValues['prompt-action'] = situationPrompt.action || '';
+        if (options.optBg) promptValues['prompt-background'] = situationPrompt.background || '';
+
+        const negativeParts = [characterParts.negative, situationPrompt.negative].filter(Boolean);
+        const negative = window.combinePromptParts
+            ? window.combinePromptParts(characterParts.negative, situationPrompt.negative)
+            : negativeParts.join(', ');
+
+        if (window.applyCraftPromptValues) {
+            window.applyCraftPromptValues(promptValues, negative, {
+                clearMissing: false,
+                applyNegative: options.optNegative
+            });
+        }
+        if (options.optChar && window.setCraftV4PromptRows) {
+            window.setCraftV4PromptRows(situationGeneration.v4PromptCharacters || situationGeneration.v4_prompt || []);
+        }
+
+        if (window.updateModelSpecificUI) window.updateModelSpecificUI();
+        if (window.saveCraftSettings) window.saveCraftSettings();
+        if (window.switchTab) window.switchTab('craft');
+        window.closeImportModal(null, true);
+        alert('프로젝트 데이터를 조합해서 불러왔습니다.');
+    } catch (err) {
+        alert('프로젝트 조합 불러오기 실패: ' + (err.message || err));
+    }
+};
+
+window.handleExternalImportFile = async function(file) {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) return alert('이미지 파일만 선택할 수 있습니다.');
+
+    const previewWrap = document.getElementById('import-external-preview');
+    const previewImg = document.getElementById('import-external-preview-img');
+    const fileName = document.getElementById('import-external-file-name');
+    const status = document.getElementById('import-external-status');
+    const applyBtn = document.getElementById('import-external-apply-btn');
+
+    if (window.EXTERNAL_IMPORT_PREVIEW_URL) URL.revokeObjectURL(window.EXTERNAL_IMPORT_PREVIEW_URL);
+    window.EXTERNAL_IMPORT_PREVIEW_URL = URL.createObjectURL(file);
+    window.EXTERNAL_IMPORT_METADATA = null;
+
+    if (previewImg) previewImg.src = window.EXTERNAL_IMPORT_PREVIEW_URL;
+    if (fileName) fileName.textContent = file.name || 'selected image';
+    if (status) status.textContent = '메타데이터를 추출하는 중...';
+    if (applyBtn) applyBtn.classList.add('hidden');
+    if (previewWrap) previewWrap.classList.remove('hidden');
+
+    try {
+        const meta = window.extractMetadata ? await window.extractMetadata(file) : null;
+        if (!meta) {
+            if (status) status.textContent = '읽을 수 있는 메타데이터가 없습니다.';
+            return;
+        }
+        window.EXTERNAL_IMPORT_METADATA = meta;
+        if (status) status.textContent = meta['Raw Data'] ? '원본 텍스트 메타데이터를 찾았습니다.' : '메타데이터를 찾았습니다. 적용할 수 있습니다.';
+        if (applyBtn) applyBtn.classList.remove('hidden');
+    } catch (err) {
+        if (status) status.textContent = '메타데이터 추출 실패: ' + (err.message || err);
+    }
+
+    if (window.lucide) window.lucide.createIcons();
+};
+
+window.applyExternalImportMetadata = function() {
+    try {
+        if (applyImportedMetadataObject(window.EXTERNAL_IMPORT_METADATA)) {
+            window.closeImportModal(null, true);
+            alert('외부 이미지 메타데이터를 불러왔습니다.');
+        }
+    } catch (err) {
+        alert('외부 이미지 불러오기 실패: ' + (err.message || err));
+    }
 };
 
 /**
@@ -617,7 +833,17 @@ window.openImportModal = async function() {
 window.closeImportModal = function(e, skipHistory = false) {
     if (e && e.target !== e.currentTarget && e.target.id !== 'close-import-btn') return;
     const modal = document.getElementById('import-modal');
-    if (modal && !modal.classList.contains('hidden')) { modal.classList.add('hidden'); if (!skipHistory) history.back(); }
+    if (modal && !modal.classList.contains('hidden')) {
+        modal.classList.add('hidden');
+        if (window.EXTERNAL_IMPORT_PREVIEW_URL) URL.revokeObjectURL(window.EXTERNAL_IMPORT_PREVIEW_URL);
+        window.EXTERNAL_IMPORT_PREVIEW_URL = null;
+        window.EXTERNAL_IMPORT_METADATA = null;
+        const externalInput = document.getElementById('import-external-file-input');
+        const externalPreview = document.getElementById('import-external-preview');
+        if (externalInput) externalInput.value = '';
+        if (externalPreview) externalPreview.classList.add('hidden');
+        if (!skipHistory) history.back();
+    }
 };
 
 /**

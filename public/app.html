@@ -463,9 +463,6 @@
 
                     <div class="flex-shrink-0 flex items-center gap-1.5 border-l border-gray-200 dark:border-gray-700 pl-2 ml-1">
                         <span class="hidden lg:inline text-[11px] font-bold text-gray-500 dark:text-gray-400">프롬프트</span>
-                        <button type="button" onclick="window.openImportModal()" class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md border border-indigo-200 dark:border-indigo-800 bg-indigo-50 dark:bg-indigo-900/30 text-[11px] font-bold text-indigo-700 dark:text-indigo-300 hover:border-indigo-400 transition h-8 sm:h-9" title="메타데이터 불러오기 모달 열기">
-                            <i data-lucide="import" class="w-3.5 h-3.5"></i><span class="hidden xl:inline">불러오기</span>
-                        </button>
                         <button type="button" onclick="window.saveCraftPromptToProjectStyle()" class="inline-flex items-center justify-center gap-1 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-700 text-[11px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400 transition h-8 sm:h-9" title="프로젝트 그림체 저장">
                             <i data-lucide="palette" class="w-3.5 h-3.5"></i><span class="hidden xl:inline">그림체</span>
                         </button>
@@ -691,13 +688,41 @@
     <div id="import-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeImportModal(event)">
         <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-4xl h-[85vh] sm:max-h-[90vh] flex flex-col transition-colors duration-200">
             <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl flex-shrink-0">
-                <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white">메타데이터 불러오기 (Import)</h3>
+                <div class="flex items-center gap-2 min-w-0">
+                    <button id="import-back-btn" type="button" onclick="window.showImportMode('hub')" class="hidden p-1.5 rounded-md text-gray-500 hover:text-indigo-600 hover:bg-gray-100 dark:hover:bg-gray-700 dark:text-gray-400 dark:hover:text-indigo-300 transition" title="Import 선택지로 돌아가기">
+                        <i data-lucide="arrow-left" class="w-5 h-5"></i>
+                    </button>
+                    <div class="min-w-0">
+                        <h3 id="import-modal-title" class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">Import</h3>
+                        <p id="import-modal-subtitle" class="text-[11px] text-gray-500 dark:text-gray-400 truncate">불러올 데이터의 출처를 선택하세요.</p>
+                    </div>
+                </div>
                 <button id="close-import-btn" onclick="window.closeImportModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
                     <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
                 </button>
             </div>
             
-            <div class="p-3 sm:p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0 bg-white dark:bg-gray-800 flex flex-col gap-3">
+            <div id="import-hub" class="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 dark:bg-gray-900/30">
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 sm:gap-4">
+                    <button type="button" onclick="window.showImportMode('r2')" class="text-left rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 sm:p-5 hover:border-indigo-400 hover:ring-2 hover:ring-indigo-500/20 transition shadow-sm">
+                        <i data-lucide="images" class="w-7 h-7 text-indigo-500 mb-4"></i>
+                        <span class="block text-sm font-bold text-gray-900 dark:text-white">저장 이미지에서</span>
+                        <span class="block mt-2 text-xs leading-relaxed text-gray-500 dark:text-gray-400">프로젝트 R2 저장소에 있는 이미지의 메타데이터를 불러옵니다.</span>
+                    </button>
+                    <button type="button" onclick="window.showImportMode('project')" class="text-left rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 sm:p-5 hover:border-indigo-400 hover:ring-2 hover:ring-indigo-500/20 transition shadow-sm">
+                        <i data-lucide="blocks" class="w-7 h-7 text-emerald-500 mb-4"></i>
+                        <span class="block text-sm font-bold text-gray-900 dark:text-white">프로젝트 조합으로</span>
+                        <span class="block mt-2 text-xs leading-relaxed text-gray-500 dark:text-gray-400">D1에 저장된 그림체, 캐릭터, 상황 정보를 조합합니다.</span>
+                    </button>
+                    <button type="button" onclick="window.showImportMode('external')" class="text-left rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-4 sm:p-5 hover:border-indigo-400 hover:ring-2 hover:ring-indigo-500/20 transition shadow-sm">
+                        <i data-lucide="file-image" class="w-7 h-7 text-amber-500 mb-4"></i>
+                        <span class="block text-sm font-bold text-gray-900 dark:text-white">외부 이미지에서</span>
+                        <span class="block mt-2 text-xs leading-relaxed text-gray-500 dark:text-gray-400">내 컴퓨터의 이미지 파일에 포함된 메타데이터를 추출합니다.</span>
+                    </button>
+                </div>
+            </div>
+
+            <div id="import-options-panel" class="hidden p-3 sm:p-4 border-b border-gray-200 dark:border-gray-700 flex-shrink-0 bg-white dark:bg-gray-800 flex-col gap-3">
                 <div class="flex flex-col">
                     <span class="text-[11px] font-bold text-gray-500 uppercase tracking-wide mb-2">불러올 항목 선택</span>
                     <div class="flex flex-wrap gap-1.5 sm:gap-2">
@@ -775,17 +800,71 @@
                     </div>
                 </div>
                 
-                <div class="bg-gray-100 dark:bg-gray-900/50 p-2 rounded-lg border border-gray-200 dark:border-gray-700 flex items-center mt-1">
+                <div id="import-path-panel" class="bg-gray-100 dark:bg-gray-900/50 p-2 rounded-lg border border-gray-200 dark:border-gray-700 flex items-center mt-1">
                     <i data-lucide="folder-open" class="w-4 h-4 mr-2 text-indigo-500"></i> 
                     <span class="text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap flex-shrink-0">현재 경로:</span>
                     <span id="import-modal-path" class="text-xs font-mono text-indigo-600 dark:text-indigo-400 font-medium ml-2 truncate"></span>
                 </div>
             </div>
 
-            <div id="import-modal-content" class="flex-1 overflow-y-auto p-3 sm:p-6 bg-gray-50 dark:bg-gray-900/30">
+            <div id="import-modal-content" class="hidden flex-1 overflow-y-auto p-3 sm:p-6 bg-gray-50 dark:bg-gray-900/30">
                 <div id="import-loading" class="hidden flex justify-center items-center h-40"><div class="animate-spin rounded-full h-8 w-8 border-b-2 border-indigo-600 dark:border-indigo-400"></div></div>
                 <div id="import-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6 gap-3 sm:gap-4"></div>
                 <div id="import-empty" class="hidden flex flex-col items-center justify-center h-40 text-gray-400 dark:text-gray-500"><i data-lucide="image-off" class="w-12 h-12 mb-2 opacity-50"></i><p class="text-sm">해당 경로에 이미지가 없습니다.</p></div>
+            </div>
+
+            <div id="import-project-panel" class="hidden flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 dark:bg-gray-900/30">
+                <div class="max-w-2xl mx-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 sm:p-5 shadow-sm">
+                    <div class="flex items-start gap-3">
+                        <i data-lucide="blocks" class="w-5 h-5 text-emerald-500 mt-0.5"></i>
+                        <div class="min-w-0 flex-1">
+                            <h4 class="text-sm font-bold text-gray-900 dark:text-white">현재 선택된 프로젝트 데이터 조합</h4>
+                            <p class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-relaxed">상단 이미지 생성 바의 프로젝트, 캐릭터, 상황 선택값을 기준으로 저장된 프롬프트 데이터를 가져옵니다.</p>
+                        </div>
+                    </div>
+                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-2 text-xs">
+                        <div class="rounded-md bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 p-3">
+                            <span class="block text-gray-400 dark:text-gray-500 font-bold mb-1">Project</span>
+                            <span id="import-project-current" class="block text-gray-800 dark:text-gray-100 truncate font-mono">-</span>
+                        </div>
+                        <div class="rounded-md bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 p-3">
+                            <span class="block text-gray-400 dark:text-gray-500 font-bold mb-1">Character</span>
+                            <span id="import-character-current" class="block text-gray-800 dark:text-gray-100 truncate font-mono">-</span>
+                        </div>
+                        <div class="rounded-md bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 p-3">
+                            <span class="block text-gray-400 dark:text-gray-500 font-bold mb-1">Situation</span>
+                            <span id="import-situation-current" class="block text-gray-800 dark:text-gray-100 truncate font-mono">-</span>
+                        </div>
+                    </div>
+                    <button type="button" onclick="window.importProjectPromptData()" class="mt-5 w-full inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-bold py-2.5 transition">
+                        <i data-lucide="combine" class="w-4 h-4"></i>
+                        조합해서 불러오기
+                    </button>
+                </div>
+            </div>
+
+            <div id="import-external-panel" class="hidden flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 dark:bg-gray-900/30">
+                <div class="max-w-2xl mx-auto bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 sm:p-5 shadow-sm">
+                    <input type="file" id="import-external-file-input" class="hidden" accept="image/*" onchange="window.handleExternalImportFile(this.files && this.files[0])">
+                    <div id="import-external-dropzone" onclick="document.getElementById('import-external-file-input')?.click()" ondragover="event.preventDefault(); this.classList.add('border-indigo-500')" ondragleave="event.preventDefault(); this.classList.remove('border-indigo-500')" ondrop="event.preventDefault(); this.classList.remove('border-indigo-500'); window.handleExternalImportFile(event.dataTransfer.files && event.dataTransfer.files[0])" class="border-2 border-dashed border-gray-300 dark:border-gray-600 rounded-lg p-6 text-center cursor-pointer hover:border-indigo-400 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition">
+                        <i data-lucide="upload-cloud" class="w-9 h-9 text-gray-400 mx-auto mb-3"></i>
+                        <p class="text-sm font-bold text-gray-700 dark:text-gray-200">이미지를 드롭하거나 클릭해서 선택</p>
+                        <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">PNG 등 메타데이터가 포함된 이미지에서 추출합니다.</p>
+                    </div>
+                    <div id="import-external-preview" class="hidden mt-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-3">
+                        <div class="flex gap-3">
+                            <img id="import-external-preview-img" src="" class="w-20 h-24 rounded object-cover bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700" alt="">
+                            <div class="min-w-0 flex-1">
+                                <p id="import-external-file-name" class="text-xs font-bold text-gray-900 dark:text-white truncate"></p>
+                                <p id="import-external-status" class="mt-1 text-xs text-gray-500 dark:text-gray-400">메타데이터를 추출합니다.</p>
+                                <button type="button" id="import-external-apply-btn" onclick="window.applyExternalImportMetadata()" class="hidden mt-3 inline-flex items-center gap-1.5 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3 py-2 transition">
+                                    <i data-lucide="import" class="w-3.5 h-3.5"></i>
+                                    메타데이터 적용
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
             </div>
         </div>
     </div>
