@@ -626,9 +626,15 @@
                     <div class="min-w-0 flex-1">
                         <p class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">선택한 프로젝트</p>
                         <p id="craft-upload-project-label" class="text-sm font-bold text-gray-800 dark:text-white truncate"></p>
-                        <label for="craft-upload-filename" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mt-4 mb-1">저장 파일명</label>
-                        <input type="text" id="craft-upload-filename" class="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="예: nai_001">
-                        <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">확장자는 자동으로 .webp가 붙습니다.</p>
+                        <div id="craft-upload-filename-panel" class="mt-4">
+                            <label for="craft-upload-filename" class="block text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">저장 파일명</label>
+                            <input type="text" id="craft-upload-filename" class="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-md focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="예: nai_001">
+                            <p class="text-[11px] text-gray-500 dark:text-gray-400 mt-1">직접 경로 업로드에서만 파일명을 입력합니다. 확장자는 자동으로 .webp가 붙습니다.</p>
+                        </div>
+                        <div id="craft-upload-auto-filename-panel" class="hidden mt-4 rounded-md border border-indigo-100 dark:border-indigo-900/50 bg-indigo-50/60 dark:bg-indigo-950/20 p-3">
+                            <p class="text-[11px] font-bold text-indigo-700 dark:text-indigo-300">자동 저장 파일명</p>
+                            <p id="craft-upload-auto-filename" class="mt-1 text-sm font-mono font-bold text-gray-800 dark:text-gray-100">-</p>
+                        </div>
                     </div>
                 </div>
 
@@ -668,9 +674,16 @@
                         </div>
                     </div>
 
-                    <div id="craft-upload-direct-panel" class="hidden">
+                    <div id="craft-upload-direct-panel" class="hidden flex-1 min-h-0 flex-col">
                         <label for="craft-upload-direct-path" class="block text-[11px] font-bold text-gray-500 dark:text-gray-400 mb-1">직접 저장 경로</label>
                         <input id="craft-upload-direct-path" type="text" oninput="window.updateCraftUploadTargetFromDirectPath()" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 font-mono" placeholder="project/character/custom/">
+                        <div class="mt-3 flex-1 min-h-0 rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-3 flex flex-col">
+                            <div class="flex items-center justify-between gap-2 mb-2">
+                                <button type="button" onclick="window.loadCraftUploadDirectPath('')" class="px-2.5 py-1.5 rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-[11px] font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-400">Root</button>
+                                <p id="craft-upload-direct-current" class="flex-1 text-[11px] font-mono text-indigo-600 dark:text-indigo-400 truncate text-right">/</p>
+                            </div>
+                            <div id="craft-upload-direct-folders" class="flex-1 min-h-0 overflow-y-auto grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2"></div>
+                        </div>
                     </div>
                 </div>
             </div>

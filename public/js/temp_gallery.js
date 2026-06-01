@@ -865,6 +865,10 @@ function setUploadListEmpty(id, message) {
     list.innerHTML = `<div class="py-5 text-center text-xs text-gray-500 dark:text-gray-400">${message}</div>`;
 }
 
+function getUploadItemId(item, index) {
+    return item?.id || item?.folderName || `situation-${index + 1}`;
+}
+
 async function loadUploadProjects() {
     const res = await fetch('/api/list?prefix=&_t=' + Date.now(), { cache: 'no-store' });
     if (!res.ok) throw new Error('프로젝트 목록을 불러오지 못했습니다.');
@@ -1035,7 +1039,11 @@ export function setCraftUploadMode(mode) {
     state.mode = mode === 'direct' ? 'direct' : 'structured';
     window.CRAFT_UPLOAD_PICKER_STATE = state;
     document.getElementById('craft-upload-structured-panel')?.classList.toggle('hidden', state.mode !== 'structured');
-    document.getElementById('craft-upload-direct-panel')?.classList.toggle('hidden', state.mode !== 'direct');
+    const directPanel = document.getElementById('craft-upload-direct-panel');
+    if (directPanel) {
+        directPanel.classList.toggle('hidden', state.mode !== 'direct');
+        directPanel.classList.toggle('flex', state.mode === 'direct');
+    }
     ['structured', 'direct'].forEach(item => {
         const btn = document.getElementById(`craft-upload-mode-${item}`);
         const active = item === state.mode;
@@ -1047,6 +1055,9 @@ export function setCraftUploadMode(mode) {
         btn?.classList.toggle('border-gray-200', !active);
         btn?.classList.toggle('dark:border-gray-700', !active);
     });
+    if (state.mode === 'direct') {
+        window.loadCraftUploadDirectPath(state.directBrowserPath || state.directPath || '');
+    }
     window.updateCraftUploadTargetSummary();
 }
 
@@ -1135,7 +1146,7 @@ export function renderCraftUploadPickerList(type) {
         });
     } else if (type === 'situation') {
         (state.situations || []).forEach((situation, index) => {
-            const id = situation?.id || situation?.folderName || `situation-${index + 1}`;
+            const id = getUploadItemId(situation, index);
             list.appendChild(makeUploadPickerItem({
                 type,
                 label: getSituationUploadLabel(situation, index),
@@ -1164,6 +1175,7 @@ export function filterCraftUploadList(type, value = '') {
 export function updateCraftUploadTargetFromDirectPath() {
     const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
     state.directPath = normalizeUploadPath(document.getElementById('craft-upload-direct-path')?.value.trim() || '');
+    state.directBrowserPath = state.directPath;
     window.CRAFT_UPLOAD_PICKER_STATE = state;
     window.updateCraftUploadTargetSummary();
 }
@@ -1173,28 +1185,34 @@ export function updateCraftUploadTargetSummary() {
     const selectedPath = document.getElementById('craft-upload-selected-path');
     const projectLabel = document.getElementById('craft-upload-project-label');
     const fileInput = document.getElementById('craft-upload-filename');
+    const fileNamePanel = document.getElementById('craft-upload-filename-panel');
+    const autoFileNamePanel = document.getElementById('craft-upload-auto-filename-panel');
+    const autoFileName = document.getElementById('craft-upload-auto-filename');
     const submitBtn = document.getElementById('craft-upload-submit-btn');
     let targetPath = '';
+    let imageNumber = '';
     let valid = false;
+
+    if (fileNamePanel) fileNamePanel.classList.toggle('hidden', state.mode !== 'direct');
+    if (autoFileNamePanel) autoFileNamePanel.classList.toggle('hidden', state.mode === 'direct');
 
     if (state.mode === 'direct') {
         targetPath = normalizeUploadPath(state.directPath || '');
         valid = !!targetPath;
     } else {
         const situation = (state.situations || []).find((item, index) => {
-            const id = item?.id || item?.folderName || `situation-${index + 1}`;
+            const id = getUploadItemId(item, index);
             return String(id) === String(state.situationId);
         });
-        const imageNumber = getCraftUploadSituationImageNumber(situation, state.situationId);
+        imageNumber = getCraftUploadSituationImageNumber(situation, state.situationId);
         targetPath = state.projectPath && state.characterPath && state.situationId ? state.characterPath : '';
         valid = !!(state.projectPath && state.characterPath && state.situationId && targetPath);
         window.CRAFT_UPLOAD_SELECTED_SITUATION = situation ? { ...situation, imageNumber } : null;
-        if (valid && fileInput && (!fileInput.value || /^nai_\d+$/.test(fileInput.value))) {
-            fileInput.value = imageNumber || ('nai_' + Date.now());
-        }
+        if (valid && fileInput) fileInput.value = imageNumber || '';
     }
 
     window.CRAFT_UPLOAD_TARGET_PATH = targetPath;
+    if (autoFileName) autoFileName.textContent = valid && state.mode !== 'direct' && imageNumber ? `${imageNumber}.webp` : '-';
     if (selectedPath) selectedPath.textContent = targetPath ? '/' + targetPath : '프로젝트, 캐릭터, 상황을 모두 선택하세요';
     if (projectLabel) {
         projectLabel.textContent = state.mode === 'direct'
@@ -1202,6 +1220,75 @@ export function updateCraftUploadTargetSummary() {
             : [state.projectPath, state.characterPath, state.situationId].filter(Boolean).join(' · ') || '업로드 위치를 선택하세요';
     }
     if (submitBtn) submitBtn.disabled = !valid;
+}
+
+export async function loadCraftUploadDirectPath(prefix = '') {
+    const state = window.CRAFT_UPLOAD_PICKER_STATE || {};
+    const normalized = normalizeUploadPath(prefix || '');
+    state.directBrowserPath = normalized;
+    state.directPath = normalized;
+    window.CRAFT_UPLOAD_PICKER_STATE = state;
+
+    const input = document.getElementById('craft-upload-direct-path');
+    const current = document.getElementById('craft-upload-direct-current');
+    const list = document.getElementById('craft-upload-direct-folders');
+    if (input) input.value = normalized;
+    if (current) current.textContent = '/' + normalized;
+    if (!list) {
+        window.updateCraftUploadTargetSummary();
+        return;
+    }
+
+    list.innerHTML = '<div class="col-span-full py-6 text-center text-xs text-gray-500 dark:text-gray-400"><i data-lucide="loader" class="inline w-3.5 h-3.5 mr-1 animate-spin"></i>불러오는 중...</div>';
+    if (window.lucide) window.lucide.createIcons();
+
+    try {
+        const res = await fetch(`/api/list?prefix=${encodeURIComponent(normalized)}&_t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error('폴더 목록을 불러오지 못했습니다.');
+        const data = await res.json();
+        const folders = (data.folders || []).filter(isVisibleUploadFolder);
+        list.innerHTML = '';
+
+        if (normalized) {
+            const parts = normalized.split('/').filter(Boolean);
+            parts.pop();
+            const parent = parts.length ? normalizeUploadPath(parts.join('/')) : '';
+            list.appendChild(makeDirectPathButton({ label: '상위 폴더', subLabel: '/' + parent, icon: 'corner-left-up', onClick: () => window.loadCraftUploadDirectPath(parent) }));
+        }
+
+        folders.forEach(folderPrefix => {
+            const folderName = folderPrefix.split('/').filter(Boolean).pop() || folderPrefix;
+            const alias = window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) : '';
+            list.appendChild(makeDirectPathButton({
+                label: alias || folderName,
+                subLabel: alias ? folderName : '/' + folderPrefix,
+                icon: 'folder',
+                onClick: () => window.loadCraftUploadDirectPath(folderPrefix)
+            }));
+        });
+
+        if (!list.children.length) list.innerHTML = '<div class="col-span-full py-6 text-center text-xs text-gray-500 dark:text-gray-400">하위 폴더가 없습니다. 현재 경로에 업로드합니다.</div>';
+    } catch (err) {
+        list.innerHTML = `<div class="col-span-full py-6 text-center text-xs text-red-500">${err.message || '폴더 목록을 불러오지 못했습니다.'}</div>`;
+    } finally {
+        window.updateCraftUploadTargetSummary();
+        if (window.lucide) window.lucide.createIcons();
+    }
+}
+
+function makeDirectPathButton({ label, subLabel = '', icon = 'folder', onClick }) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'flex items-center text-left gap-2 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-2.5 py-2 hover:border-indigo-400 dark:hover:border-indigo-600 transition min-w-0';
+    button.onclick = onClick;
+    button.innerHTML = `
+        <i data-lucide="${icon}" class="w-4 h-4 text-indigo-500 flex-shrink-0"></i>
+        <span class="min-w-0">
+            <span class="block text-xs font-bold text-gray-800 dark:text-gray-100 truncate">${label}</span>
+            ${subLabel ? `<span class="block text-[10px] text-gray-500 dark:text-gray-400 truncate">${subLabel}</span>` : ''}
+        </span>
+    `;
+    return button;
 }
 
 /**
@@ -1312,13 +1399,18 @@ export function selectCraftUploadTarget(targetPath) {
  */
 export async function submitCraftUploadModal() {
     const input = document.getElementById('craft-upload-filename');
-    let fileNameInput = input ? input.value.trim() : '';
-    fileNameInput = fileNameInput.replace(/\.[^/.]+$/, '') || ('nai_' + Date.now());
     const uploadState = window.CRAFT_UPLOAD_PICKER_STATE || {};
     if (uploadState.mode !== 'direct' && !(uploadState.projectPath && uploadState.characterPath && uploadState.situationId)) {
         return alert('프로젝트, 캐릭터, 상황을 모두 선택해야 업로드할 수 있습니다.');
     }
     if (!window.CRAFT_UPLOAD_TARGET_PATH) return alert('업로드 위치를 선택해주세요.');
+    let fileNameInput = '';
+    if (uploadState.mode === 'direct') {
+        fileNameInput = (input ? input.value.trim() : '').replace(/\.[^/.]+$/, '') || ('nai_' + Date.now());
+    } else {
+        fileNameInput = window.CRAFT_UPLOAD_SELECTED_SITUATION?.imageNumber || '';
+        if (!fileNameInput) return alert('선택한 상황의 이미지 번호를 찾지 못했습니다.');
+    }
     await uploadActiveTempImageToTarget(window.CRAFT_UPLOAD_TARGET_PATH, fileNameInput);
 }
 
