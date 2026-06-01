@@ -143,6 +143,7 @@ export function setCraftPromptSaveMode(mode) {
     const state = window.CRAFT_PROMPT_SAVE_STATE || {};
     state.mode = ['style', 'character', 'situation'].includes(mode) ? mode : 'style';
     window.CRAFT_PROMPT_SAVE_STATE = state;
+    document.getElementById('craft-save-style-panel')?.classList.toggle('hidden', state.mode !== 'style');
     document.getElementById('craft-save-character-panel')?.classList.toggle('hidden', state.mode !== 'character');
     document.getElementById('craft-save-situation-panel')?.classList.toggle('hidden', state.mode !== 'situation');
     ['style', 'character', 'situation'].forEach(item => {
