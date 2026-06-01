@@ -821,6 +821,7 @@ export async function processNextQueueItem() {
         updateProgress('최적화 및 임시 저장소 업로드 중...', 99);
         let extractedMetadata = await window.extractMetadata(generatedFile);
         if (extractedMetadata && task.splitPrompts && Object.keys(task.splitPrompts).length > 0) { extractedMetadata["Split Prompts"] = task.splitPrompts; delete extractedMetadata["Prompt"]; }
+        if (!extractedMetadata && task.inpaintSource?.key) extractedMetadata = {};
         if (extractedMetadata && task.inpaintSource?.key) {
             extractedMetadata["Inpaint Source Key"] = task.inpaintSource.key;
             extractedMetadata["Inpaint Source Name"] = task.inpaintSource.name || task.inpaintSource.key.split('/').pop() || '';

@@ -757,9 +757,17 @@ function findUploadSituationByImageNumber(situations = [], imageNumber = '') {
 async function getTempImageInpaintSourceKey(imgData) {
     if (imgData?.inpaintSourceKey) return imgData.inpaintSourceKey;
     const tempFileName = String(imgData?.key || '').split('/').pop();
-    if (!tempFileName || !window.loadMetadataFromDB) return '';
-    const metadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, tempFileName).catch(() => null);
-    return metadata?.['Inpaint Source Key'] || '';
+    if (tempFileName && window.loadMetadataFromDB) {
+        const metadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, tempFileName).catch(() => null);
+        if (metadata?.['Inpaint Source Key']) return metadata['Inpaint Source Key'];
+    }
+    if (window.INPAINT_IMAGE_SOURCE?.key) return window.INPAINT_IMAGE_SOURCE.key;
+    if (window.CRAFT_UPLOAD_INPAINT_SOURCE_KEY) return window.CRAFT_UPLOAD_INPAINT_SOURCE_KEY;
+    try {
+        return localStorage.getItem('imggul_inpaint_upload_source_key') || '';
+    } catch {
+        return '';
+    }
 }
 
 async function applyInpaintSourceUploadContext(sourceKey) {

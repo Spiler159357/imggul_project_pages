@@ -702,6 +702,11 @@ window.openModalImageInInpaint = async function(fileKey = window.currentFileKey)
             if (window.switchTab) window.switchTab('craft');
         }
 
+        try {
+            localStorage.setItem('imggul_inpaint_upload_source_key', key);
+        } catch {}
+        window.CRAFT_UPLOAD_INPAINT_SOURCE_KEY = key;
+
         if (window.closeModal) window.closeModal(null, true);
         if (window.setInpaintImageFromKey) window.setInpaintImageFromKey(key);
         else alert('인페인트 기능을 초기화할 수 없습니다.');
