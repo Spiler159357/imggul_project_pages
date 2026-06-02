@@ -307,6 +307,46 @@ function resetPlannerMetaAfterCancel(meta) {
     return meta;
 }
 
+function getPlannerItemGeneratedCount(item) {
+    return Array.isArray(item?.images) ? item.images.length : 0;
+}
+
+function getPlannerItemTargetCount(item, meta = {}) {
+    if (Array.isArray(item?.variantGenerations) && item.variantGenerations.length) {
+        return item.variantGenerations.reduce((sum, variantRun) => sum + clampPlannerImageCount(variantRun.count || item.count || meta.defaultCount), 0);
+    }
+    return clampPlannerImageCount(item?.count || meta.defaultCount);
+}
+
+function isPlannerItemTargetComplete(item, meta = {}) {
+    return getPlannerItemGeneratedCount(item) >= getPlannerItemTargetCount(item, meta);
+}
+
+function isPlannerRunnableItem(item, meta = {}, resumeOnly = false) {
+    if (!item || ['confirmed', 'cancelled'].includes(item.status)) return false;
+    if (isPlannerItemTargetComplete(item, meta)) return false;
+    if (resumeOnly) return ['paused', 'queued', 'running', 'pending'].includes(item.status || 'pending');
+    return true;
+}
+
+function buildPlannerRunGenerations(item, meta = {}, resumeRun = false) {
+    const runs = Array.isArray(item.variantGenerations) && item.variantGenerations.length
+        ? item.variantGenerations
+        : [{ count: clampPlannerImageCount(item.count || meta.defaultCount), generation: item.generation }];
+    if (!resumeRun) return runs;
+
+    let remaining = Math.max(0, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item));
+    const resumedRuns = [];
+    for (const run of runs) {
+        if (remaining <= 0) break;
+        const originalCount = clampPlannerImageCount(run.count || item.count || meta.defaultCount);
+        const count = Math.min(originalCount, remaining);
+        if (count > 0) resumedRuns.push({ ...run, count });
+        remaining -= count;
+    }
+    return resumedRuns;
+}
+
 export function setPlannerStatus(message) {
     const el = document.getElementById('planner-status');
     if (el) el.textContent = message || '';
@@ -2023,7 +2063,9 @@ export async function resumePlannerBackgroundGeneration(jobId = null) {
         meta.stageLabel = getPlannerStageLabel('queued');
         if (Array.isArray(meta.items)) {
             meta.items = meta.items.map(item => item.status === 'paused'
-                ? { ...item, status: 'queued', stage: 'queued', stageLabel: getPlannerStageLabel('queued') }
+                ? (isPlannerItemTargetComplete(item, meta)
+                    ? { ...item, status: 'done', stage: 'completed', stageLabel: getPlannerStageLabel('completed') }
+                    : { ...item, status: 'queued', stage: 'queued', stageLabel: getPlannerStageLabel('queued') })
                 : item
             );
         }
@@ -2069,13 +2111,16 @@ export async function resumePlannerGeneration() {
         await resumePlannerBackgroundGeneration(meta.backgroundJobId);
         return;
     }
-    meta.items = meta.items.map(item => item.status === 'paused' ? { ...item, status: 'pending' } : item);
+    meta.items = meta.items.map(item => item.status === 'paused' && !isPlannerItemTargetComplete(item, meta)
+        ? { ...item, status: 'pending' }
+        : item
+    );
     meta.status = 'draft';
     meta.updatedAt = Date.now();
     await savePlannerMeta(project, meta).catch(() => null);
     window.PROJECT_PLANNER_META = meta;
     updatePlannerQueueMetaCache(project, meta);
-    await startPlannerGeneration();
+    await startPlannerGeneration(null, { resume: true });
 }
 
 export async function cancelPlannerGeneration() {
@@ -2126,8 +2171,8 @@ export async function runPlannerBackgroundGenerationStart(situationId = null) {
     meta = readPlannerEditsFromDom(meta);
     await persistPlannerGenerationToSituations(project, meta).catch(() => null);
     const targetItems = situationId
-        ? meta.items.filter(item => item.situationId === situationId)
-        : meta.items.filter(item => !['done', 'completed', 'confirmed', 'cancelled'].includes(item.status));
+        ? meta.items.filter(item => item.situationId === situationId && isPlannerRunnableItem(item, meta))
+        : meta.items.filter(item => isPlannerRunnableItem(item, meta));
     if (!targetItems.length) {
         setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
         return;
@@ -2184,7 +2229,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null) {
     await refreshPlannerBackgroundStatus(data.jobId);
 }
 
-export async function startPlannerGeneration(situationId = null) {
+export async function startPlannerGeneration(situationId = null, options = {}) {
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
         await startPlannerBackgroundGeneration(situationId);
         return;
@@ -2204,9 +2249,10 @@ export async function startPlannerGeneration(situationId = null) {
 
     meta = readPlannerEditsFromDom(meta);
     await persistPlannerGenerationToSituations(project, meta).catch(() => null);
+    const resumeRun = !!options.resume;
     const targetItems = situationId
-        ? meta.items.filter(item => item.situationId === situationId)
-        : meta.items.filter(item => !['done', 'completed', 'confirmed', 'cancelled'].includes(item.status));
+        ? meta.items.filter(item => item.situationId === situationId && isPlannerRunnableItem(item, meta, resumeRun))
+        : meta.items.filter(item => isPlannerRunnableItem(item, meta, resumeRun));
     if (!targetItems.length) {
         setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
         return;
@@ -2230,13 +2276,15 @@ export async function startPlannerGeneration(situationId = null) {
     const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     try {
         for (const item of targetItems) {
-            if (item.images?.length || item.selectedImage) {
+            if (!resumeRun && (item.images?.length || item.selectedImage)) {
                 await clearPlannerItemImages(project, item);
             }
             item.status = 'running';
-            const runGenerations = Array.isArray(item.variantGenerations) && item.variantGenerations.length
-                ? item.variantGenerations
-                : [{ count: clampPlannerImageCount(item.count || meta.defaultCount), generation: item.generation }];
+            const runGenerations = buildPlannerRunGenerations(item, meta, resumeRun);
+            if (!runGenerations.length) {
+                item.status = 'done';
+                continue;
+            }
             let result = {};
             for (const variantRun of runGenerations) {
             if (window.PROJECT_PLANNER_PAUSE_REQUESTED || window.PROJECT_PLANNER_CANCEL_REQUESTED) {
@@ -2283,7 +2331,7 @@ export async function startPlannerGeneration(situationId = null) {
             item.images = await listPlannerImages(project, item.imageNumber);
             item.status = result.cancelled
                 ? (window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'cancelled' : 'paused')
-                : (item.images.length ? 'done' : 'failed');
+                : (isPlannerItemTargetComplete(item, meta) ? 'done' : 'failed');
             meta.updatedAt = Date.now();
             await savePlannerMeta(project, meta);
             window.PROJECT_PLANNER_META = meta;

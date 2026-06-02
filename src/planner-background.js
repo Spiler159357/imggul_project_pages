@@ -212,6 +212,15 @@ function compactResultKeys(value) {
     return parseResultKeys(value).filter(Boolean);
 }
 
+function getExistingPlannerResultKeys(item, count) {
+    const keys = Array.isArray(item?.images) ? item.images.filter(Boolean) : [];
+    return keys.slice(0, count);
+}
+
+function getResultKeyCount(resultKeys) {
+    return Array.isArray(resultKeys) ? resultKeys.filter(Boolean).length : 0;
+}
+
 function chunkArray(items, size) {
     const chunks = [];
     for (let i = 0; i < items.length; i += size) {
@@ -452,6 +461,10 @@ export async function startPlannerBackgroundJob(env, body) {
     const targetItems = collectTargetItems(plannerMeta, targetSituationId);
     targetItems.forEach(assertSupportedBackgroundItem);
     const totalCount = targetItems.reduce((sum, item) => sum + parsePositiveInt(item.count || plannerMeta.defaultCount, 1), 0);
+    const initialCompletedCount = targetItems.reduce((sum, item) => {
+        const count = parsePositiveInt(item.count || plannerMeta.defaultCount, 1);
+        return sum + Math.min(count, getExistingPlannerResultKeys(item, count).length);
+    }, 0);
     const activeKey = getActiveJobKey(projectId, targetSituationId);
     const activeProjectKey = getActiveProjectKey(projectId);
     const activeJob = await findActiveBackgroundJob(env, projectId);
@@ -467,18 +480,24 @@ export async function startPlannerBackgroundJob(env, body) {
 
     const jobId = makeId("job");
     const createdAt = nowIso();
+    const hasPendingGeneration = initialCompletedCount < totalCount;
+    const initialJobStatus = hasPendingGeneration ? "queued" : "completed";
+    const initialJobStage = initialJobStatus;
     const metaForStorage = {
         ...plannerMeta,
-        status: "queued",
+        status: initialJobStatus,
         backgroundJobId: jobId,
-        stage: "queued",
-        stageLabel: STAGE_LABELS.queued,
-        runningSituationIds: targetItems.map(item => item.situationId),
+        stage: initialJobStage,
+        stageLabel: STAGE_LABELS[initialJobStage],
+        runningSituationIds: hasPendingGeneration ? targetItems.map(item => item.situationId) : [],
         updatedAt: Date.now(),
-        items: plannerMeta.items.map(item => targetItems.includes(item)
-            ? { ...item, status: "queued", stage: "queued", stageLabel: STAGE_LABELS.queued, backgroundJobId: jobId }
-            : item
-        )
+        items: plannerMeta.items.map(item => {
+            if (!targetItems.includes(item)) return item;
+            const count = parsePositiveInt(item.count || plannerMeta.defaultCount, 1);
+            const existingKeys = getExistingPlannerResultKeys(item, count);
+            const itemStatus = existingKeys.length >= count ? "completed" : "queued";
+            return { ...item, status: itemStatus, stage: itemStatus, stageLabel: STAGE_LABELS[itemStatus], backgroundJobId: jobId };
+        })
     };
 
     const inserts = [
@@ -487,14 +506,17 @@ export async function startPlannerBackgroundJob(env, body) {
                 id, project_id, project_prefix, character_id, character_prefix, status, stage,
                 total_count, completed_count, failed_count, target_situation_id,
                 planner_meta_json, active_key, active_project_key, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'queued', 'queued', ?, 0, 0, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
         `).bind(
             jobId,
             projectId,
             projectPrefix,
             characterId,
             characterPrefix,
+            initialJobStatus,
+            initialJobStage,
             totalCount,
+            initialCompletedCount,
             targetSituationId,
             JSON.stringify(metaForStorage),
             activeKey,
@@ -508,13 +530,16 @@ export async function startPlannerBackgroundJob(env, body) {
     for (const item of targetItems) {
         const itemId = makeId("item");
         const count = parsePositiveInt(item.count || plannerMeta.defaultCount, 1);
+        const resultKeys = getExistingPlannerResultKeys(item, count);
+        const completedCount = Math.min(count, getResultKeyCount(resultKeys));
+        const itemStatus = completedCount >= count ? "completed" : "queued";
         const outputPrefix = getPlannerImagePrefix(projectPrefix, item.imageNumber);
         inserts.push(env.DB.prepare(`
             INSERT INTO planner_background_items (
                 id, job_id, situation_id, situation_name, image_number, output_prefix,
                 generation_json, count, completed_count, failed_count, status, stage,
                 result_keys, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, 'queued', 'queued', '[]', ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
         `).bind(
             itemId,
             jobId,
@@ -524,11 +549,16 @@ export async function startPlannerBackgroundJob(env, body) {
             outputPrefix,
             JSON.stringify(item.generation || {}),
             count,
+            completedCount,
+            itemStatus,
+            itemStatus,
+            JSON.stringify(resultKeys),
             createdAt,
             createdAt
         ));
 
         for (let imageIndex = 0; imageIndex < count; imageIndex += 1) {
+            if (resultKeys[imageIndex]) continue;
             queueMessages.push({
                 body: {
                     jobId,
@@ -555,18 +585,10 @@ export async function startPlannerBackgroundJob(env, body) {
         }
         throw error;
     }
-    if (env.GENERATION_QUEUE.sendBatch) {
-        for (const batch of chunkArray(queueMessages, QUEUE_SEND_BATCH_SIZE)) {
-            await env.GENERATION_QUEUE.sendBatch(batch);
-        }
-    } else {
-        for (const message of queueMessages) {
-            await env.GENERATION_QUEUE.send(message.body);
-        }
-    }
+    await enqueuePlannerBackgroundMessages(env, queueMessages);
     await syncPlannerMetaToR2Safely(env, jobId, { stage: "background_start_sync" });
 
-    return { jobId, status: "queued", totalCount };
+    return { jobId, status: initialJobStatus, totalCount };
 }
 
 export async function getPlannerBackgroundStatus(env, jobId) {
@@ -724,9 +746,22 @@ export async function resumePlannerBackgroundJob(env, jobId) {
     const updatedAt = nowIso();
     const runnableItems = items.filter(item => !["completed", "partial_failed", "failed", "cancelled"].includes(item.status));
     const messages = [];
+    const itemUpdates = [];
     for (const item of runnableItems) {
         const resultKeys = parseResultKeys(item.result_keys);
         const count = Number(item.count || 0);
+        const completedCount = Math.min(count, getResultKeyCount(resultKeys));
+        const complete = completedCount >= count;
+        itemUpdates.push(env.DB.prepare(`
+            UPDATE planner_background_items
+            SET completed_count = ?,
+                status = ?,
+                stage = ?,
+                updated_at = ?,
+                completed_at = CASE WHEN ? = 1 THEN COALESCE(completed_at, ?) ELSE completed_at END
+            WHERE id = ?
+        `).bind(completedCount, complete ? "completed" : "queued", complete ? "completed" : "queued", updatedAt, complete ? 1 : 0, updatedAt, item.id));
+        if (complete) continue;
         for (let imageIndex = 0; imageIndex < count; imageIndex += 1) {
             if (!resultKeys[imageIndex]) {
                 messages.push({
@@ -757,9 +792,12 @@ export async function resumePlannerBackgroundJob(env, jobId) {
             WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
         `).bind(updatedAt, jobId)
     ]);
+    if (itemUpdates.length) await env.DB.batch(itemUpdates);
+    await refreshJobRollup(env, jobId);
     await enqueuePlannerBackgroundMessages(env, messages);
     await syncPlannerMetaToR2(env, jobId).catch(() => null);
-    return { jobId, status: "queued", totalCount: job.total_count, queuedCount: messages.length };
+    const resumedJob = await queryFirst(env.DB, "SELECT status FROM planner_background_jobs WHERE id = ?", jobId);
+    return { jobId, status: resumedJob?.status || "queued", totalCount: job.total_count, queuedCount: messages.length };
 }
 
 async function callNovelAi(env, payload) {
