@@ -43,6 +43,25 @@ CREATE TABLE IF NOT EXISTS planner_background_items (
     FOREIGN KEY (job_id) REFERENCES planner_background_jobs(id) ON DELETE CASCADE
 );
 
+CREATE TABLE IF NOT EXISTS planner_background_queue (
+    id TEXT PRIMARY KEY,
+    job_id TEXT NOT NULL,
+    item_id TEXT NOT NULL,
+    sequence INTEGER NOT NULL,
+    image_index INTEGER NOT NULL,
+    status TEXT NOT NULL DEFAULT 'queued',
+    attempts INTEGER NOT NULL DEFAULT 0,
+    error_message TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    started_at TEXT,
+    completed_at TEXT,
+    UNIQUE(job_id, sequence),
+    UNIQUE(job_id, item_id, image_index),
+    FOREIGN KEY (job_id) REFERENCES planner_background_jobs(id) ON DELETE CASCADE,
+    FOREIGN KEY (item_id) REFERENCES planner_background_items(id) ON DELETE CASCADE
+);
+
 CREATE INDEX IF NOT EXISTS idx_planner_background_jobs_project
     ON planner_background_jobs(project_id, created_at);
 
@@ -54,3 +73,6 @@ CREATE INDEX IF NOT EXISTS idx_planner_background_items_job
 
 CREATE INDEX IF NOT EXISTS idx_planner_background_items_status
     ON planner_background_items(status, updated_at);
+
+CREATE INDEX IF NOT EXISTS idx_planner_background_queue_next
+    ON planner_background_queue(job_id, status, sequence);

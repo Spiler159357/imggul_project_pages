@@ -362,8 +362,32 @@ export function isPlannerPanelVisible() {
 
 export function renderPlannerIfVisible() {
     if (!isPlannerPanelVisible()) return false;
-    renderPlannerSectionByState();
+    renderPlannerSectionByState({ preserveScroll: true });
     return true;
+}
+
+function getPlannerScrollElement() {
+    return document.querySelector('[data-planner-scroll="main"]');
+}
+
+function capturePlannerScrollState() {
+    const main = getPlannerScrollElement();
+    const shell = document.querySelector('#main-project-content .overflow-y-auto');
+    return {
+        mainTop: main?.scrollTop || 0,
+        shellTop: shell?.scrollTop || 0,
+        view: window.PROJECT_PLANNER_VIEW || 'plan'
+    };
+}
+
+function restorePlannerScrollState(state) {
+    if (!state || state.view !== (window.PROJECT_PLANNER_VIEW || 'plan')) return;
+    requestAnimationFrame(() => {
+        const main = getPlannerScrollElement();
+        const shell = document.querySelector('#main-project-content .overflow-y-auto');
+        if (main) main.scrollTop = state.mainTop || 0;
+        if (shell) shell.scrollTop = state.shellTop || 0;
+    });
 }
 
 export function readPlannerEditsFromDom(meta) {
@@ -1341,7 +1365,7 @@ export function renderPlannerPanel(project, situations) {
                 ${modeButton('run', '실행 화면', 'play')}
                 ${modeButton('result', '결과 확인', 'images')}
             </div>
-            <div class="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div data-planner-scroll="main" class="min-h-0 flex-1 overflow-y-auto pr-1">
                 ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
             </div>
             ${renderPlannerSettingsModal(settings)}
@@ -1352,6 +1376,7 @@ export function renderPlannerPanel(project, situations) {
 export function renderPlannerSection(section, state = {}) {
     const project = getActiveProject();
     const situations = getProjectItems(project, 'situations');
+    const scrollState = state.preserveScroll ? capturePlannerScrollState() : null;
 
     renderProjectShell(`
         ${renderSectionHeader(section.title)}
@@ -1364,10 +1389,11 @@ export function renderPlannerSection(section, state = {}) {
         </div>
         ${renderProjectItemCreateModal()}
     `);
+    restorePlannerScrollState(scrollState);
 }
 
-export function renderPlannerSectionByState() {
-    renderPlannerSection(PROJECT_SECTIONS.find(section => section.key === 'planner'));
+export function renderPlannerSectionByState(options = {}) {
+    renderPlannerSection(PROJECT_SECTIONS.find(section => section.key === 'planner'), options);
 }
 
 export async function refreshPlannerPanel() {
@@ -1397,7 +1423,7 @@ export async function refreshPlannerPanel() {
             }
         }
     });
-    renderPlannerSectionByState();
+    renderPlannerSectionByState({ preserveScroll: true });
 }
 
 export function setPlannerView(view = 'plan') {
@@ -1408,7 +1434,7 @@ export function setPlannerView(view = 'plan') {
 export function setPlannerGenerationMode(mode = 'browser') {
     window.PROJECT_PLANNER_GENERATION_MODE = mode === 'background' ? 'background' : 'browser';
     localStorage.setItem('imggul_planner_generation_mode', window.PROJECT_PLANNER_GENERATION_MODE);
-    renderPlannerSectionByState();
+    renderPlannerSectionByState({ preserveScroll: true });
 }
 
 export async function loadPlannerForSelectedCharacter() {
@@ -1523,7 +1549,7 @@ export async function savePlannerSettingsFromModal() {
         if (status) status.textContent = '저장되었습니다.';
         setTimeout(() => {
             closePlannerSettingsModal();
-            renderPlannerSectionByState();
+            renderPlannerSectionByState({ preserveScroll: true });
         }, 250);
     } catch (err) {
         if (status) status.textContent = err.message || '저장에 실패했습니다.';
@@ -2297,7 +2323,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
             item.generation = generation;
             await savePlannerMeta(project, meta);
             window.PROJECT_PLANNER_META = meta;
-            renderPlannerSectionByState();
+            renderPlannerSectionByState({ preserveScroll: true });
             setPlannerStatus(`${item.imageNumber}.webp 생성 중...`);
 
             if (window.applyCraftSettings) window.applyCraftSettings(generation);
@@ -2335,7 +2361,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
             meta.updatedAt = Date.now();
             await savePlannerMeta(project, meta);
             window.PROJECT_PLANNER_META = meta;
-            renderPlannerSectionByState();
+            renderPlannerSectionByState({ preserveScroll: true });
             if (result.cancelled) {
                 meta.status = window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'cancelled' : 'paused';
                 break;
@@ -2354,7 +2380,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         window.PROJECT_PLANNER_PAUSE_REQUESTED = false;
         window.PROJECT_PLANNER_CANCEL_REQUESTED = false;
         if (previousSettings && window.applyCraftSettings) window.applyCraftSettings(previousSettings);
-        renderPlannerSectionByState();
+        renderPlannerSectionByState({ preserveScroll: true });
     }
 }
 
