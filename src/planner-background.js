@@ -574,7 +574,16 @@ export async function getPlannerBackgroundStatus(env, jobId) {
     await ensurePlannerBackgroundSchema(env);
     await cleanupFinishedBackgroundJobs(env).catch(() => null);
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job) throw new Error("Background job not found");
+    if (!job) {
+        return {
+            jobId,
+            status: "expired",
+            stage: "expired",
+            stageLabel: "Expired",
+            expired: true,
+            items: []
+        };
+    }
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ? ORDER BY image_number", jobId);
     return {
         jobId: job.id,
@@ -674,6 +683,83 @@ export async function pausePlannerBackgroundJob(env, jobId) {
     ]);
     await syncPlannerMetaToR2(env, jobId).catch(() => null);
     return { jobId, status: PAUSED_JOB_STATUS };
+}
+
+async function enqueuePlannerBackgroundMessages(env, messages) {
+    if (!messages.length) return;
+    if (env.GENERATION_QUEUE.sendBatch) {
+        for (const batch of chunkArray(messages, QUEUE_SEND_BATCH_SIZE)) {
+            await env.GENERATION_QUEUE.sendBatch(batch);
+        }
+        return;
+    }
+    for (const message of messages) {
+        await env.GENERATION_QUEUE.send(message.body);
+    }
+}
+
+export async function resumePlannerBackgroundJob(env, jobId) {
+    requireBackgroundBindings(env);
+    await ensurePlannerBackgroundSchema(env);
+    await cleanupFinishedBackgroundJobs(env).catch(() => null);
+    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
+    if (!job) {
+        return { jobId, status: "expired", expired: true };
+    }
+    if (["completed", "failed", "partial_failed", "cancelled"].includes(job.status)) {
+        await syncPlannerMetaToR2(env, jobId).catch(() => null);
+        return { jobId, status: job.status };
+    }
+    if (job.status !== PAUSED_JOB_STATUS) {
+        await syncPlannerMetaToR2(env, jobId).catch(() => null);
+        return { jobId, status: job.status };
+    }
+
+    const activeJob = await findActiveBackgroundJob(env, job.project_id);
+    if (activeJob && activeJob.id !== jobId) {
+        throw new Error("Another planner background job is already active for this project");
+    }
+
+    const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ? ORDER BY image_number", jobId);
+    const updatedAt = nowIso();
+    const runnableItems = items.filter(item => !["completed", "partial_failed", "failed", "cancelled"].includes(item.status));
+    const messages = [];
+    for (const item of runnableItems) {
+        const resultKeys = parseResultKeys(item.result_keys);
+        const count = Number(item.count || 0);
+        for (let imageIndex = 0; imageIndex < count; imageIndex += 1) {
+            if (!resultKeys[imageIndex]) {
+                messages.push({
+                    body: {
+                        jobId,
+                        itemId: item.id,
+                        imageIndex,
+                        attempt: 1
+                    }
+                });
+            }
+        }
+    }
+
+    await env.DB.batch([
+        env.DB.prepare(`
+            UPDATE planner_background_jobs
+            SET status = 'queued',
+                stage = 'queued',
+                updated_at = ?
+            WHERE id = ?
+        `).bind(updatedAt, jobId),
+        env.DB.prepare(`
+            UPDATE planner_background_items
+            SET status = 'queued',
+                stage = 'queued',
+                updated_at = ?
+            WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
+        `).bind(updatedAt, jobId)
+    ]);
+    await enqueuePlannerBackgroundMessages(env, messages);
+    await syncPlannerMetaToR2(env, jobId).catch(() => null);
+    return { jobId, status: "queued", totalCount: job.total_count, queuedCount: messages.length };
 }
 
 async function callNovelAi(env, payload) {

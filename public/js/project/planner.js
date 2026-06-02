@@ -66,6 +66,16 @@ export async function loadPlannerMeta(project, characterId = '') {
     return meta;
 }
 
+export async function loadPlannerQueueMetas(project, characters = getProjectItems(project, 'characters')) {
+    const selectedCharacterId = getSelectedPlannerCharacterId(project);
+    const metas = await Promise.all(characters.map(async character => {
+        const meta = await loadPlannerMeta(project, character.id).catch(() => null);
+        if (meta && !meta.characterId && characters.length > 1 && character.id !== selectedCharacterId) return null;
+        return meta?.items?.length ? { character, meta } : null;
+    }));
+    return metas.filter(Boolean);
+}
+
 export async function savePlannerMeta(project, meta) {
     const key = getPlannerMetaKey(project, meta?.characterId || getSelectedPlannerCharacterId(project));
     const normalized = normalizePlannerMeta(meta || {});
@@ -199,6 +209,7 @@ export function getPlannerStatusLabel(status) {
         partial_failed: '일부 실패',
         cancel_requested: '취소 요청됨',
         cancelled: '취소됨',
+        expired: '만료됨',
         confirmed: '확정 완료',
         failed: '실패',
         done: '완료'
@@ -219,9 +230,46 @@ export function getPlannerStageLabel(stage) {
         rollup: '상태 갱신',
         completed: '완료',
         failed: '실패',
-        cancelled: '취소됨'
+        cancelled: '취소됨',
+        paused: '일시정지됨',
+        expired: '만료됨'
     };
     return labels[stage] || stage || '';
+}
+
+function isPlannerActiveStatus(status) {
+    return ['queued', 'running', 'cancel_requested'].includes(status);
+}
+
+function isPlannerResumableStatus(status) {
+    return status === 'paused';
+}
+
+function getPlannerQueueItems(queueMetas = []) {
+    return queueMetas.flatMap(entry => (entry.meta.items || []).map(item => ({
+        character: entry.character,
+        meta: entry.meta,
+        item
+    })));
+}
+
+function getPlannerQueueSummary(queueMetas = []) {
+    const entries = getPlannerQueueItems(queueMetas);
+    const totalImages = entries.reduce((sum, entry) => sum + clampPlannerImageCount(entry.item.count), 0);
+    const completedImages = entries.reduce((sum, entry) => sum + (Array.isArray(entry.item.images) ? entry.item.images.length : 0), 0);
+    const active = queueMetas.some(entry => isPlannerActiveStatus(entry.meta.status));
+    const paused = !active && queueMetas.some(entry => isPlannerResumableStatus(entry.meta.status));
+    const failed = entries.filter(entry => ['failed', 'partial_failed'].includes(entry.item.status)).length;
+    return {
+        entries,
+        totalItems: entries.length,
+        totalImages,
+        completedImages,
+        failed,
+        active,
+        paused,
+        status: active ? 'running' : paused ? 'paused' : (queueMetas[0]?.meta?.status || 'draft')
+    };
 }
 
 export function setPlannerStatus(message) {
@@ -808,7 +856,7 @@ export function syncPlannerResultModalSelection(item) {
 }
 
 export function renderPlannerProgressPanel(meta) {
-    if (!meta?.items?.length || !['queued', 'running', 'cancel_requested'].includes(meta.status)) return '';
+    if (!meta?.items?.length || !['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) return '';
 
     const activeIds = Array.isArray(meta.runningSituationIds) && meta.runningSituationIds.length
         ? new Set(meta.runningSituationIds)
@@ -856,6 +904,102 @@ export function renderPlannerProgressPanel(meta) {
                     </div>
                 `).join('')}
             </div>
+        </div>
+    `;
+}
+
+function renderPlannerQueueProgressPanel(queueMetas = []) {
+    const summary = getPlannerQueueSummary(queueMetas);
+    if (!summary.totalItems) return '';
+    const percent = summary.totalImages ? Math.round((summary.completedImages / summary.totalImages) * 100) : 0;
+    const activeEntry = summary.entries.find(entry => isPlannerActiveStatus(entry.item.status) || isPlannerActiveStatus(entry.meta.status));
+    const statusText = summary.active ? '생성 진행 중' : summary.paused ? '일시정지됨' : '대기열';
+    return `
+        <div class="mb-4 rounded-lg border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
+            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div class="min-w-0">
+                    <p class="inline-flex items-center gap-2 text-sm font-bold text-indigo-800 dark:text-indigo-200">
+                        <i data-lucide="${summary.paused ? 'pause' : 'loader-2'}" class="w-4 h-4 ${summary.active ? 'animate-spin' : ''}"></i>
+                        ${statusText}
+                    </p>
+                    <p class="mt-1 text-xs text-indigo-700/80 dark:text-indigo-300/80 truncate">
+                        ${activeEntry ? `${escapeHtml(activeEntry.character.name || activeEntry.character.folderName || activeEntry.character.id)} / ${escapeHtml(activeEntry.item.imageNumber)}.webp / ${escapeHtml(activeEntry.item.situationName || activeEntry.item.situationId)} · ${escapeHtml(getPlannerStageLabel(activeEntry.item.stage) || getPlannerStatusLabel(activeEntry.item.status))}` : '캐릭터별 대기열을 확인할 수 있습니다.'}
+                    </p>
+                </div>
+                <div class="flex items-center gap-2 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
+                    <span>항목 ${summary.totalItems}</span>
+                    <span>결과 ${summary.completedImages} / ${summary.totalImages}</span>
+                    <span>실패 ${summary.failed}</span>
+                </div>
+            </div>
+            <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
+                <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
+            </div>
+        </div>
+    `;
+}
+
+function renderPlannerRunControls(summary) {
+    const canStart = !summary.active && !summary.paused;
+    return `
+        ${canStart ? `
+            <button type="button" onclick="window.startPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
+                <i data-lucide="play" class="w-4 h-4"></i> 실행 시작
+            </button>
+        ` : ''}
+        ${summary.active ? `
+            <button type="button" onclick="window.pausePlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900 text-amber-700 dark:text-amber-300 text-xs font-bold hover:bg-amber-50 dark:hover:bg-amber-900/20">
+                <i data-lucide="pause" class="w-4 h-4"></i> 일시정지
+            </button>
+        ` : ''}
+        ${summary.paused ? `
+            <button type="button" onclick="window.resumePlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
+                <i data-lucide="rotate-cw" class="w-4 h-4"></i> 재개하기
+            </button>
+        ` : ''}
+        ${(summary.active || summary.paused) ? `
+            <button type="button" onclick="window.cancelPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20">
+                <i data-lucide="square" class="w-4 h-4"></i> 취소
+            </button>
+        ` : ''}
+    `;
+}
+
+function renderPlannerCharacterQueue(queueMetas = []) {
+    if (!queueMetas.length) return renderEmptyState('플랜짜기 화면에서 플랜을 저장하면 실행 목록이 표시됩니다.');
+    return `
+        <div class="space-y-3">
+            ${queueMetas.map(entry => {
+                const characterName = entry.character.name || entry.character.alias || entry.character.folderName || entry.character.id;
+                const items = entry.meta.items || [];
+                const completed = items.reduce((sum, item) => sum + (Array.isArray(item.images) ? item.images.length : 0), 0);
+                const total = items.reduce((sum, item) => sum + clampPlannerImageCount(item.count), 0);
+                return `
+                    <section class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+                        <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+                            <div class="min-w-0">
+                                <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(characterName)}</p>
+                                <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">${escapeHtml(getPlannerStatusLabel(entry.meta.status || 'draft'))} · 결과 ${completed} / ${total}</p>
+                            </div>
+                            <span class="inline-flex w-fit items-center rounded-full border border-gray-200 dark:border-gray-700 px-2 py-1 text-[10px] font-bold text-gray-600 dark:text-gray-300">${items.length}개 플랜</span>
+                        </div>
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-2">
+                            ${items.map(item => `
+                                <div class="rounded-md border ${isPlannerActiveStatus(item.status) || item.status === 'paused' ? 'border-indigo-300 dark:border-indigo-800 bg-white dark:bg-indigo-950/30' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/70'} p-3">
+                                    <div class="flex items-start justify-between gap-2">
+                                        <div class="min-w-0">
+                                            <p class="text-[11px] font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
+                                            <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 후보 ${Array.isArray(item.images) ? item.images.length : 0}장 / 목표 ${escapeHtml(clampPlannerImageCount(item.count))}장</p>
+                                        </div>
+                                        <span class="flex-shrink-0 text-[10px] font-bold text-indigo-600 dark:text-indigo-300">${escapeHtml(getPlannerStageLabel(item.stage))}</span>
+                                    </div>
+                                    ${item.errorMessage ? `<p class="mt-2 truncate text-[10px] text-red-500">${escapeHtml(item.errorMessage)}</p>` : ''}
+                                </div>
+                            `).join('')}
+                        </div>
+                    </section>
+                `;
+            }).join('')}
         </div>
     `;
 }
@@ -997,6 +1141,10 @@ export function renderPlannerPanel(project, situations) {
     const activeCharacterName = activeCharacter ? (activeCharacter.name || activeCharacter.alias || activeCharacter.folderName || activeCharacter.id) : '선택된 캐릭터 없음';
     const view = window.PROJECT_PLANNER_VIEW || 'plan';
     const settings = normalizePlannerSettings(window.PROJECT_PLANNER_SETTINGS || {});
+    const queueMetas = window.PROJECT_PLANNER_QUEUE_METAS?.length
+        ? window.PROJECT_PLANNER_QUEUE_METAS
+        : (meta?.items?.length ? [{ character: activeCharacter, meta }] : []);
+    const queueSummary = getPlannerQueueSummary(queueMetas);
 
     const modeButton = (mode, label, icon) => `
         <button type="button" onclick="window.setPlannerView('${mode}')" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${view === mode ? 'bg-indigo-600 text-white' : 'border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-400'}">
@@ -1061,15 +1209,10 @@ export function renderPlannerPanel(project, situations) {
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
                 <p class="text-xs font-bold text-gray-900 dark:text-white">저장된 플랜 실행</p>
-                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">${meta?.items?.length || 0}개 플랜 항목</p>
+                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">${queueMetas.length}명 / ${queueSummary.totalItems}개 플랜 항목</p>
             </div>
             <div class="flex flex-wrap justify-end gap-2">
-            <button type="button" onclick="window.startPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
-                <i data-lucide="play" class="w-4 h-4"></i> 실행 시작
-            </button>
-            <button type="button" onclick="window.pausePlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900 text-amber-700 dark:text-amber-300 text-xs font-bold hover:bg-amber-50 dark:hover:bg-amber-900/20"><i data-lucide="pause" class="w-4 h-4"></i> 일시정지</button>
-            <button type="button" onclick="window.resumePlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400"><i data-lucide="rotate-cw" class="w-4 h-4"></i> 재개하기</button>
-            <button type="button" onclick="window.cancelPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20"><i data-lucide="square" class="w-4 h-4"></i> 취소</button>
+                ${renderPlannerRunControls(queueSummary)}
             </div>
         </div>
         <div class="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
@@ -1083,7 +1226,7 @@ export function renderPlannerPanel(project, situations) {
                     <button type="button" onclick="window.setPlannerGenerationMode('background')" class="px-3 py-1.5 rounded-md text-[11px] font-bold ${window.PROJECT_PLANNER_GENERATION_MODE === 'background' ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">백그라운드</button>
                 </div>
             </div>
-            ${meta?.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status) ? `
+            ${meta?.backgroundJobId && ['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status) ? `
                 <div class="mt-3 flex items-center gap-2">
                     <button type="button" onclick="window.refreshPlannerBackgroundStatus('${escapeJsString(meta.backgroundJobId)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
                         <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> 상태 갱신
@@ -1094,25 +1237,8 @@ export function renderPlannerPanel(project, situations) {
                 </div>
             ` : ''}
         </div>
-        ${renderPlannerProgressPanel(meta)}
-        ${meta?.items?.length ? `
-            <div class="space-y-2">
-                ${meta.items.map(item => `
-                    <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3 flex items-center justify-between gap-3">
-                        <div class="min-w-0">
-                            <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
-                            <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 후보 ${item.images?.length || 0}장</p>
-                        </div>
-                        <div class="flex items-center gap-2 flex-shrink-0">
-                            <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(clampPlannerImageCount(item.count))}장</span>
-                            <button type="button" onclick="window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
-                                <i data-lucide="trash-2" class="w-4 h-4"></i>
-                            </button>
-                        </div>
-                    </div>
-                `).join('')}
-            </div>
-        ` : renderEmptyState('플랜짜기 화면에서 플랜을 저장하면 실행 목록이 표시됩니다.')}
+        ${renderPlannerQueueProgressPanel(queueMetas)}
+        ${renderPlannerCharacterQueue(queueMetas)}
     `;
 
     const resultView = `
@@ -1185,6 +1311,7 @@ export async function refreshPlannerPanel() {
     const characterId = getSelectedPlannerCharacterId(project);
     window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = characterId;
     const character = getCharacterById(project, characterId);
+    const characters = getProjectItems(project, 'characters');
     const [meta, , projectStyle] = await Promise.all([
         loadPlannerMeta(project, characterId).catch(() => null),
         loadPlannerSettings(project, true).catch(() => normalizePlannerSettings()),
@@ -1193,10 +1320,13 @@ export async function refreshPlannerPanel() {
         character ? loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
     ]);
     window.PROJECT_PLANNER_META = meta;
+    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, characters).catch(() => meta ? [{ character, meta }] : []);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
-    if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
-        startPlannerBackgroundPolling(meta.backgroundJobId);
-    }
+    (window.PROJECT_PLANNER_QUEUE_METAS || []).forEach(entry => {
+        if (entry.meta?.backgroundJobId && isPlannerActiveStatus(entry.meta.status)) {
+            startPlannerBackgroundPolling(entry.meta.backgroundJobId);
+        }
+    });
     renderPlannerSectionByState();
 }
 
@@ -1229,6 +1359,7 @@ export async function loadPlannerForSelectedCharacter() {
         loadProjectStylePrompt(project).catch(() => '')
     ]);
     window.PROJECT_PLANNER_META = meta;
+    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => meta ? [{ character, meta }] : []);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     renderPlannerSectionByState();
 }
@@ -1703,6 +1834,20 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
     }
 
     const status = await res.json();
+    if (status.expired || status.status === 'expired') {
+        stopPlannerBackgroundPolling();
+        if (meta?.backgroundJobId === targetJobId) {
+            delete meta.backgroundJobId;
+            if (['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) meta.status = 'draft';
+            meta.updatedAt = Date.now();
+            await savePlannerMeta(project, meta).catch(() => null);
+            window.PROJECT_PLANNER_META = meta;
+        }
+        window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
+        setPlannerStatus('이전 백그라운드 작업 기록이 만료되었습니다.');
+        renderPlannerIfVisible();
+        return status;
+    }
     const nextMeta = await loadPlannerMeta(project).catch(() => window.PROJECT_PLANNER_META);
     if (nextMeta) {
         nextMeta.backgroundStatus = status;
@@ -1724,6 +1869,7 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
         }
         window.PROJECT_PLANNER_META = nextMeta;
     }
+    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
     if (!['queued', 'running', 'cancel_requested'].includes(status.status)) stopPlannerBackgroundPolling();
     renderPlannerIfVisible();
     return status;
@@ -1821,6 +1967,53 @@ export async function pausePlannerBackgroundGeneration(jobId = null) {
     await refreshPlannerBackgroundStatus(targetJobId).catch(() => null);
 }
 
+export async function resumePlannerBackgroundGeneration(jobId = null) {
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const targetJobId = jobId || meta?.backgroundJobId;
+    if (!targetJobId) return;
+
+    const res = await fetch('/api/planner/background/resume', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ jobId: targetJobId })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        setPlannerStatus(data.error || '백그라운드 재개 요청에 실패했습니다.');
+        return;
+    }
+    if (data.expired || data.status === 'expired') {
+        if (meta?.backgroundJobId === targetJobId) {
+            delete meta.backgroundJobId;
+            meta.status = 'draft';
+            meta.updatedAt = Date.now();
+            await savePlannerMeta(project, meta).catch(() => null);
+            window.PROJECT_PLANNER_META = meta;
+        }
+        setPlannerStatus('이전 백그라운드 작업 기록이 만료되었습니다. 다시 실행하세요.');
+        renderPlannerIfVisible();
+        return;
+    }
+    if (meta) {
+        meta.status = data.status || 'queued';
+        meta.stage = 'queued';
+        meta.stageLabel = getPlannerStageLabel('queued');
+        if (Array.isArray(meta.items)) {
+            meta.items = meta.items.map(item => item.status === 'paused'
+                ? { ...item, status: 'queued', stage: 'queued', stageLabel: getPlannerStageLabel('queued') }
+                : item
+            );
+        }
+        meta.updatedAt = Date.now();
+        await savePlannerMeta(project, meta).catch(() => null);
+        window.PROJECT_PLANNER_META = meta;
+    }
+    startPlannerBackgroundPolling(targetJobId);
+    setPlannerStatus('백그라운드 작업을 재개했습니다.');
+    await refreshPlannerBackgroundStatus(targetJobId).catch(() => null);
+}
+
 export async function pausePlannerGeneration() {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
@@ -1848,6 +2041,10 @@ export async function resumePlannerGeneration() {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!meta?.items?.length) return;
+    if (meta.backgroundJobId && meta.status === 'paused') {
+        await resumePlannerBackgroundGeneration(meta.backgroundJobId);
+        return;
+    }
     meta.items = meta.items.map(item => item.status === 'paused' ? { ...item, status: 'pending' } : item);
     meta.status = 'draft';
     meta.updatedAt = Date.now();
@@ -1861,7 +2058,7 @@ export async function cancelPlannerGeneration() {
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     window.PROJECT_PLANNER_CANCEL_REQUESTED = true;
     if (window.IS_GENERATING && window.cancelNaiGeneration) window.cancelNaiGeneration();
-    if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
+    if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) {
         await cancelPlannerBackgroundGeneration(meta.backgroundJobId);
     }
     if (meta) {
