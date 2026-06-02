@@ -401,6 +401,10 @@ async function ensurePlannerBackgroundSchema(env) {
     if (itemColumns.length && !hasItemStage) {
         await env.DB.prepare("ALTER TABLE planner_background_items ADD COLUMN stage TEXT").run();
     }
+    const hasQueueOrder = itemColumns.some(column => column.name === "queue_order");
+    if (itemColumns.length && !hasQueueOrder) {
+        await env.DB.prepare("ALTER TABLE planner_background_items ADD COLUMN queue_order INTEGER").run();
+    }
 }
 
 async function cleanupFinishedBackgroundJobs(env) {
@@ -526,8 +530,7 @@ export async function startPlannerBackgroundJob(env, body) {
         )
     ];
 
-    const queueMessages = [];
-    for (const item of targetItems) {
+    for (const [queueOrder, item] of targetItems.entries()) {
         const itemId = makeId("item");
         const count = parsePositiveInt(item.count || plannerMeta.defaultCount, 1);
         const resultKeys = getExistingPlannerResultKeys(item, count);
@@ -538,8 +541,8 @@ export async function startPlannerBackgroundJob(env, body) {
             INSERT INTO planner_background_items (
                 id, job_id, situation_id, situation_name, image_number, output_prefix,
                 generation_json, count, completed_count, failed_count, status, stage,
-                result_keys, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                result_keys, queue_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
         `).bind(
             itemId,
             jobId,
@@ -553,21 +556,10 @@ export async function startPlannerBackgroundJob(env, body) {
             itemStatus,
             itemStatus,
             JSON.stringify(resultKeys),
+            queueOrder,
             createdAt,
             createdAt
         ));
-
-        for (let imageIndex = 0; imageIndex < count; imageIndex += 1) {
-            if (resultKeys[imageIndex]) continue;
-            queueMessages.push({
-                body: {
-                    jobId,
-                    itemId,
-                    imageIndex,
-                    attempt: 1
-                }
-            });
-        }
     }
 
     try {
@@ -585,7 +577,7 @@ export async function startPlannerBackgroundJob(env, body) {
         }
         throw error;
     }
-    await enqueuePlannerBackgroundMessages(env, queueMessages);
+    await enqueueNextPlannerQueueMessage(env, jobId);
     await syncPlannerMetaToR2Safely(env, jobId, { stage: "background_start_sync" });
 
     return { jobId, status: initialJobStatus, totalCount };
@@ -720,6 +712,54 @@ async function enqueuePlannerBackgroundMessages(env, messages) {
     }
 }
 
+async function getNextPlannerQueueMessage(env, jobId) {
+    const job = await queryFirst(env.DB, "SELECT status FROM planner_background_jobs WHERE id = ?", jobId);
+    if (!job || !["queued", "running"].includes(job.status)) return null;
+    const running = await queryFirst(
+        env.DB,
+        "SELECT id FROM planner_background_items WHERE job_id = ? AND status = 'running' LIMIT 1",
+        jobId
+    );
+    if (running) return null;
+
+    const items = await queryAll(env.DB, `
+        SELECT id, count, result_keys, status
+        FROM planner_background_items
+        WHERE job_id = ?
+          AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
+        ORDER BY
+          CASE WHEN queue_order IS NULL THEN 1 ELSE 0 END,
+          queue_order ASC,
+          CAST(image_number AS INTEGER) ASC,
+          image_number ASC,
+          created_at ASC
+    `, jobId);
+    for (const item of items) {
+        const resultKeys = parseResultKeys(item.result_keys);
+        const count = Number(item.count || 0);
+        for (let imageIndex = 0; imageIndex < count; imageIndex += 1) {
+            if (!resultKeys[imageIndex]) {
+                return {
+                    body: {
+                        jobId,
+                        itemId: item.id,
+                        imageIndex,
+                        attempt: 1
+                    }
+                };
+            }
+        }
+    }
+    return null;
+}
+
+async function enqueueNextPlannerQueueMessage(env, jobId) {
+    const message = await getNextPlannerQueueMessage(env, jobId);
+    if (!message) return false;
+    await enqueuePlannerBackgroundMessages(env, [message]);
+    return true;
+}
+
 export async function resumePlannerBackgroundJob(env, jobId) {
     requireBackgroundBindings(env);
     await ensurePlannerBackgroundSchema(env);
@@ -745,7 +785,6 @@ export async function resumePlannerBackgroundJob(env, jobId) {
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ? ORDER BY image_number", jobId);
     const updatedAt = nowIso();
     const runnableItems = items.filter(item => !["completed", "partial_failed", "failed", "cancelled"].includes(item.status));
-    const messages = [];
     const itemUpdates = [];
     for (const item of runnableItems) {
         const resultKeys = parseResultKeys(item.result_keys);
@@ -761,19 +800,6 @@ export async function resumePlannerBackgroundJob(env, jobId) {
                 completed_at = CASE WHEN ? = 1 THEN COALESCE(completed_at, ?) ELSE completed_at END
             WHERE id = ?
         `).bind(completedCount, complete ? "completed" : "queued", complete ? "completed" : "queued", updatedAt, complete ? 1 : 0, updatedAt, item.id));
-        if (complete) continue;
-        for (let imageIndex = 0; imageIndex < count; imageIndex += 1) {
-            if (!resultKeys[imageIndex]) {
-                messages.push({
-                    body: {
-                        jobId,
-                        itemId: item.id,
-                        imageIndex,
-                        attempt: 1
-                    }
-                });
-            }
-        }
     }
 
     await env.DB.batch([
@@ -794,10 +820,10 @@ export async function resumePlannerBackgroundJob(env, jobId) {
     ]);
     if (itemUpdates.length) await env.DB.batch(itemUpdates);
     await refreshJobRollup(env, jobId);
-    await enqueuePlannerBackgroundMessages(env, messages);
+    await enqueueNextPlannerQueueMessage(env, jobId);
     await syncPlannerMetaToR2(env, jobId).catch(() => null);
     const resumedJob = await queryFirst(env.DB, "SELECT status FROM planner_background_jobs WHERE id = ?", jobId);
-    return { jobId, status: resumedJob?.status || "queued", totalCount: job.total_count, queuedCount: messages.length };
+    return { jobId, status: resumedJob?.status || "queued", totalCount: job.total_count };
 }
 
 async function callNovelAi(env, payload) {
@@ -1106,7 +1132,7 @@ async function markItemFailure(env, item, errorMessage) {
     const count = Number(item.count || 0);
     const status = completedCount + failedCount >= count
         ? (completedCount > 0 ? "partial_failed" : "failed")
-        : "running";
+        : "queued";
     await env.DB.prepare(`
         UPDATE planner_background_items
         SET failed_count = ?, status = ?, stage = 'failed', error_message = ?, updated_at = ?
@@ -1165,6 +1191,7 @@ export async function processPlannerQueueMessage(env, message) {
     const storedResultKeys = parseResultKeys(item.result_keys);
     if (storedResultKeys[imageIndex]) {
         await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, stage: "duplicate_message_skip" });
+        await enqueueNextPlannerQueueMessage(env, jobId).catch(() => null);
         return;
     }
 
@@ -1269,7 +1296,7 @@ export async function processPlannerQueueMessage(env, message) {
         const failedCount = Number(item.failed_count || 0);
         const count = Number(item.count || 0);
         const pausedAfterRequest = await isBackgroundJobPaused(env, jobId, itemId);
-        const status = completedCount + failedCount >= count ? "completed" : (pausedAfterRequest ? PAUSED_JOB_STATUS : "running");
+        const status = completedCount + failedCount >= count ? "completed" : (pausedAfterRequest ? PAUSED_JOB_STATUS : "queued");
         await env.DB.prepare(`
             UPDATE planner_background_items
             SET completed_count = ?, status = ?, stage = ?, result_keys = ?, error_message = NULL, updated_at = ?, completed_at = CASE WHEN ? IN ('completed', 'partial_failed') THEN ? ELSE completed_at END
@@ -1322,12 +1349,14 @@ export async function processPlannerQueueMessage(env, message) {
         await markItemFailure(env, item, errorMessage);
         await refreshJobRollup(env, jobId);
         await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "failure_sync" });
+        await enqueueNextPlannerQueueMessage(env, jobId).catch(() => null);
         await cleanupFinishedBackgroundJobs(env).catch(() => null);
         return;
     }
 
     await refreshJobRollup(env, jobId);
     await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "success_sync" });
+    await enqueueNextPlannerQueueMessage(env, jobId).catch(() => null);
     await cleanupFinishedBackgroundJobs(env).catch(() => null);
 }
 

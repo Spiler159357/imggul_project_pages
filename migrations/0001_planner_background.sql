@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS planner_background_items (
     stage TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
     result_keys TEXT NOT NULL DEFAULT '[]',
+    queue_order INTEGER,
     error_message TEXT,
     created_at TEXT NOT NULL,
     started_at TEXT,
