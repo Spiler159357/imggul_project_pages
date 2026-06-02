@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, migrateProjectSituations, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js';
 
@@ -36,14 +36,9 @@ export function renderSituationSection(section, state = {}) {
                 <div class="h-full min-h-0 flex flex-col">
                     <div class="flex items-center justify-between mb-4 flex-shrink-0">
                         <h3 class="font-bold text-base text-gray-900 dark:text-white">상황 목록</h3>
-                        <div class="flex items-center gap-1">
-                            <button type="button" onclick="window.migrateActiveProjectSituations()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="기존 상황 마이그레이션" aria-label="기존 상황 마이그레이션">
-                                <i data-lucide="database-backup" class="w-5 h-5"></i>
-                            </button>
-                            <button type="button" onclick="window.openProjectItemCreateModal('situation')" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="상황 추가" aria-label="상황 추가">
-                                <i data-lucide="plus" class="w-5 h-5"></i>
-                            </button>
-                        </div>
+                        <button type="button" onclick="window.openProjectItemCreateModal('situation')" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="상황 추가" aria-label="상황 추가">
+                            <i data-lucide="plus" class="w-5 h-5"></i>
+                        </button>
                     </div>
                     ${state.loading ? renderEmptyState('상황을 불러오는 중입니다.') : ''}
                     ${state.error ? renderEmptyState(state.error) : ''}
@@ -421,18 +416,6 @@ export async function renameActiveSituation() {
 export function previewActiveSituationRating(value) {
     const field = document.getElementById('situation-clothing-field');
     if (field) field.classList.toggle('hidden', getSituationRating({ rating: value }) !== 'nsfw');
-}
-
-export async function migrateActiveProjectSituations() {
-    const project = getActiveProject();
-    if (!project) return;
-    try {
-        const result = await migrateProjectSituations(project);
-        renderSituationSection({ title: '상황' });
-        alert(result.changed ? `${result.count}개 상황 데이터를 마이그레이션했습니다.` : '마이그레이션할 기존 상황 데이터가 없습니다.');
-    } catch (err) {
-        alert(err.message || '상황 데이터 마이그레이션에 실패했습니다.');
-    }
 }
 
 export async function changeActiveSituationPath() {

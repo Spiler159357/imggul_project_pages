@@ -693,30 +693,6 @@ export function normalizeProjectSituations(situations) {
     });
 }
 
-export function needsSituationMigration(situation = {}) {
-    const hasRating = situation.rating === 'sfw' || situation.rating === 'nsfw';
-    const hasPromptClothing = Object.prototype.hasOwnProperty.call(situation.prompt || {}, 'clothing');
-    const variants = Array.isArray(situation.promptVariants) ? situation.promptVariants : [];
-    const variantsNeedClothing = variants.some(variant => !Object.prototype.hasOwnProperty.call(variant?.prompt || {}, 'clothing'));
-    return !hasRating || !hasPromptClothing || variantsNeedClothing;
-}
-
-export async function migrateProjectSituations(project) {
-    if (!project?.prefix) return { changed: false, count: 0 };
-    const metaKey = getSituationMetaKey(project);
-    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(metaKey)}&fallbackKey=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
-    if (res.status === 404) return { changed: false, count: 0 };
-    if (!res.ok) throw new Error('상황 데이터를 불러오지 못했습니다.');
-    const payload = await res.json();
-    const rawSituations = Array.isArray(payload.data?.situations) ? payload.data.situations : [];
-    const changedCount = rawSituations.filter(needsSituationMigration).length;
-    if (!changedCount) return { changed: false, count: 0 };
-    project.situations = normalizeProjectSituations(rawSituations);
-    project.situationsLoaded = true;
-    await saveProjectSituations(project);
-    return { changed: true, count: changedCount };
-}
-
 export async function saveProjectSituations(project) {
     const metaKey = getSituationMetaKey(project);
     const res = await fetch('/api/db/json-document?_t=' + Date.now(), {
