@@ -375,11 +375,16 @@ export function getActiveCharacterPromptVariant(meta = {}) {
 export function normalizeSituationPrompt(prompt = {}) {
     return {
         composition: String(prompt?.composition || '').trim(),
+        clothing: String(prompt?.clothing || '').trim(),
         expression: String(prompt?.expression || '').trim(),
         action: String(prompt?.action || '').trim(),
         background: String(prompt?.background || '').trim(),
         negative: String(prompt?.negative || '').trim()
     };
+}
+
+export function getSituationRating(situation = {}) {
+    return String(situation?.rating || situation?.type || 'sfw').toLowerCase() === 'nsfw' ? 'nsfw' : 'sfw';
 }
 
 export function normalizeSituationPromptVariants(situation = {}) {
@@ -660,20 +665,25 @@ export function normalizeProjectSituations(situations) {
         const alias = situation?.alias || '';
         const name = situation?.name || alias || id;
         const generation = getSituationGeneration(situation);
+        const prompt = normalizeSituationPrompt({
+            ...(situation?.prompt || {}),
+            composition: situation?.prompt?.composition || situation?.composition || '',
+            clothing: situation?.prompt?.clothing || situation?.clothing || '',
+            expression: situation?.prompt?.expression || situation?.expression || '',
+            action: situation?.prompt?.action || situation?.action || '',
+            background: situation?.prompt?.background || situation?.background || '',
+            negative: situation?.prompt?.negative || situation?.negative || ''
+        });
         return {
             ...situation,
             id,
             folderName: situation?.folderName || id,
             name,
             alias,
+            rating: getSituationRating(situation),
             imageNumber: Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index,
-            prompt: {
-                composition: situation?.prompt?.composition || situation?.composition || '',
-                expression: situation?.prompt?.expression || situation?.expression || '',
-                action: situation?.prompt?.action || situation?.action || '',
-                background: situation?.prompt?.background || situation?.background || '',
-                negative: situation?.prompt?.negative || situation?.negative || ''
-            },
+            prompt,
+            promptVariants: normalizeSituationPromptVariants({ ...situation, prompt }),
             generation,
             resolution: generation.res,
             v4PromptCharacters: generation.v4PromptCharacters,
@@ -681,6 +691,30 @@ export function normalizeProjectSituations(situations) {
             createdAt: situation?.createdAt || Date.now()
         };
     });
+}
+
+export function needsSituationMigration(situation = {}) {
+    const hasRating = situation.rating === 'sfw' || situation.rating === 'nsfw';
+    const hasPromptClothing = Object.prototype.hasOwnProperty.call(situation.prompt || {}, 'clothing');
+    const variants = Array.isArray(situation.promptVariants) ? situation.promptVariants : [];
+    const variantsNeedClothing = variants.some(variant => !Object.prototype.hasOwnProperty.call(variant?.prompt || {}, 'clothing'));
+    return !hasRating || !hasPromptClothing || variantsNeedClothing;
+}
+
+export async function migrateProjectSituations(project) {
+    if (!project?.prefix) return { changed: false, count: 0 };
+    const metaKey = getSituationMetaKey(project);
+    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(metaKey)}&fallbackKey=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    if (res.status === 404) return { changed: false, count: 0 };
+    if (!res.ok) throw new Error('상황 데이터를 불러오지 못했습니다.');
+    const payload = await res.json();
+    const rawSituations = Array.isArray(payload.data?.situations) ? payload.data.situations : [];
+    const changedCount = rawSituations.filter(needsSituationMigration).length;
+    if (!changedCount) return { changed: false, count: 0 };
+    project.situations = normalizeProjectSituations(rawSituations);
+    project.situationsLoaded = true;
+    await saveProjectSituations(project);
+    return { changed: true, count: changedCount };
 }
 
 export async function saveProjectSituations(project) {

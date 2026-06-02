@@ -451,6 +451,7 @@ export async function submitCraftPromptSaveModal() {
             const prompt = {
                 ...(baseVariant.prompt || situation.prompt || {}),
                 composition: fields.composition,
+                clothing: fields.clothing,
                 expression: fields.expression,
                 action: fields.action,
                 background: fields.background,
@@ -601,6 +602,7 @@ export async function saveCraftPromptToSituation() {
         const prompt = {
             ...(situation.prompt || {}),
             composition: fields.composition,
+            clothing: fields.clothing,
             expression: fields.expression,
             action: fields.action,
             background: fields.background,

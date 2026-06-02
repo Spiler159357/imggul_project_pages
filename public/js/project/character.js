@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js';
 
@@ -703,6 +703,14 @@ export function renderProjectItemCreateModal() {
                         <input id="project-item-create-alias" type="text" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="이름">
                     </div>
 
+                    <div id="project-item-create-rating-wrap" class="hidden">
+                        <label for="project-item-create-rating" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">상황 구분</label>
+                        <select id="project-item-create-rating" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white">
+                            <option value="sfw">SFW</option>
+                            <option value="nsfw">NSFW</option>
+                        </select>
+                    </div>
+
                     <div id="project-item-create-error" class="hidden text-xs text-red-500"></div>
 
                     <div class="flex justify-end gap-2 pt-2">
@@ -723,6 +731,7 @@ export async function openProjectItemCreateModal(type) {
     const nameInput = document.getElementById('project-item-create-name');
     const title = document.getElementById('project-item-create-title');
     const help = document.getElementById('project-item-create-help');
+    const ratingWrap = document.getElementById('project-item-create-rating-wrap');
     const error = document.getElementById('project-item-create-error');
     if (!modal || !typeInput) return;
 
@@ -733,6 +742,7 @@ export async function openProjectItemCreateModal(type) {
     }
 
     typeInput.value = type;
+    if (ratingWrap) ratingWrap.classList.toggle('hidden', type !== 'situation');
     if (title) title.textContent = type === 'character' ? '캐릭터 추가' : '상황 추가';
     if (help) {
         help.textContent = type === 'character'
@@ -778,6 +788,7 @@ export async function submitProjectItemCreate(event) {
     const type = document.getElementById('project-item-create-type')?.value;
     const nameInput = document.getElementById('project-item-create-name');
     const aliasInput = document.getElementById('project-item-create-alias');
+    const ratingInput = document.getElementById('project-item-create-rating');
     const submitBtn = document.getElementById('project-item-create-submit');
     const itemName = normalizeProjectFolderName(nameInput?.value || '');
     const alias = (aliasInput?.value || '').trim();
@@ -800,7 +811,7 @@ export async function submitProjectItemCreate(event) {
             window.closeProjectItemCreateModal();
             renderCharacterSection(PROJECT_SECTIONS.find(section => section.key === 'character'));
         } else {
-            await createSituation(project, itemName, alias);
+            await createSituation(project, itemName, alias, getSituationRating({ rating: ratingInput?.value }));
             window.closeProjectItemCreateModal();
             renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
         }
@@ -827,7 +838,7 @@ export async function createCharacter(project, folderName, alias) {
     if (window.loadPath && window.currentPrefix === project.prefix) window.loadPath(project.prefix, true);
 }
 
-export async function createSituation(project, situationId, alias) {
+export async function createSituation(project, situationId, alias, rating = 'sfw') {
     if (!project.situationsLoaded) await loadProjectSituations(project);
     if (getProjectItems(project, 'situations').some(situation => situation.id === situationId)) {
         throw new Error('이미 존재하는 상황 경로입니다.');
@@ -841,9 +852,11 @@ export async function createSituation(project, situationId, alias) {
         folderName: situationId,
         name,
         alias,
+        rating: getSituationRating({ rating }),
         imageNumber,
         prompt: {
             composition: '',
+            clothing: '',
             expression: '',
             action: '',
             background: '',

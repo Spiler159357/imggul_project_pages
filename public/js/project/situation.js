@@ -1,16 +1,33 @@
-import { DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, migrateProjectSituations, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js';
 
 export function getSituationPromptIndicator(situation) {
     const prompt = getSituationPrompt(situation);
-    const summary = combinePromptParts(prompt.composition, prompt.expression, prompt.action, prompt.background, prompt.negative);
+    const summary = combinePromptParts(prompt.composition, prompt.clothing, prompt.expression, prompt.action, prompt.background, prompt.negative);
     return summary || '프롬프트가 아직 없습니다.';
+}
+
+export function renderSituationCards(project, situations = []) {
+    return situations.map(situation => `
+        <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group flex min-h-[112px] w-full flex-col justify-between self-start text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
+            <span class="flex items-start justify-between gap-2">
+                <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationImageNumber(project, situation))}</span>
+                <span class="min-w-0 text-right text-[10px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition truncate">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
+            </span>
+            <span class="mt-3 min-w-0">
+                <span class="mb-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${getSituationRating(situation) === 'nsfw' ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'}">${getSituationRating(situation).toUpperCase()}</span>
+                <span class="block text-sm font-bold leading-5 text-gray-800 dark:text-gray-100 line-clamp-2">${escapeHtml(getSituationDisplayName(situation))}</span>
+            </span>
+        </button>
+    `).join('');
 }
 
 export function renderSituationSection(section, state = {}) {
     const project = getActiveProject();
     const situations = getProjectItems(project, 'situations');
+    const sfwSituations = situations.filter(situation => getSituationRating(situation) === 'sfw');
+    const nsfwSituations = situations.filter(situation => getSituationRating(situation) === 'nsfw');
 
     renderProjectShell(`
         ${renderSectionHeader(section.title)}
@@ -19,25 +36,33 @@ export function renderSituationSection(section, state = {}) {
                 <div class="h-full min-h-0 flex flex-col">
                     <div class="flex items-center justify-between mb-4 flex-shrink-0">
                         <h3 class="font-bold text-base text-gray-900 dark:text-white">상황 목록</h3>
-                        <button type="button" onclick="window.openProjectItemCreateModal('situation')" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="상황 추가" aria-label="상황 추가">
-                            <i data-lucide="plus" class="w-5 h-5"></i>
-                        </button>
+                        <div class="flex items-center gap-1">
+                            <button type="button" onclick="window.migrateActiveProjectSituations()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="기존 상황 마이그레이션" aria-label="기존 상황 마이그레이션">
+                                <i data-lucide="database-backup" class="w-5 h-5"></i>
+                            </button>
+                            <button type="button" onclick="window.openProjectItemCreateModal('situation')" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition" title="상황 추가" aria-label="상황 추가">
+                                <i data-lucide="plus" class="w-5 h-5"></i>
+                            </button>
+                        </div>
                     </div>
                     ${state.loading ? renderEmptyState('상황을 불러오는 중입니다.') : ''}
                     ${state.error ? renderEmptyState(state.error) : ''}
                     ${!state.loading && !state.error && situations.length ? `
-                        <div class="grid min-h-0 flex-1 grid-cols-2 gap-2.5 overflow-y-auto pr-1 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">
-                            ${situations.map(situation => `
-                                <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group flex min-h-[112px] w-full flex-col justify-between self-start text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
-                                    <span class="flex items-start justify-between gap-2">
-                                        <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationImageNumber(project, situation))}</span>
-                                        <span class="min-w-0 text-right text-[10px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition truncate">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
-                                    </span>
-                                    <span class="mt-3 min-w-0">
-                                        <span class="block text-sm font-bold leading-5 text-gray-800 dark:text-gray-100 line-clamp-2">${escapeHtml(getSituationDisplayName(situation))}</span>
-                                    </span>
-                                </button>
-                            `).join('')}
+                        <div class="min-h-0 flex-1 overflow-y-auto pr-1 space-y-6">
+                            <section>
+                                <div class="mb-2 flex items-center justify-between gap-3">
+                                    <h4 class="text-xs font-extrabold uppercase tracking-wide text-gray-500 dark:text-gray-400">SFW 상황</h4>
+                                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500">${sfwSituations.length}개</span>
+                                </div>
+                                ${sfwSituations.length ? `<div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">${renderSituationCards(project, sfwSituations)}</div>` : renderEmptyState('SFW 상황이 없습니다.')}
+                            </section>
+                            <section>
+                                <div class="mb-2 flex items-center justify-between gap-3">
+                                    <h4 class="text-xs font-extrabold uppercase tracking-wide text-gray-500 dark:text-gray-400">NSFW 상황</h4>
+                                    <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500">${nsfwSituations.length}개</span>
+                                </div>
+                                ${nsfwSituations.length ? `<div class="grid grid-cols-2 gap-2.5 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 2xl:grid-cols-6">${renderSituationCards(project, nsfwSituations)}</div>` : renderEmptyState('NSFW 상황이 없습니다.')}
+                            </section>
                         </div>
                     ` : ''}
                     ${!state.loading && !state.error && !situations.length ? renderEmptyState('등록된 상황이 없습니다.') : ''}
@@ -213,6 +238,8 @@ export function renderSituationDetailShell(project, situation, state = {}) {
     const imageNumber = getSituationImageNumber(project, situation);
     const generation = getSituationGeneration(situation);
     const resolution = generation.res || DEFAULT_PLANNER_RESOLUTION;
+    const rating = getSituationRating(situation);
+    const isNsfw = rating === 'nsfw';
 
     renderProjectShell(`
         <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
@@ -253,6 +280,13 @@ export function renderSituationDetailShell(project, situation, state = {}) {
                             ${PLANNER_RESOLUTION_OPTIONS.map(([value, label]) => `<option value="${escapeHtml(value)}" ${resolution === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}
                         </select>
                         </div>
+                        <div class="w-full md:w-40">
+                            <label for="situation-rating-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구분</label>
+                            <select id="situation-rating-input" onchange="window.previewActiveSituationRating?.(this.value)" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                <option value="sfw" ${rating === 'sfw' ? 'selected' : ''}>SFW</option>
+                                <option value="nsfw" ${rating === 'nsfw' ? 'selected' : ''}>NSFW</option>
+                            </select>
+                        </div>
                     </div>
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
                         <div>
@@ -266,6 +300,10 @@ export function renderSituationDetailShell(project, situation, state = {}) {
                         <div>
                             <label for="situation-action-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">행위</label>
                             <textarea id="situation-action-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="상황에 필요한 행위 프롬프트">${escapeHtml(prompt.action)}</textarea>
+                        </div>
+                        <div id="situation-clothing-field" class="${isNsfw ? '' : 'hidden'}">
+                            <label for="situation-clothing-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">NSFW 의상</label>
+                            <textarea id="situation-clothing-input" class="w-full min-h-[140px] resize-y p-3 rounded-lg border border-rose-200 dark:border-rose-900 bg-gray-50 dark:bg-gray-900/50 text-sm leading-6 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-rose-400" placeholder="NSFW 상황에서 사용할 의상 프롬프트">${escapeHtml(prompt.clothing)}</textarea>
                         </div>
                         <div>
                             <label for="situation-negative-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">부정 프롬프트</label>
@@ -380,6 +418,23 @@ export async function renameActiveSituation() {
     }
 }
 
+export function previewActiveSituationRating(value) {
+    const field = document.getElementById('situation-clothing-field');
+    if (field) field.classList.toggle('hidden', getSituationRating({ rating: value }) !== 'nsfw');
+}
+
+export async function migrateActiveProjectSituations() {
+    const project = getActiveProject();
+    if (!project) return;
+    try {
+        const result = await migrateProjectSituations(project);
+        renderSituationSection({ title: '상황' });
+        alert(result.changed ? `${result.count}개 상황 데이터를 마이그레이션했습니다.` : '마이그레이션할 기존 상황 데이터가 없습니다.');
+    } catch (err) {
+        alert(err.message || '상황 데이터 마이그레이션에 실패했습니다.');
+    }
+}
+
 export async function changeActiveSituationPath() {
     closeSituationActionMenu();
 
@@ -470,7 +525,9 @@ export async function saveActiveSituationPrompt(event) {
     const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
     const variantSelect = document.getElementById('situation-prompt-variant-select');
     const resolutionInput = document.getElementById('situation-resolution-input');
+    const ratingInput = document.getElementById('situation-rating-input');
     const compositionInput = document.getElementById('situation-composition-input');
+    const clothingInput = document.getElementById('situation-clothing-input');
     const expressionInput = document.getElementById('situation-expression-input');
     const actionInput = document.getElementById('situation-action-input');
     const negativeInput = document.getElementById('situation-negative-input');
@@ -490,6 +547,7 @@ export async function saveActiveSituationPrompt(event) {
         const prompt = {
             ...(situation.prompt || {}),
             composition: compositionInput.value.trim(),
+            clothing: clothingInput?.value.trim() || '',
             expression: expressionInput.value.trim(),
             action: actionInput.value.trim(),
             negative: negativeInput.value.trim()
@@ -510,6 +568,7 @@ export async function saveActiveSituationPrompt(event) {
             : variant
         );
         situation.prompt = prompt;
+        situation.rating = getSituationRating({ rating: ratingInput?.value });
         situation.generation = generation;
         situation.promptVariants = nextVariants;
         situation.activePromptVariantId = activeVariantId;

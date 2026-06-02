@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js';
 import { renderSectionHeader } from './manage.js';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js';
 import { combinePromptParts, getSituationById } from './situation.js';
@@ -344,11 +344,14 @@ export function buildPlannerGeneration({ currentSettings, plannerSettings, proje
     const characterParts = characterVariant?.parts || {};
     const prompt = situationVariant?.prompt || {};
     const generationSource = situationVariant?.generation || {};
+    const isNsfw = getSituationRating(situationVariant) === 'nsfw';
     const fields = {
         style: projectStyle || currentSettings.prompts?.['prompt-style'] || '',
         composition: prompt.composition || currentSettings.prompts?.['prompt-composition'] || 'straight-on',
         character: characterParts.character || characterVariant?.prompt || '',
-        clothing: characterParts.clothing || currentSettings.prompts?.['prompt-clothing'] || '',
+        clothing: isNsfw
+            ? (prompt.clothing || '')
+            : (characterParts.clothing || prompt.clothing || currentSettings.prompts?.['prompt-clothing'] || ''),
         expression: prompt.expression || currentSettings.prompts?.['prompt-expression'] || '',
         action: prompt.action || currentSettings.prompts?.['prompt-action'] || '',
         background: prompt.background || currentSettings.prompts?.['prompt-background'] || 'white background',
@@ -751,6 +754,7 @@ export function updatePlannerPlanModalDefaults(scope = 'all') {
     const situationVariant = situationVariants.find(variant => selectedSituationVariantIds.includes(variant.id)) || situationVariants[0];
     const characterParts = characterVariant?.parts || {};
     const situationPrompt = situationVariant?.prompt || {};
+    const isNsfw = getSituationRating(situation) === 'nsfw';
 
     const setValue = (id, value) => {
         const input = document.getElementById(id);
@@ -759,10 +763,11 @@ export function updatePlannerPlanModalDefaults(scope = 'all') {
 
     if (scope === 'all' || scope === 'character') {
         setValue('planner-plan-character', characterParts.character || characterVariant?.prompt || '');
-        setValue('planner-plan-clothing', characterParts.clothing || '');
+        setValue('planner-plan-clothing', isNsfw ? (situationPrompt.clothing || '') : (characterParts.clothing || situationPrompt.clothing || ''));
     }
     if (scope === 'all' || scope === 'situation') {
         setValue('planner-plan-composition', situationPrompt.composition || '');
+        if (isNsfw) setValue('planner-plan-clothing', situationPrompt.clothing || '');
         setValue('planner-plan-expression', situationPrompt.expression || '');
         setValue('planner-plan-action', situationPrompt.action || '');
         setValue('planner-plan-background', situationPrompt.background || 'white background');
@@ -908,11 +913,12 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
     const situationPrompt = firstSituationVariant?.prompt || {};
     const characterParts = selectedCharacterVariant?.parts || {};
     const projectStyle = window.PROJECT_PLANNER_PROJECT_STYLE || '';
+    const isNsfw = getSituationRating(situation) === 'nsfw';
     const defaultFields = {
         style: projectStyle,
         composition: situationPrompt.composition || '',
         character: characterParts.character || selectedCharacterVariant?.prompt || '',
-        clothing: characterParts.clothing || '',
+        clothing: isNsfw ? (situationPrompt.clothing || '') : (characterParts.clothing || situationPrompt.clothing || ''),
         expression: situationPrompt.expression || '',
         action: situationPrompt.action || '',
         background: situationPrompt.background || 'white background',
@@ -1469,6 +1475,7 @@ export async function savePlannerSituationPlan() {
     const variantGenerations = activeSituationVariants.map((variant, index) => {
         const mergedVariant = {
             ...variant,
+            rating: getSituationRating(situation),
             prompt: {
                 ...(variant.prompt || {}),
                 ...Object.fromEntries(Object.entries(overrideFields).filter(([, value]) => value))
@@ -1505,6 +1512,7 @@ export async function savePlannerSituationPlan() {
     const item = {
         situationId: situation.id,
         situationName: getSituationDisplayName(situation),
+        situationRating: getSituationRating(situation),
         situationIndex: getProjectItems(project, 'situations').findIndex(entry => entry.id === situation.id),
         imageNumber,
         count,
