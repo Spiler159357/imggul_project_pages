@@ -272,6 +272,41 @@ function getPlannerQueueSummary(queueMetas = []) {
     };
 }
 
+function updatePlannerQueueMetaCache(project, meta) {
+    if (!project || !meta) return;
+    const character = getCharacterById(project, meta.characterId)
+        || getCharacterById(project, meta.characterPrefix)
+        || getCharacterById(project, getSelectedPlannerCharacterId(project));
+    if (!character) return;
+    const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? [...window.PROJECT_PLANNER_QUEUE_METAS] : [];
+    const index = queueMetas.findIndex(entry =>
+        entry.meta?.characterId === meta.characterId
+        || entry.character?.id === character.id
+    );
+    const entry = { character, meta };
+    if (index >= 0) queueMetas[index] = entry;
+    else if (meta.items?.length) queueMetas.push(entry);
+    window.PROJECT_PLANNER_QUEUE_METAS = queueMetas.filter(entry => entry.meta?.items?.length);
+}
+
+function resetPlannerMetaAfterCancel(meta) {
+    if (!meta) return meta;
+    meta.status = 'draft';
+    meta.stage = '';
+    meta.stageLabel = '';
+    delete meta.backgroundJobId;
+    delete meta.backgroundStatus;
+    delete meta.runningSituationIds;
+    if (Array.isArray(meta.items)) {
+        meta.items = meta.items.map(item => ['queued', 'running', 'paused', 'pending', 'cancel_requested', 'cancelled'].includes(item.status)
+            ? { ...item, status: 'pending', stage: '', stageLabel: '' }
+            : item
+        );
+    }
+    meta.updatedAt = Date.now();
+    return meta;
+}
+
 export function setPlannerStatus(message) {
     const el = document.getElementById('planner-status');
     if (el) el.textContent = message || '';
@@ -1226,16 +1261,6 @@ export function renderPlannerPanel(project, situations) {
                     <button type="button" onclick="window.setPlannerGenerationMode('background')" class="px-3 py-1.5 rounded-md text-[11px] font-bold ${window.PROJECT_PLANNER_GENERATION_MODE === 'background' ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">백그라운드</button>
                 </div>
             </div>
-            ${meta?.backgroundJobId && ['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status) ? `
-                <div class="mt-3 flex items-center gap-2">
-                    <button type="button" onclick="window.refreshPlannerBackgroundStatus('${escapeJsString(meta.backgroundJobId)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
-                        <i data-lucide="refresh-cw" class="w-3.5 h-3.5"></i> 상태 갱신
-                    </button>
-                    <button type="button" onclick="window.cancelPlannerBackgroundGeneration('${escapeJsString(meta.backgroundJobId)}')" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border border-red-200 dark:border-red-900 text-[10px] font-bold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20">
-                        <i data-lucide="square" class="w-3.5 h-3.5"></i> 취소 요청
-                    </button>
-                </div>
-            ` : ''}
         </div>
         ${renderPlannerQueueProgressPanel(queueMetas)}
         ${renderPlannerCharacterQueue(queueMetas)}
@@ -1322,9 +1347,14 @@ export async function refreshPlannerPanel() {
     window.PROJECT_PLANNER_META = meta;
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, characters).catch(() => meta ? [{ character, meta }] : []);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
+    let refreshedActiveStatus = false;
     (window.PROJECT_PLANNER_QUEUE_METAS || []).forEach(entry => {
         if (entry.meta?.backgroundJobId && isPlannerActiveStatus(entry.meta.status)) {
             startPlannerBackgroundPolling(entry.meta.backgroundJobId);
+            if (!refreshedActiveStatus) {
+                refreshedActiveStatus = true;
+                refreshPlannerBackgroundStatus(entry.meta.backgroundJobId).catch(() => null);
+            }
         }
     });
     renderPlannerSectionByState();
@@ -1892,6 +1922,7 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
             );
         }
         window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
         renderPlannerIfVisible();
     }
 
@@ -1906,26 +1937,15 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
         return;
     }
     setPlannerStatus('백그라운드 취소를 요청했습니다.');
-    const result = await res.json().catch(() => ({}));
     if (meta) {
-        meta.status = result.status || 'cancelled';
-        meta.stage = 'cancelled';
-        meta.stageLabel = getPlannerStageLabel('cancelled');
-        delete meta.runningSituationIds;
-        if (Array.isArray(meta.items)) {
-            meta.items = meta.items.map(item => ['queued', 'running', 'cancel_requested'].includes(item.status)
-                ? { ...item, status: 'cancelled', stage: 'cancelled', stageLabel: getPlannerStageLabel('cancelled') }
-                : item
-            );
-        }
-        meta.updatedAt = Date.now();
+        resetPlannerMetaAfterCancel(meta);
         await savePlannerMeta(project, meta).catch(() => null);
         window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
     }
-    setPlannerStatus('취소되었습니다.');
+    setPlannerStatus('취소되었습니다. 다시 실행할 수 있습니다.');
     stopPlannerBackgroundPolling();
     renderPlannerIfVisible();
-    await refreshPlannerBackgroundStatus(targetJobId);
 }
 
 export async function pausePlannerBackgroundGeneration(jobId = null) {
@@ -1947,6 +1967,7 @@ export async function pausePlannerBackgroundGeneration(jobId = null) {
         }
         meta.updatedAt = Date.now();
         window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
         await savePlannerMeta(project, meta).catch(() => null);
         renderPlannerIfVisible();
     }
@@ -1990,6 +2011,7 @@ export async function resumePlannerBackgroundGeneration(jobId = null) {
             meta.updatedAt = Date.now();
             await savePlannerMeta(project, meta).catch(() => null);
             window.PROJECT_PLANNER_META = meta;
+            updatePlannerQueueMetaCache(project, meta);
         }
         setPlannerStatus('이전 백그라운드 작업 기록이 만료되었습니다. 다시 실행하세요.');
         renderPlannerIfVisible();
@@ -2008,6 +2030,7 @@ export async function resumePlannerBackgroundGeneration(jobId = null) {
         meta.updatedAt = Date.now();
         await savePlannerMeta(project, meta).catch(() => null);
         window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
     }
     startPlannerBackgroundPolling(targetJobId);
     setPlannerStatus('백그라운드 작업을 재개했습니다.');
@@ -2032,6 +2055,7 @@ export async function pausePlannerGeneration() {
         meta.updatedAt = Date.now();
         await savePlannerMeta(project, meta).catch(() => null);
         window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
     }
     setPlannerStatus('일시정지되었습니다.');
     renderPlannerIfVisible();
@@ -2050,6 +2074,7 @@ export async function resumePlannerGeneration() {
     meta.updatedAt = Date.now();
     await savePlannerMeta(project, meta).catch(() => null);
     window.PROJECT_PLANNER_META = meta;
+    updatePlannerQueueMetaCache(project, meta);
     await startPlannerGeneration();
 }
 
@@ -2060,19 +2085,15 @@ export async function cancelPlannerGeneration() {
     if (window.IS_GENERATING && window.cancelNaiGeneration) window.cancelNaiGeneration();
     if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) {
         await cancelPlannerBackgroundGeneration(meta.backgroundJobId);
+        return;
     }
     if (meta) {
-        meta.status = 'cancelled';
-        meta.items = (meta.items || []).map(item => ['queued', 'running', 'paused', 'pending'].includes(item.status)
-            ? { ...item, status: 'cancelled' }
-            : item
-        );
-        delete meta.runningSituationIds;
-        meta.updatedAt = Date.now();
+        resetPlannerMetaAfterCancel(meta);
         await savePlannerMeta(project, meta).catch(() => null);
         window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
     }
-    setPlannerStatus('취소되었습니다.');
+    setPlannerStatus('취소되었습니다. 다시 실행할 수 있습니다.');
     renderPlannerIfVisible();
 }
 
