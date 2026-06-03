@@ -239,8 +239,15 @@ function isPlannerActiveStatus(status) {
     return ['queued', 'running', 'cancel_requested'].includes(status);
 }
 
+function isPlannerTerminalStatus(status) {
+    return ['completed', 'done', 'failed', 'partial_failed', 'confirmed'].includes(status);
+}
+
 function isPlannerConfirmBlocked(meta = {}, item = null) {
     if (!item) return false;
+    if (isPlannerTerminalStatus(meta.status) || isPlannerTerminalStatus(meta.backgroundStatus?.status)) {
+        return ['running', 'cancel_requested'].includes(item.status);
+    }
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
         const metaActive = isPlannerActiveStatus(meta.status);
         const backgroundActive = isPlannerActiveStatus(meta.backgroundStatus?.status);
@@ -1553,6 +1560,10 @@ export function openPlannerResultModal(situationId) {
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
+    const meta = window.PROJECT_PLANNER_META || null;
+    if (window.PROJECT_PLANNER_GENERATION_MODE === 'background' && meta?.backgroundJobId) {
+        refreshPlannerBackgroundStatus(meta.backgroundJobId).catch(() => null);
+    }
 }
 
 export function closePlannerResultModal() {
@@ -2230,6 +2241,7 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
         nextMeta.backgroundJobId = status.jobId || nextMeta.backgroundJobId;
         if (!isPlannerActiveStatus(status.status)) {
             delete nextMeta.runningSituationIds;
+            delete nextMeta.backgroundJobId;
         }
         if (Array.isArray(status.items) && Array.isArray(nextMeta.items)) {
             nextMeta.items = nextMeta.items.map(item => {
