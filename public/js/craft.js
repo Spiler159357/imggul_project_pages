@@ -711,10 +711,10 @@ export async function generateNaiImage(options = {}) {
  */
 export async function processNextQueueItem() {
     if (window.CANCEL_GENERATION || window.GENERATION_QUEUE.length === 0) {
-        const wasCancelled = window.CANCEL_GENERATION;
+        const wasStopped = window.CANCEL_GENERATION;
         window.IS_GENERATING = false; window.CANCEL_GENERATION = false; window.GENERATION_QUEUE = [];
         window.saveQueueToStorage(); window.updateQueueUI(false);
-        window.dispatchEvent(new CustomEvent('imggul:generation-queue-complete', { detail: { cancelled: wasCancelled } }));
+        window.dispatchEvent(new CustomEvent('imggul:generation-queue-complete', { detail: { stopped: wasStopped } }));
         return;
     }
 

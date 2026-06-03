@@ -208,7 +208,6 @@ export function getPlannerStatusLabel(status) {
         completed: '생성 완료',
         partial_failed: '일부 실패',
         cancel_requested: '취소 요청됨',
-        cancelled: '취소됨',
         expired: '만료됨',
         confirmed: '확정 완료',
         failed: '실패',
@@ -230,7 +229,6 @@ export function getPlannerStageLabel(stage) {
         rollup: '상태 갱신',
         completed: '완료',
         failed: '실패',
-        cancelled: '취소됨',
         paused: '일시정지됨',
         expired: '만료됨'
     };
@@ -306,7 +304,7 @@ function resetPlannerMetaAfterCancel(meta) {
     delete meta.backgroundStatus;
     delete meta.runningSituationIds;
     if (Array.isArray(meta.items)) {
-        meta.items = meta.items.map(item => ['queued', 'running', 'paused', 'pending', 'cancel_requested', 'cancelled'].includes(item.status)
+        meta.items = meta.items.map(item => ['queued', 'running', 'paused', 'pending', 'cancel_requested'].includes(item.status)
             ? { ...item, status: 'pending', stage: '', stageLabel: '' }
             : item
         );
@@ -331,7 +329,7 @@ function isPlannerItemTargetComplete(item, meta = {}) {
 }
 
 function isPlannerRunnableItem(item, meta = {}, resumeOnly = false) {
-    if (!item || ['confirmed', 'cancelled'].includes(item.status)) return false;
+    if (!item || item.status === 'confirmed') return false;
     if (isPlannerItemTargetComplete(item, meta)) return false;
     if (resumeOnly) return ['paused', 'queued', 'running', 'pending'].includes(item.status || 'pending');
     return true;
@@ -972,7 +970,7 @@ export function renderPlannerProgressPanel(meta) {
     const progressItems = activeIds ? meta.items.filter(item => activeIds.has(item.situationId)) : meta.items;
     const total = progressItems.length;
     const doneCount = progressItems.filter(item => ['done', 'completed', 'confirmed'].includes(item.status)).length;
-    const failedCount = progressItems.filter(item => ['failed', 'partial_failed', 'cancelled'].includes(item.status)).length;
+    const failedCount = progressItems.filter(item => ['failed', 'partial_failed'].includes(item.status)).length;
     const runningItem = progressItems.find(item => ['queued', 'running', 'cancel_requested'].includes(item.status));
     const runningIndex = runningItem ? progressItems.findIndex(item => item.situationId === runningItem.situationId) + 1 : doneCount + failedCount + 1;
     const progressCount = Math.min(total, doneCount + failedCount);
@@ -1304,9 +1302,19 @@ export function renderPlannerPanel(project, situations) {
         </div>
         <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
             <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">상황을 선택하면 해당 상황의 플랜을 구성합니다.</p>
-            <button type="button" onclick="window.savePlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
-                <i data-lucide="save" class="w-4 h-4"></i> 플랜 저장하기
-            </button>
+            <div class="flex flex-wrap justify-end gap-2">
+                <button type="button" onclick="window.createMissingPlannerPlans()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
+                    <i data-lucide="image-plus" class="w-4 h-4"></i> 누락 이미지 플랜 생성
+                </button>
+                <button type="button" onclick="window.savePlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
+                    <i data-lucide="save" class="w-4 h-4"></i> 플랜 저장하기
+                </button>
+                ${meta?.items?.length ? `
+                    <button type="button" onclick="window.deleteAllPlannerItems()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i> 전체 플랜 삭제
+                    </button>
+                ` : ''}
+            </div>
         </div>
         ${!characters.length ? renderEmptyState('플랜을 작성하려면 먼저 캐릭터를 추가하세요.') : ''}
         ${!situations.length ? renderEmptyState('플랜을 작성하려면 먼저 상황을 추가하세요.') : ''}
@@ -1791,6 +1799,169 @@ export async function savePlannerSituationPlan() {
     renderPlannerSectionByState();
 }
 
+function buildPlannerPlanItemFromSituation({
+    project,
+    situation,
+    character,
+    characterMeta,
+    plannerSettings,
+    currentSettings,
+    projectStyle,
+    count,
+    selectedCharacterVariantId = '',
+    selectedSituationVariantIds = null,
+    fieldOverrides = {},
+    existingItem = null
+}) {
+    const characterVariants = normalizeCharacterPromptVariants(characterMeta);
+    const situationVariants = normalizeSituationPromptVariants(situation);
+    const characterVariantId = selectedCharacterVariantId || characterMeta.activePromptVariantId || characterVariants[0]?.id || 'default';
+    const characterVariant = characterVariants.find(variant => variant.id === characterVariantId) || characterVariants[0];
+    const activeSituationVariants = Array.isArray(selectedSituationVariantIds) && selectedSituationVariantIds.length
+        ? situationVariants.filter(variant => selectedSituationVariantIds.includes(variant.id))
+        : situationVariants;
+    if (!characterVariant || !activeSituationVariants.length) return null;
+
+    const normalizedCount = clampPlannerImageCount(count);
+    const counts = distributePlannerCount(normalizedCount, activeSituationVariants.length);
+    const overrideEntries = Object.entries(fieldOverrides).filter(([, value]) => value);
+    const variantGenerations = activeSituationVariants.map((variant, index) => {
+        const mergedVariant = {
+            ...variant,
+            rating: getSituationRating(situation),
+            prompt: {
+                ...(variant.prompt || {}),
+                ...Object.fromEntries(overrideEntries)
+            },
+            generation: {
+                ...(variant.generation || {}),
+                res: fieldOverrides.res || variant.generation?.res || DEFAULT_PLANNER_RESOLUTION
+            }
+        };
+        return {
+            situationPromptVariantId: variant.id,
+            situationPromptVariantName: getPlannerPromptVariantName(variant),
+            count: counts[index],
+            generation: buildPlannerGeneration({
+                currentSettings,
+                plannerSettings,
+                projectStyle,
+                characterVariant: {
+                    ...characterVariant,
+                    parts: {
+                        ...(characterVariant.parts || {}),
+                        character: fieldOverrides.character || characterVariant.parts?.character || characterVariant.prompt || '',
+                        clothing: fieldOverrides.clothing || characterVariant.parts?.clothing || '',
+                        negative: fieldOverrides.negative ? '' : characterVariant.parts?.negative || ''
+                    }
+                },
+                situationVariant: mergedVariant,
+                count: counts[index]
+            })
+        };
+    }).filter(entry => entry.count > 0);
+
+    const imageNumber = getSituationImageNumber(project, situation);
+    return {
+        situationId: situation.id,
+        situationName: getSituationDisplayName(situation),
+        situationRating: getSituationRating(situation),
+        situationIndex: getProjectItems(project, 'situations').findIndex(entry => entry.id === situation.id),
+        imageNumber,
+        count: normalizedCount,
+        status: 'pending',
+        characterPromptVariantId: characterVariant.id,
+        characterPromptVariantName: getPlannerPromptVariantName(characterVariant),
+        situationPromptVariantIds: activeSituationVariants.map(variant => variant.id),
+        variantCounts: Object.fromEntries(variantGenerations.map(entry => [entry.situationPromptVariantId, entry.count])),
+        variantGenerations,
+        generation: variantGenerations[0]?.generation || {},
+        images: existingItem?.images || [],
+        selectedImage: existingItem?.selectedImage || null
+    };
+}
+
+export async function createMissingPlannerPlans() {
+    const project = getActiveProject();
+    if (!project) return;
+    const characterId = getSelectedPlannerCharacterId(project);
+    const character = getCharacterById(project, characterId);
+    const situations = getProjectItems(project, 'situations');
+    if (!character) {
+        setPlannerStatus('플랜을 만들 캐릭터를 선택하세요.');
+        return;
+    }
+    if (!situations.length) {
+        setPlannerStatus('플랜을 만들 상황이 없습니다.');
+        return;
+    }
+
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project, character.id).catch(() => null);
+    if (meta && (isPlannerActiveStatus(meta.status) || isPlannerActiveStatus(meta.backgroundStatus?.status))) {
+        setPlannerStatus('생성 중인 플랜이 있을 때는 일괄 생성할 수 없습니다.');
+        return;
+    }
+
+    await Promise.all([
+        loadCharacterFiles(character, true).catch(() => []),
+        loadCharacterMeta(character, true).catch(() => ({}))
+    ]);
+
+    const existingItems = new Map((meta?.items || []).map(item => [item.situationId, item]));
+    const missingSituations = situations.filter((situation, index) =>
+        !getPlannerSituationImage(character, situation, index)
+        && !existingItems.has(situation.id)
+    );
+    if (!missingSituations.length) {
+        setPlannerStatus('누락된 이미지 중 새로 만들 플랜이 없습니다.');
+        return;
+    }
+
+    const [plannerSettings, projectStyle] = await Promise.all([
+        loadPlannerSettings(project).catch(() => normalizePlannerSettings()),
+        loadProjectStylePrompt(project).catch(() => '')
+    ]);
+    const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
+    const characterMeta = character.meta || {};
+    const defaultCount = clampPlannerImageCount(meta?.defaultCount || PLANNER_DEFAULT_IMAGE_COUNT);
+    if (!meta || meta.characterId !== character.id) {
+        meta = {
+            projectId: project.id,
+            characterId: character.id,
+            characterPrefix: character.prefix,
+            status: 'draft',
+            defaultCount,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+            items: []
+        };
+    }
+
+    const newItems = missingSituations
+        .map(situation => buildPlannerPlanItemFromSituation({
+            project,
+            situation,
+            character,
+            characterMeta,
+            plannerSettings,
+            currentSettings,
+            projectStyle,
+            count: defaultCount
+        }))
+        .filter(Boolean);
+
+    meta.items = sortPlannerItems([...(meta.items || []), ...newItems]);
+    meta.defaultCount = defaultCount;
+    meta.status = 'draft';
+    meta.updatedAt = Date.now();
+    await savePlannerMeta(project, meta);
+    window.PROJECT_PLANNER_META = meta;
+    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
+    updatePlannerQueueMetaCache(project, meta);
+    renderPlannerSectionByState();
+    setPlannerStatus(`${newItems.length}개 누락 이미지 플랜을 생성했습니다.`);
+}
+
 export async function savePlannerDraft() {
     const project = getActiveProject();
     if (!project) return;
@@ -1842,6 +2013,40 @@ export async function deletePlannerItem(situationId) {
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
     renderPlannerSectionByState();
+}
+
+export async function deleteAllPlannerItems() {
+    const project = getActiveProject();
+    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!project || !meta?.items?.length) {
+        setPlannerStatus('삭제할 플랜이 없습니다.');
+        return;
+    }
+    if (isPlannerActiveStatus(meta.status) || isPlannerActiveStatus(meta.backgroundStatus?.status)) {
+        setPlannerStatus('생성 중에는 전체 플랜을 삭제할 수 없습니다. 일시정지 또는 취소 후 삭제하세요.');
+        return;
+    }
+    if (!confirm(`현재 캐릭터의 플랜 ${meta.items.length}개를 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
+
+    const items = [...meta.items];
+    await Promise.all(items.map(item => fetch('/api/manage', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'delete_folder', key: getPlannerImagePrefix(project, item.imageNumber) })
+    }).catch(() => null)));
+
+    await deletePlannerMeta(project, meta.characterId);
+    window.PROJECT_PLANNER_META = null;
+    window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+    window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
+    clearFolderDataCaches(getPlannerPrefix(project));
+    updatePlannerQueueMetaCache(project, { ...meta, items: [] });
+    renderPlannerSituationPlanOverlay();
+    renderPlannerResultOverlay();
+    renderPlannerPreviewOverlay();
+    renderPlannerSectionByState();
+    setPlannerStatus(`${items.length}개 플랜을 삭제했습니다.`);
 }
 
 export async function deletePlannerItemFromModal(situationId) {
@@ -1955,6 +2160,16 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
     }
     const nextMeta = await loadPlannerMeta(project).catch(() => window.PROJECT_PLANNER_META);
     if (nextMeta) {
+        if (status.status === 'cancel_requested') {
+            resetPlannerMetaAfterCancel(nextMeta);
+            nextMeta.backgroundStatus = { ...status, status: 'queued' };
+            await savePlannerMeta(project, nextMeta).catch(() => null);
+            window.PROJECT_PLANNER_META = nextMeta;
+            window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
+            stopPlannerBackgroundPolling();
+            renderPlannerIfVisible();
+            return status;
+        }
         nextMeta.backgroundStatus = status;
         nextMeta.status = status.status || nextMeta.status;
         nextMeta.backgroundJobId = status.jobId || nextMeta.backgroundJobId;
@@ -1988,11 +2203,11 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
 
     if (meta) {
         meta.status = 'cancel_requested';
-        meta.stage = 'cancelled';
-        meta.stageLabel = getPlannerStageLabel('cancelled');
+        meta.stage = '';
+        meta.stageLabel = '';
         if (Array.isArray(meta.items)) {
             meta.items = meta.items.map(item => ['queued', 'running', 'cancel_requested'].includes(item.status)
-                ? { ...item, status: 'cancel_requested', stage: 'cancelled', stageLabel: getPlannerStageLabel('cancelled') }
+                ? { ...item, status: 'cancel_requested', stage: '', stageLabel: '' }
                 : item
             );
         }
@@ -2333,7 +2548,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
             let result = {};
             for (const variantRun of runGenerations) {
             if (window.PROJECT_PLANNER_PAUSE_REQUESTED || window.PROJECT_PLANNER_CANCEL_REQUESTED) {
-                result = { cancelled: true };
+                result = { stopped: true };
                 break;
             }
             const generation = variantRun.generation || item.generation;
@@ -2360,7 +2575,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
             });
 
             result = await waitForPlannerQueueComplete();
-            if (result.cancelled) break;
+            if (result.stopped) break;
             const afterImages = await listPlannerImages(project, item.imageNumber);
             const metadataSnapshot = buildPlannerMetadataFallback({ generation });
             item.imagePromptSnapshots = item.imagePromptSnapshots || {};
@@ -2374,20 +2589,20 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
             await savePlannerMeta(project, meta);
             }
             item.images = await listPlannerImages(project, item.imageNumber);
-            item.status = result.cancelled
-                ? (window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'cancelled' : 'paused')
+            item.status = result.stopped
+                ? (window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'pending' : 'paused')
                 : (isPlannerItemTargetComplete(item, meta) ? 'done' : 'failed');
             meta.updatedAt = Date.now();
             await savePlannerMeta(project, meta);
             window.PROJECT_PLANNER_META = meta;
             renderPlannerSectionByState({ preserveScroll: true });
-            if (result.cancelled) {
-                meta.status = window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'cancelled' : 'paused';
+            if (result.stopped) {
+                meta.status = window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'draft' : 'paused';
                 break;
             }
         }
 
-        if (!['paused', 'cancelled'].includes(meta.status)) meta.status = targetItems.every(item => item.status === 'done') ? 'completed' : 'failed';
+        if (!['draft', 'paused'].includes(meta.status)) meta.status = targetItems.every(item => item.status === 'done') ? 'completed' : 'failed';
         delete meta.runningSituationIds;
         meta.updatedAt = Date.now();
         await savePlannerMeta(project, meta);

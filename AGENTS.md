@@ -8,6 +8,9 @@
 - Preserve existing file encoding unless explicitly asked otherwise.
 - Before finishing a task, check that modified text files do not start with the UTF-8 BOM bytes EF BB BF.
 
-## Browser Testing
+## Deployment and Testing
 
-- Do not validate browser behavior only through localhost-based checks or indirect previews.
+- This project is deployed to the server through Cloudflare.
+- Perform only simple syntax or static checks locally.
+- Do not run direct end-to-end, browser, or live service tests locally unless explicitly requested by the user.
+- Let the user commit and push the changes, then validate the actual behavior through the Cloudflare-deployed server.

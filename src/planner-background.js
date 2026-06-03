@@ -6,7 +6,7 @@ const NAI_MIN_REQUEST_INTERVAL_MS = 15000;
 const MAX_INLINE_COOLDOWN_MS = 30000;
 const R2_PUT_MAX_ATTEMPTS = 4;
 const TERMINAL_JOB_RETENTION_MS = 10 * 60 * 1000;
-const TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "cancelled", "paused"];
+const TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "paused"];
 const ACTIVE_JOB_STATUSES = ["queued", "running", "cancel_requested"];
 const PAUSED_JOB_STATUS = "paused";
 const STAGE_LABELS = {
@@ -22,7 +22,6 @@ const STAGE_LABELS = {
     rollup: "Updating job status",
     completed: "Completed",
     failed: "Failed",
-    cancelled: "Cancelled",
     paused: "Paused"
 };
 
@@ -662,39 +661,22 @@ export async function getPlannerBackgroundStatus(env, jobId) {
 export async function cancelPlannerBackgroundJob(env, jobId) {
     if (!env.DB) throw new Error("Missing Cloudflare binding: DB");
     await ensurePlannerBackgroundSchema(env);
-    const updatedAt = nowIso();
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
     if (!job) throw new Error("Background job not found");
-    const terminalStatuses = ["completed", "failed", "partial_failed", "cancelled"];
+    const terminalStatuses = ["completed", "failed", "partial_failed"];
     if (terminalStatuses.includes(job.status)) {
         await syncPlannerMetaToR2(env, jobId).catch(() => null);
         return { jobId, status: job.status };
     }
 
+    await resetPlannerMetaAfterBackgroundCancel(env, jobId).catch(() => null);
     await env.DB.batch([
-        env.DB.prepare(`
-        UPDATE planner_background_jobs
-        SET status = 'cancelled',
-            stage = 'cancelled',
-            updated_at = ?,
-            completed_at = COALESCE(completed_at, ?),
-            cancelled_at = COALESCE(cancelled_at, ?)
-            WHERE id = ?
-        `).bind(updatedAt, updatedAt, updatedAt, jobId),
-        env.DB.prepare(`
-        UPDATE planner_background_items
-        SET status = 'cancelled',
-            stage = 'cancelled',
-            generation_json = '{}',
-            updated_at = ?,
-            completed_at = COALESCE(completed_at, ?)
-            WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
-        `).bind(updatedAt, updatedAt, jobId),
-        env.DB.prepare("DELETE FROM planner_background_queue WHERE job_id = ?").bind(jobId)
+        env.DB.prepare("DELETE FROM planner_background_queue WHERE job_id = ?").bind(jobId),
+        env.DB.prepare("DELETE FROM planner_background_items WHERE job_id = ?").bind(jobId),
+        env.DB.prepare("DELETE FROM planner_background_jobs WHERE id = ?").bind(jobId)
     ]);
-    await syncPlannerMetaToR2(env, jobId).catch(() => null);
     await cleanupFinishedBackgroundJobs(env).catch(() => null);
-    return { jobId, status: "cancelled" };
+    return { jobId, status: "queued" };
 }
 
 export async function pausePlannerBackgroundJob(env, jobId) {
@@ -703,7 +685,7 @@ export async function pausePlannerBackgroundJob(env, jobId) {
     const updatedAt = nowIso();
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
     if (!job) throw new Error("Background job not found");
-    const terminalStatuses = ["completed", "failed", "partial_failed", "cancelled"];
+    const terminalStatuses = ["completed", "failed", "partial_failed"];
     if (terminalStatuses.includes(job.status) || job.status === PAUSED_JOB_STATUS) {
         await syncPlannerMetaToR2(env, jobId).catch(() => null);
         return { jobId, status: job.status };
@@ -715,14 +697,14 @@ export async function pausePlannerBackgroundJob(env, jobId) {
         SET status = 'paused',
             stage = 'paused',
             updated_at = ?
-            WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
+            WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed')
         `).bind(updatedAt, jobId),
         env.DB.prepare(`
         UPDATE planner_background_items
         SET status = 'paused',
             stage = 'paused',
             updated_at = ?
-            WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
+            WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed')
         `).bind(updatedAt, jobId),
         env.DB.prepare(`
         UPDATE planner_background_queue
@@ -835,7 +817,7 @@ export async function resumePlannerBackgroundJob(env, jobId) {
     if (!job) {
         return { jobId, status: "expired", expired: true };
     }
-    if (["completed", "failed", "partial_failed", "cancelled"].includes(job.status)) {
+    if (["completed", "failed", "partial_failed"].includes(job.status)) {
         await syncPlannerMetaToR2(env, jobId).catch(() => null);
         return { jobId, status: job.status };
     }
@@ -851,7 +833,7 @@ export async function resumePlannerBackgroundJob(env, jobId) {
 
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ? ORDER BY image_number", jobId);
     const updatedAt = nowIso();
-    const runnableItems = items.filter(item => !["completed", "partial_failed", "failed", "cancelled"].includes(item.status));
+    const runnableItems = items.filter(item => !["completed", "partial_failed", "failed"].includes(item.status));
     const itemUpdates = [];
     for (const item of runnableItems) {
         const resultKeys = parseResultKeys(item.result_keys);
@@ -883,7 +865,7 @@ export async function resumePlannerBackgroundJob(env, jobId) {
             SET status = 'queued',
                 stage = 'queued',
                 updated_at = ?
-            WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
+            WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed')
         `).bind(updatedAt, jobId)
     ]);
     if (itemUpdates.length) await env.DB.batch(itemUpdates);
@@ -1108,12 +1090,54 @@ async function saveMetadata(env, outputPrefix, fileName, metadata) {
     await putJsonObject(env.imgBucket, key, db);
 }
 
+async function resetPlannerMetaAfterBackgroundCancel(env, jobId) {
+    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
+    if (!job) return;
+    const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
+    const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
+    const storedMeta = await readJsonObject(env.imgBucket, metaKey, null);
+    if (!storedMeta || typeof storedMeta !== "object") return;
+
+    const bySituation = new Map(items.map(item => [item.situation_id, item]));
+    const meta = storedMeta;
+    meta.status = "draft";
+    meta.stage = "";
+    meta.stageLabel = "";
+    delete meta.backgroundJobId;
+    delete meta.backgroundStatus;
+    delete meta.runningSituationIds;
+    meta.updatedAt = Date.now();
+    meta.items = (meta.items || []).map(item => {
+        const row = bySituation.get(item.situationId);
+        if (!row) return item;
+        const resultKeys = compactResultKeys(row.result_keys);
+        const hasNewResults = resultKeys.length > 0;
+        const complete = Number(row.completed_count || 0) >= Number(row.count || 0);
+        return {
+            ...item,
+            status: complete ? "done" : "pending",
+            stage: "",
+            stageLabel: "",
+            images: hasNewResults ? resultKeys : (item.images || []),
+            selectedImage: hasNewResults
+                ? (resultKeys.includes(item.selectedImage) ? item.selectedImage : null)
+                : (item.selectedImage || null),
+            backgroundJobId: undefined,
+            backgroundItemId: undefined,
+            errorMessage: row.error_message || ""
+        };
+    });
+
+    await putJsonObject(env.imgBucket, metaKey, meta);
+    await putJsonDocument(env, "planner_meta", metaKey, meta).catch(() => null);
+}
+
 async function updateProgressStage(env, jobId, itemId, stage) {
     const updatedAt = nowIso();
     await env.DB.batch([
-        env.DB.prepare("UPDATE planner_background_jobs SET stage = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled', 'cancel_requested', 'paused')")
+        env.DB.prepare("UPDATE planner_background_jobs SET stage = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancel_requested', 'paused')")
             .bind(stage, updatedAt, jobId),
-        env.DB.prepare("UPDATE planner_background_items SET stage = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled', 'cancel_requested', 'paused')")
+        env.DB.prepare("UPDATE planner_background_items SET stage = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancel_requested', 'paused')")
             .bind(stage, updatedAt, itemId)
     ]);
     await syncPlannerMetaToR2(env, jobId).catch(() => null);
@@ -1124,7 +1148,7 @@ async function refreshJobRollup(env, jobId) {
     const completedCount = rows.reduce((sum, row) => sum + Number(row.completed_count || 0), 0);
     const failedCount = rows.reduce((sum, row) => sum + Number(row.failed_count || 0), 0);
     const totalCount = rows.reduce((sum, row) => sum + Number(row.count || 0), 0);
-    const done = rows.every(row => ["completed", "partial_failed", "failed", "cancelled"].includes(row.status));
+    const done = rows.every(row => ["completed", "partial_failed", "failed"].includes(row.status));
     let status = "running";
     if (done) {
         if (completedCount === totalCount) status = "completed";
@@ -1153,12 +1177,18 @@ export async function syncPlannerMetaToR2(env, jobId) {
     const hasCurrentTarget = [...snapshotTargetIds].some(id => currentIds.has(id));
     if (!hasCurrentTarget) return;
 
-    meta.status = job.status;
-    meta.stage = job.stage || "";
-    meta.stageLabel = STAGE_LABELS[job.stage] || job.stage || "";
-    meta.backgroundJobId = job.id;
+    const cancelRequestedJob = job.status === "cancel_requested";
+    meta.status = cancelRequestedJob ? "draft" : job.status;
+    meta.stage = cancelRequestedJob ? "" : (job.stage || "");
+    meta.stageLabel = cancelRequestedJob ? "" : (STAGE_LABELS[job.stage] || job.stage || "");
+    if (cancelRequestedJob) {
+        delete meta.backgroundJobId;
+        delete meta.backgroundStatus;
+    } else {
+        meta.backgroundJobId = job.id;
+    }
     meta.updatedAt = Date.now();
-    if (["completed", "failed", "partial_failed", "cancelled", PAUSED_JOB_STATUS].includes(job.status)) {
+    if (["completed", "failed", "partial_failed", "cancel_requested", PAUSED_JOB_STATUS].includes(job.status)) {
         delete meta.runningSituationIds;
     } else {
         meta.runningSituationIds = Array.isArray(meta.runningSituationIds)
@@ -1170,17 +1200,20 @@ export async function syncPlannerMetaToR2(env, jobId) {
         if (!row) return item;
         const resultKeys = compactResultKeys(row.result_keys);
         const hasNewResults = resultKeys.length > 0;
+        const nextStatus = (cancelRequestedJob || row.status === "cancel_requested")
+            ? "pending"
+            : (row.status === "completed" ? "done" : row.status);
         return {
             ...item,
-            status: row.status === "completed" ? "done" : row.status,
-            stage: row.stage || "",
-            stageLabel: STAGE_LABELS[row.stage] || row.stage || "",
+            status: nextStatus,
+            stage: cancelRequestedJob ? "" : (row.stage || ""),
+            stageLabel: cancelRequestedJob ? "" : (STAGE_LABELS[row.stage] || row.stage || ""),
             images: hasNewResults ? resultKeys : (item.images || []),
             selectedImage: hasNewResults
                 ? (resultKeys.includes(item.selectedImage) ? item.selectedImage : null)
                 : (item.selectedImage || null),
-            backgroundJobId: job.id,
-            backgroundItemId: row.id,
+            backgroundJobId: cancelRequestedJob ? undefined : job.id,
+            backgroundItemId: cancelRequestedJob ? undefined : row.id,
             errorMessage: row.error_message || ""
         };
     });
@@ -1229,14 +1262,14 @@ async function enqueueRetry(env, message, attempt, delaySeconds) {
     return true;
 }
 
-async function isBackgroundJobCancelled(env, jobId, itemId) {
+async function isBackgroundJobCancelRequested(env, jobId, itemId) {
     const row = await queryFirst(env.DB, `
         SELECT j.status AS job_status, i.status AS item_status
         FROM planner_background_jobs j
         LEFT JOIN planner_background_items i ON i.id = ?
         WHERE j.id = ?
     `, itemId, jobId);
-    return !row || row.job_status === "cancelled" || row.job_status === "cancel_requested" || row.item_status === "cancelled" || row.item_status === "cancel_requested";
+    return !row || row.job_status === "cancel_requested" || row.item_status === "cancel_requested";
 }
 
 async function isBackgroundJobPaused(env, jobId, itemId) {
@@ -1249,10 +1282,10 @@ async function isBackgroundJobPaused(env, jobId, itemId) {
     return row?.job_status === PAUSED_JOB_STATUS || row?.item_status === PAUSED_JOB_STATUS;
 }
 
-async function abortIfBackgroundJobCancelled(env, jobId, itemId) {
-    if (!await isBackgroundJobCancelled(env, jobId, itemId)) return;
-    const error = new Error("Background job cancelled");
-    error.code = "BACKGROUND_JOB_CANCELLED";
+async function abortIfBackgroundJobCancelRequested(env, jobId, itemId) {
+    if (!await isBackgroundJobCancelRequested(env, jobId, itemId)) return;
+    const error = new Error("Background job cancel requested");
+    error.code = "BACKGROUND_JOB_CANCEL_REQUESTED";
     throw error;
 }
 
@@ -1293,21 +1326,13 @@ export async function processPlannerQueueMessage(env, message) {
         return;
     }
 
-    if (["cancel_requested", "cancelled"].includes(job.status) || ["cancel_requested", "cancelled"].includes(item.status)) {
+    if (job.status === "cancel_requested" || item.status === "cancel_requested") {
+        await resetPlannerMetaAfterBackgroundCancel(env, jobId).catch(() => null);
         await env.DB.batch([
-            env.DB.prepare(`
-                UPDATE planner_background_jobs
-                SET status = 'cancelled', stage = 'cancelled', updated_at = ?, completed_at = COALESCE(completed_at, ?), cancelled_at = COALESCE(cancelled_at, ?)
-                WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
-            `).bind(nowIso(), nowIso(), nowIso(), jobId),
-            env.DB.prepare(`
-                UPDATE planner_background_items
-                SET status = 'cancelled', stage = 'cancelled', generation_json = '{}', updated_at = ?, completed_at = COALESCE(completed_at, ?)
-                WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
-            `).bind(nowIso(), nowIso(), jobId)
+            env.DB.prepare("DELETE FROM planner_background_queue WHERE job_id = ?").bind(jobId),
+            env.DB.prepare("DELETE FROM planner_background_items WHERE job_id = ?").bind(jobId),
+            env.DB.prepare("DELETE FROM planner_background_jobs WHERE id = ?").bind(jobId)
         ]);
-        await env.DB.prepare("DELETE FROM planner_background_queue WHERE job_id = ?").bind(jobId).run();
-        await syncPlannerMetaToR2Safely(env, jobId, { itemId, stage: "cancelled_sync" });
         await cleanupFinishedBackgroundJobs(env).catch(() => null);
         return;
     }
@@ -1341,7 +1366,7 @@ export async function processPlannerQueueMessage(env, message) {
         const request = buildNovelAiPayload(generation, seed);
         await updateProgressStage(env, jobId, itemId, "novelai_request");
         await waitForNovelAiSlot(env);
-        await abortIfBackgroundJobCancelled(env, jobId, itemId);
+        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         if (await isBackgroundJobPaused(env, jobId, itemId)) {
             if (queueEntry) {
                 await env.DB.prepare(`
@@ -1355,32 +1380,32 @@ export async function processPlannerQueueMessage(env, message) {
             return;
         }
         const zipBuffer = await callNovelAi(env, request.payload);
-        await abortIfBackgroundJobCancelled(env, jobId, itemId);
+        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         await updateProgressStage(env, jobId, itemId, "novelai_response");
         await updateProgressStage(env, jobId, itemId, "zip_extract");
         const extracted = await extractFirstZipFile(zipBuffer);
-        await abortIfBackgroundJobCancelled(env, jobId, itemId);
+        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         await updateProgressStage(env, jobId, itemId, "webp_encode");
         const webpBuffer = await encodeWebP(env, extracted.data);
-        await abortIfBackgroundJobCancelled(env, jobId, itemId);
+        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         const fileName = makeResultFileName(imageIndex);
         const key = `${item.output_prefix}${fileName}`;
 
         await updateProgressStage(env, jobId, itemId, "r2_put");
-        await abortIfBackgroundJobCancelled(env, jobId, itemId);
+        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         await putR2WithRetry(env.imgBucket, key, webpBuffer, {
             httpMetadata: { contentType: "image/webp" },
             customMetadata: { ispublic: "false", backgroundjobid: jobId }
         });
-        if (await isBackgroundJobCancelled(env, jobId, itemId)) {
+        if (await isBackgroundJobCancelRequested(env, jobId, itemId)) {
             await env.imgBucket.delete(key).catch(() => null);
-            await abortIfBackgroundJobCancelled(env, jobId, itemId);
+            await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         }
 
         const resultKeys = parseResultKeys(item.result_keys);
         resultKeys[imageIndex] = key;
         await updateProgressStage(env, jobId, itemId, "metadata_put");
-        await abortIfBackgroundJobCancelled(env, jobId, itemId);
+        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         const metadata = {
             "Negative Prompt": request.negative,
             Resolution: `${request.width} x ${request.height}`,
@@ -1418,7 +1443,7 @@ export async function processPlannerQueueMessage(env, message) {
                 status = ?,
                 stage = ?,
                 result_keys = ?,
-                generation_json = CASE WHEN ? IN ('completed', 'partial_failed', 'failed', 'cancelled') THEN '{}' ELSE generation_json END,
+                generation_json = CASE WHEN ? IN ('completed', 'partial_failed', 'failed') THEN '{}' ELSE generation_json END,
                 error_message = NULL,
                 updated_at = ?,
                 completed_at = CASE WHEN ? IN ('completed', 'partial_failed') THEN ? ELSE completed_at END
@@ -1441,7 +1466,7 @@ export async function processPlannerQueueMessage(env, message) {
         }
     } catch (error) {
         const errorMessage = error.message || String(error);
-        if (error?.code === "BACKGROUND_JOB_CANCELLED") {
+        if (error?.code === "BACKGROUND_JOB_CANCEL_REQUESTED") {
             if (queueEntry) {
                 await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
             }
