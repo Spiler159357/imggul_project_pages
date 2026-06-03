@@ -241,10 +241,10 @@ function isPlannerActiveStatus(status) {
 
 function isPlannerConfirmBlocked(meta = {}, item = null) {
     if (!item) return false;
-    if (isPlannerActiveStatus(meta.status)) return true;
-    if (isPlannerActiveStatus(meta.backgroundStatus?.status)) return true;
-    if (isPlannerActiveStatus(item.status)) return true;
-    return Array.isArray(meta.runningSituationIds) && meta.runningSituationIds.includes(item.situationId);
+    const metaActive = isPlannerActiveStatus(meta.status);
+    const backgroundActive = isPlannerActiveStatus(meta.backgroundStatus?.status);
+    if (metaActive || backgroundActive) return true;
+    return ['running', 'cancel_requested'].includes(item.status);
 }
 
 function isPlannerResumableStatus(status) {
@@ -2173,6 +2173,9 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
         nextMeta.backgroundStatus = status;
         nextMeta.status = status.status || nextMeta.status;
         nextMeta.backgroundJobId = status.jobId || nextMeta.backgroundJobId;
+        if (!isPlannerActiveStatus(status.status)) {
+            delete nextMeta.runningSituationIds;
+        }
         if (Array.isArray(status.items) && Array.isArray(nextMeta.items)) {
             nextMeta.items = nextMeta.items.map(item => {
                 const statusItem = status.items.find(entry => entry.situationId === item.situationId);
@@ -2187,6 +2190,7 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
                 };
             });
         }
+        await savePlannerMeta(project, nextMeta).catch(() => null);
         window.PROJECT_PLANNER_META = nextMeta;
     }
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
