@@ -127,6 +127,401 @@ async function putJsonDocument(env, docType, objectKey, value, source = 'db') {
     `).bind(docType, objectKey, JSON.stringify(value || {}), source, timestamp, timestamp).run();
 }
 
+async function ensurePlannerMetaSchema(env) {
+    if (!env.DB) throw new Error('DB binding is not configured');
+    await env.DB.batch([
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_metas (
+                object_key TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL DEFAULT '',
+                project_prefix TEXT NOT NULL,
+                character_id TEXT NOT NULL,
+                character_prefix TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft',
+                stage TEXT NOT NULL DEFAULT '',
+                stage_label TEXT NOT NULL DEFAULT '',
+                default_count INTEGER NOT NULL DEFAULT 20,
+                background_job_id TEXT NOT NULL DEFAULT '',
+                background_status_json TEXT NOT NULL DEFAULT '{}',
+                running_situation_ids_json TEXT NOT NULL DEFAULT '[]',
+                extra_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_items (
+                id TEXT PRIMARY KEY,
+                meta_object_key TEXT NOT NULL,
+                situation_id TEXT NOT NULL,
+                situation_name TEXT NOT NULL DEFAULT '',
+                situation_index INTEGER,
+                image_number TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 20,
+                status TEXT NOT NULL DEFAULT 'pending',
+                stage TEXT NOT NULL DEFAULT '',
+                stage_label TEXT NOT NULL DEFAULT '',
+                selected_image TEXT NOT NULL DEFAULT '',
+                final_image TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                background_job_id TEXT NOT NULL DEFAULT '',
+                background_item_id TEXT NOT NULL DEFAULT '',
+                generation_json TEXT NOT NULL DEFAULT '{}',
+                extra_json TEXT NOT NULL DEFAULT '{}',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (meta_object_key, situation_id)
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_item_v4_rows (
+                item_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                subject TEXT NOT NULL DEFAULT '',
+                clothing TEXT NOT NULL DEFAULT '',
+                expression TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL DEFAULT '',
+                negative TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (item_id, row_index)
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_item_images (
+                item_id TEXT NOT NULL,
+                image_key TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (item_id, image_key)
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_item_image_snapshots (
+                item_id TEXT NOT NULL,
+                image_key TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (item_id, image_key)
+            )
+        `)
+    ]);
+}
+
+function parseJsonField(value, fallback) {
+    try {
+        return value ? JSON.parse(value) : fallback;
+    } catch {
+        return fallback;
+    }
+}
+
+function getPlannerItemDbId(objectKey, item, index) {
+    return `${objectKey}#${item?.situationId || item?.imageNumber || index}`;
+}
+
+function splitPlannerMetaForDb(meta = {}) {
+    const {
+        items,
+        projectId,
+        projectPrefix,
+        characterId,
+        characterPrefix,
+        status,
+        stage,
+        stageLabel,
+        defaultCount,
+        backgroundJobId,
+        backgroundStatus,
+        runningSituationIds,
+        createdAt,
+        updatedAt,
+        ...extra
+    } = meta || {};
+    return {
+        header: {
+            projectId: projectId || '',
+            projectPrefix: projectPrefix || '',
+            characterId: characterId || '',
+            characterPrefix: characterPrefix || '',
+            status: status || 'draft',
+            stage: stage || '',
+            stageLabel: stageLabel || '',
+            defaultCount: Number.parseInt(defaultCount || 20, 10) || 20,
+            backgroundJobId: backgroundJobId || '',
+            backgroundStatus: backgroundStatus || {},
+            runningSituationIds: Array.isArray(runningSituationIds) ? runningSituationIds : [],
+            extra,
+            createdAt,
+            updatedAt
+        },
+        items: Array.isArray(items) ? items : []
+    };
+}
+
+function splitPlannerItemForDb(item = {}) {
+    const {
+        generation,
+        images,
+        imagePromptSnapshots,
+        situationId,
+        situationName,
+        situationIndex,
+        imageNumber,
+        count,
+        status,
+        stage,
+        stageLabel,
+        selectedImage,
+        finalImage,
+        errorMessage,
+        backgroundJobId,
+        backgroundItemId,
+        ...extra
+    } = item || {};
+    const generationCopy = { ...(generation || {}) };
+    const v4Rows = Array.isArray(generationCopy.v4PromptCharacters)
+        ? generationCopy.v4PromptCharacters
+        : (Array.isArray(generationCopy.v4_prompt) ? generationCopy.v4_prompt : []);
+    delete generationCopy.v4PromptCharacters;
+    delete generationCopy.v4_prompt;
+    return {
+        item: {
+            situationId: situationId || '',
+            situationName: situationName || situationId || '',
+            situationIndex: Number.isFinite(Number(situationIndex)) ? Number(situationIndex) : null,
+            imageNumber: String(imageNumber || ''),
+            count: Number.parseInt(count || 20, 10) || 20,
+            status: status || 'pending',
+            stage: stage || '',
+            stageLabel: stageLabel || '',
+            selectedImage: selectedImage || '',
+            finalImage: finalImage || '',
+            errorMessage: errorMessage || '',
+            backgroundJobId: backgroundJobId || '',
+            backgroundItemId: backgroundItemId || '',
+            generation: generationCopy,
+            extra
+        },
+        images: Array.isArray(images) ? images.filter(Boolean) : [],
+        snapshots: imagePromptSnapshots && typeof imagePromptSnapshots === 'object' ? imagePromptSnapshots : {},
+        v4Rows: Array.isArray(v4Rows) ? v4Rows : []
+    };
+}
+
+async function putPlannerMetaDocument(env, objectKey, meta = {}) {
+    await ensurePlannerMetaSchema(env);
+    const timestamp = nowIso();
+    const { header, items } = splitPlannerMetaForDb(meta);
+    await env.DB.batch([
+        env.DB.prepare('DELETE FROM planner_item_image_snapshots WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_images WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_v4_rows WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_items WHERE meta_object_key = ?').bind(objectKey),
+        env.DB.prepare(`
+            INSERT INTO planner_metas (
+                object_key, project_id, project_prefix, character_id, character_prefix, status, stage, stage_label,
+                default_count, background_job_id, background_status_json, running_situation_ids_json,
+                extra_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(object_key) DO UPDATE SET
+                project_id = excluded.project_id,
+                project_prefix = excluded.project_prefix,
+                character_id = excluded.character_id,
+                character_prefix = excluded.character_prefix,
+                status = excluded.status,
+                stage = excluded.stage,
+                stage_label = excluded.stage_label,
+                default_count = excluded.default_count,
+                background_job_id = excluded.background_job_id,
+                background_status_json = excluded.background_status_json,
+                running_situation_ids_json = excluded.running_situation_ids_json,
+                extra_json = excluded.extra_json,
+                updated_at = excluded.updated_at
+        `).bind(
+            objectKey,
+            header.projectId,
+            header.projectPrefix,
+            header.characterId,
+            header.characterPrefix,
+            header.status,
+            header.stage,
+            header.stageLabel,
+            header.defaultCount,
+            header.backgroundJobId,
+            JSON.stringify(header.backgroundStatus || {}),
+            JSON.stringify(header.runningSituationIds || []),
+            JSON.stringify(header.extra || {}),
+            header.createdAt || timestamp,
+            timestamp
+        )
+    ]);
+
+    const statements = [];
+    items.forEach((rawItem, index) => {
+        const itemId = getPlannerItemDbId(objectKey, rawItem, index);
+        const split = splitPlannerItemForDb(rawItem);
+        statements.push(env.DB.prepare(`
+            INSERT INTO planner_items (
+                id, meta_object_key, situation_id, situation_name, situation_index, image_number, count,
+                status, stage, stage_label, selected_image, final_image, error_message,
+                background_job_id, background_item_id, generation_json, extra_json, sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+            itemId,
+            objectKey,
+            split.item.situationId,
+            split.item.situationName,
+            split.item.situationIndex,
+            split.item.imageNumber,
+            split.item.count,
+            split.item.status,
+            split.item.stage,
+            split.item.stageLabel,
+            split.item.selectedImage,
+            split.item.finalImage,
+            split.item.errorMessage,
+            split.item.backgroundJobId,
+            split.item.backgroundItemId,
+            JSON.stringify(split.item.generation || {}),
+            JSON.stringify(split.item.extra || {}),
+            index,
+            timestamp,
+            timestamp
+        ));
+        split.v4Rows.forEach((row, rowIndex) => {
+            statements.push(env.DB.prepare(`
+                INSERT INTO planner_item_v4_rows (item_id, row_index, subject, clothing, expression, action, negative)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).bind(itemId, rowIndex, row?.subject || '', row?.clothing || '', row?.expression || '', row?.action || '', row?.negative || ''));
+        });
+        split.images.forEach((imageKey, imageIndex) => {
+            statements.push(env.DB.prepare(`
+                INSERT INTO planner_item_images (item_id, image_key, sort_order, created_at)
+                VALUES (?, ?, ?, ?)
+            `).bind(itemId, imageKey, imageIndex, timestamp));
+            if (split.snapshots[imageKey]) {
+                statements.push(env.DB.prepare(`
+                    INSERT INTO planner_item_image_snapshots (item_id, image_key, snapshot_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                `).bind(itemId, imageKey, JSON.stringify(split.snapshots[imageKey] || {}), timestamp, timestamp));
+            }
+        });
+    });
+    for (let i = 0; i < statements.length; i += 50) {
+        await env.DB.batch(statements.slice(i, i + 50));
+    }
+    await ensureJsonDbSchema(env);
+    await env.DB.prepare(
+        'DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?'
+    ).bind('planner_meta', objectKey).run();
+}
+
+async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
+    await ensurePlannerMetaSchema(env);
+    const header = await env.DB.prepare('SELECT * FROM planner_metas WHERE object_key = ?').bind(objectKey).first();
+    if (!header) {
+        await ensureJsonDbSchema(env);
+        const row = await env.DB.prepare(
+            'SELECT data_json FROM json_documents WHERE doc_type = ? AND object_key = ?'
+        ).bind('planner_meta', objectKey).first();
+        let fallback = null;
+        if (row?.data_json) {
+            fallback = parseJsonField(row.data_json, null);
+        }
+        if (fallback === null || fallback === undefined) {
+            fallback = fallbackKey ? await readR2Json(env, fallbackKey, null) : null;
+        }
+        if (fallback !== null && fallback !== undefined) await putPlannerMetaDocument(env, objectKey, fallback);
+        return fallback;
+    }
+    const itemRows = (await env.DB.prepare('SELECT * FROM planner_items WHERE meta_object_key = ? ORDER BY sort_order, image_number').bind(objectKey).all()).results || [];
+    const itemIds = itemRows.map(row => row.id);
+    const v4ByItem = new Map();
+    const imagesByItem = new Map();
+    const snapshotsByItem = new Map();
+    for (const row of itemRows) {
+        v4ByItem.set(row.id, []);
+        imagesByItem.set(row.id, []);
+        snapshotsByItem.set(row.id, {});
+    }
+    if (itemIds.length) {
+        const placeholders = itemIds.map(() => '?').join(',');
+        const v4Rows = (await env.DB.prepare(`SELECT * FROM planner_item_v4_rows WHERE item_id IN (${placeholders}) ORDER BY item_id, row_index`).bind(...itemIds).all()).results || [];
+        v4Rows.forEach(row => v4ByItem.get(row.item_id)?.push({
+            subject: row.subject || '',
+            clothing: row.clothing || '',
+            expression: row.expression || '',
+            action: row.action || '',
+            negative: row.negative || ''
+        }));
+        const imageRows = (await env.DB.prepare(`SELECT * FROM planner_item_images WHERE item_id IN (${placeholders}) ORDER BY item_id, sort_order`).bind(...itemIds).all()).results || [];
+        imageRows.forEach(row => imagesByItem.get(row.item_id)?.push(row.image_key));
+        const snapshotRows = (await env.DB.prepare(`SELECT * FROM planner_item_image_snapshots WHERE item_id IN (${placeholders})`).bind(...itemIds).all()).results || [];
+        snapshotRows.forEach(row => {
+            const snapshots = snapshotsByItem.get(row.item_id);
+            if (snapshots) snapshots[row.image_key] = parseJsonField(row.snapshot_json, {});
+        });
+    }
+    const meta = {
+        ...parseJsonField(header.extra_json, {}),
+        projectId: header.project_id || '',
+        projectPrefix: header.project_prefix || '',
+        characterId: header.character_id || '',
+        characterPrefix: header.character_prefix || '',
+        status: header.status || 'draft',
+        stage: header.stage || '',
+        stageLabel: header.stage_label || '',
+        defaultCount: header.default_count || 20,
+        updatedAt: Date.parse(header.updated_at) || Date.now(),
+        items: itemRows.map(row => {
+            const generation = parseJsonField(row.generation_json, {});
+            const v4Rows = v4ByItem.get(row.id) || [];
+            generation.v4PromptCharacters = v4Rows;
+            generation.v4_prompt = v4Rows;
+            const snapshots = snapshotsByItem.get(row.id) || {};
+            return {
+                ...parseJsonField(row.extra_json, {}),
+                situationId: row.situation_id,
+                situationName: row.situation_name,
+                situationIndex: row.situation_index,
+                imageNumber: row.image_number,
+                count: row.count,
+                status: row.status,
+                stage: row.stage,
+                stageLabel: row.stage_label,
+                selectedImage: row.selected_image || null,
+                finalImage: row.final_image || null,
+                errorMessage: row.error_message || '',
+                backgroundJobId: row.background_job_id || undefined,
+                backgroundItemId: row.background_item_id || undefined,
+                generation,
+                images: imagesByItem.get(row.id) || [],
+                imagePromptSnapshots: Object.keys(snapshots).length ? snapshots : undefined
+            };
+        })
+    };
+    if (header.background_job_id) meta.backgroundJobId = header.background_job_id;
+    const backgroundStatus = parseJsonField(header.background_status_json, {});
+    if (Object.keys(backgroundStatus).length) meta.backgroundStatus = backgroundStatus;
+    const runningSituationIds = parseJsonField(header.running_situation_ids_json, []);
+    if (runningSituationIds.length) meta.runningSituationIds = runningSituationIds;
+    return meta;
+}
+
+async function deletePlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
+    await ensurePlannerMetaSchema(env);
+    await env.DB.batch([
+        env.DB.prepare('DELETE FROM planner_item_image_snapshots WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_images WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_v4_rows WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_items WHERE meta_object_key = ?').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_metas WHERE object_key = ?').bind(objectKey),
+        env.DB.prepare('DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?').bind('planner_meta', objectKey)
+    ]);
+    if (fallbackKey) await env.imgBucket.delete(fallbackKey).catch(() => null);
+}
+
 async function getDbAliases(env, scope, projectName = '') {
     await ensureJsonDbSchema(env);
     const rows = await env.DB.prepare(
@@ -332,6 +727,45 @@ export async function onRequest(context) {
         }
     }
 
+    if (path === "/api/planner/meta" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const key = url.searchParams.get('key') || '';
+            const fallbackKey = url.searchParams.get('fallbackKey') || key;
+            if (!key) return jsonResponse({ error: 'key is required' }, { status: 400 });
+            const data = await getPlannerMetaDocument(env, key, fallbackKey);
+            if (data === null || data === undefined) return jsonResponse({ data: null }, { status: 404 });
+            return jsonResponse({ data });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/planner/meta" && method === "PUT") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            if (!body?.key) return jsonResponse({ error: 'key is required' }, { status: 400 });
+            await putPlannerMetaDocument(env, body.key, body.data || {});
+            if (body.fallbackKey) await writeR2Json(env, body.fallbackKey, body.data || {});
+            return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/planner/meta" && method === "DELETE") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            if (!body?.key) return jsonResponse({ error: 'key is required' }, { status: 400 });
+            await deletePlannerMetaDocument(env, body.key, body.fallbackKey || body.key);
+            return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
     if (path === "/api/generate" && method === "POST") {
         if (!isAdmin) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 403 });
         if (!env.NOVELAI_TOKEN) return new Response(JSON.stringify({ error: 'Novel AI API 토큰이 설정되지 않았습니다.' }), { status: 500 });
@@ -411,6 +845,11 @@ export async function onRequest(context) {
             const key = url.searchParams.get('key') || '';
             const fallbackKey = url.searchParams.get('fallbackKey') || key;
             if (!docType || !key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
+            if (docType === 'planner_meta') {
+                const data = await getPlannerMetaDocument(env, key, fallbackKey);
+                if (data === null || data === undefined) return jsonResponse({ data: null }, { status: 404 });
+                return jsonResponse({ data });
+            }
             const data = await getJsonDocument(env, docType, key, fallbackKey, null);
             if (data === null || data === undefined) return jsonResponse({ data: null }, { status: 404 });
             return jsonResponse({ data });
@@ -424,6 +863,11 @@ export async function onRequest(context) {
         try {
             const body = await request.json();
             if (!body?.type || !body?.key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
+            if (body.type === 'planner_meta') {
+                await putPlannerMetaDocument(env, body.key, body.data || {});
+                if (body.fallbackKey) await writeR2Json(env, body.fallbackKey, body.data || {});
+                return jsonResponse({ success: true });
+            }
             await putJsonDocument(env, body.type, body.key, body.data || {});
             if (body.fallbackKey) await writeR2Json(env, body.fallbackKey, body.data || {});
             return jsonResponse({ success: true });
@@ -437,6 +881,10 @@ export async function onRequest(context) {
         try {
             const body = await request.json();
             if (!body?.type || !body?.key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
+            if (body.type === 'planner_meta') {
+                await deletePlannerMetaDocument(env, body.key, body.fallbackKey || body.key);
+                return jsonResponse({ success: true });
+            }
             await ensureJsonDbSchema(env);
             await env.DB.prepare(
                 'DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?'

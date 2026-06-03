@@ -1061,6 +1061,10 @@ async function putJsonObject(bucket, key, value) {
 
 async function putJsonDocument(env, docType, objectKey, value) {
     if (!env?.DB) return;
+    if (docType === "planner_meta") {
+        await putPlannerMetaDocument(env, objectKey, value);
+        return;
+    }
     const timestamp = nowIso();
     await env.DB.prepare(`
         CREATE TABLE IF NOT EXISTS json_documents (
@@ -1083,6 +1087,296 @@ async function putJsonDocument(env, docType, objectKey, value) {
     `).bind(docType, objectKey, JSON.stringify(value || {}), timestamp, timestamp).run();
 }
 
+async function ensurePlannerMetaSchema(env) {
+    if (!env?.DB) return;
+    await env.DB.batch([
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_metas (
+                object_key TEXT PRIMARY KEY,
+                project_id TEXT NOT NULL DEFAULT '',
+                project_prefix TEXT NOT NULL,
+                character_id TEXT NOT NULL,
+                character_prefix TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft',
+                stage TEXT NOT NULL DEFAULT '',
+                stage_label TEXT NOT NULL DEFAULT '',
+                default_count INTEGER NOT NULL DEFAULT 20,
+                background_job_id TEXT NOT NULL DEFAULT '',
+                background_status_json TEXT NOT NULL DEFAULT '{}',
+                running_situation_ids_json TEXT NOT NULL DEFAULT '[]',
+                extra_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_items (
+                id TEXT PRIMARY KEY,
+                meta_object_key TEXT NOT NULL,
+                situation_id TEXT NOT NULL,
+                situation_name TEXT NOT NULL DEFAULT '',
+                situation_index INTEGER,
+                image_number TEXT NOT NULL,
+                count INTEGER NOT NULL DEFAULT 20,
+                status TEXT NOT NULL DEFAULT 'pending',
+                stage TEXT NOT NULL DEFAULT '',
+                stage_label TEXT NOT NULL DEFAULT '',
+                selected_image TEXT NOT NULL DEFAULT '',
+                final_image TEXT NOT NULL DEFAULT '',
+                error_message TEXT NOT NULL DEFAULT '',
+                background_job_id TEXT NOT NULL DEFAULT '',
+                background_item_id TEXT NOT NULL DEFAULT '',
+                generation_json TEXT NOT NULL DEFAULT '{}',
+                extra_json TEXT NOT NULL DEFAULT '{}',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (meta_object_key, situation_id)
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_item_v4_rows (
+                item_id TEXT NOT NULL,
+                row_index INTEGER NOT NULL,
+                subject TEXT NOT NULL DEFAULT '',
+                clothing TEXT NOT NULL DEFAULT '',
+                expression TEXT NOT NULL DEFAULT '',
+                action TEXT NOT NULL DEFAULT '',
+                negative TEXT NOT NULL DEFAULT '',
+                PRIMARY KEY (item_id, row_index)
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_item_images (
+                item_id TEXT NOT NULL,
+                image_key TEXT NOT NULL,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (item_id, image_key)
+            )
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS planner_item_image_snapshots (
+                item_id TEXT NOT NULL,
+                image_key TEXT NOT NULL,
+                snapshot_json TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY (item_id, image_key)
+            )
+        `)
+    ]);
+}
+
+function getPlannerItemDbId(objectKey, item, index) {
+    return `${objectKey}#${item?.situationId || item?.imageNumber || index}`;
+}
+
+function splitPlannerMetaForDb(meta = {}) {
+    const {
+        items,
+        projectId,
+        projectPrefix,
+        characterId,
+        characterPrefix,
+        status,
+        stage,
+        stageLabel,
+        defaultCount,
+        backgroundJobId,
+        backgroundStatus,
+        runningSituationIds,
+        createdAt,
+        ...extra
+    } = meta || {};
+    return {
+        header: {
+            projectId: projectId || '',
+            projectPrefix: projectPrefix || '',
+            characterId: characterId || '',
+            characterPrefix: characterPrefix || '',
+            status: status || 'draft',
+            stage: stage || '',
+            stageLabel: stageLabel || '',
+            defaultCount: Number.parseInt(defaultCount || 20, 10) || 20,
+            backgroundJobId: backgroundJobId || '',
+            backgroundStatus: backgroundStatus || {},
+            runningSituationIds: Array.isArray(runningSituationIds) ? runningSituationIds : [],
+            extra,
+            createdAt
+        },
+        items: Array.isArray(items) ? items : []
+    };
+}
+
+function splitPlannerItemForDb(item = {}) {
+    const {
+        generation,
+        images,
+        imagePromptSnapshots,
+        situationId,
+        situationName,
+        situationIndex,
+        imageNumber,
+        count,
+        status,
+        stage,
+        stageLabel,
+        selectedImage,
+        finalImage,
+        errorMessage,
+        backgroundJobId,
+        backgroundItemId,
+        ...extra
+    } = item || {};
+    const generationCopy = { ...(generation || {}) };
+    const v4Rows = Array.isArray(generationCopy.v4PromptCharacters)
+        ? generationCopy.v4PromptCharacters
+        : (Array.isArray(generationCopy.v4_prompt) ? generationCopy.v4_prompt : []);
+    delete generationCopy.v4PromptCharacters;
+    delete generationCopy.v4_prompt;
+    return {
+        item: {
+            situationId: situationId || '',
+            situationName: situationName || situationId || '',
+            situationIndex: Number.isFinite(Number(situationIndex)) ? Number(situationIndex) : null,
+            imageNumber: String(imageNumber || ''),
+            count: Number.parseInt(count || 20, 10) || 20,
+            status: status || 'pending',
+            stage: stage || '',
+            stageLabel: stageLabel || '',
+            selectedImage: selectedImage || '',
+            finalImage: finalImage || '',
+            errorMessage: errorMessage || '',
+            backgroundJobId: backgroundJobId || '',
+            backgroundItemId: backgroundItemId || '',
+            generation: generationCopy,
+            extra
+        },
+        images: Array.isArray(images) ? images.filter(Boolean) : [],
+        snapshots: imagePromptSnapshots && typeof imagePromptSnapshots === 'object' ? imagePromptSnapshots : {},
+        v4Rows: Array.isArray(v4Rows) ? v4Rows : []
+    };
+}
+
+async function putPlannerMetaDocument(env, objectKey, meta = {}) {
+    if (!env?.DB) return;
+    await ensurePlannerMetaSchema(env);
+    const timestamp = nowIso();
+    const { header, items } = splitPlannerMetaForDb(meta);
+    await env.DB.batch([
+        env.DB.prepare('DELETE FROM planner_item_image_snapshots WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_images WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_v4_rows WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_items WHERE meta_object_key = ?').bind(objectKey),
+        env.DB.prepare(`
+            INSERT INTO planner_metas (
+                object_key, project_id, project_prefix, character_id, character_prefix, status, stage, stage_label,
+                default_count, background_job_id, background_status_json, running_situation_ids_json,
+                extra_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(object_key) DO UPDATE SET
+                project_id = excluded.project_id,
+                project_prefix = excluded.project_prefix,
+                character_id = excluded.character_id,
+                character_prefix = excluded.character_prefix,
+                status = excluded.status,
+                stage = excluded.stage,
+                stage_label = excluded.stage_label,
+                default_count = excluded.default_count,
+                background_job_id = excluded.background_job_id,
+                background_status_json = excluded.background_status_json,
+                running_situation_ids_json = excluded.running_situation_ids_json,
+                extra_json = excluded.extra_json,
+                updated_at = excluded.updated_at
+        `).bind(
+            objectKey,
+            header.projectId,
+            header.projectPrefix,
+            header.characterId,
+            header.characterPrefix,
+            header.status,
+            header.stage,
+            header.stageLabel,
+            header.defaultCount,
+            header.backgroundJobId,
+            JSON.stringify(header.backgroundStatus || {}),
+            JSON.stringify(header.runningSituationIds || []),
+            JSON.stringify(header.extra || {}),
+            header.createdAt || timestamp,
+            timestamp
+        )
+    ]);
+    const statements = [];
+    items.forEach((rawItem, index) => {
+        const itemId = getPlannerItemDbId(objectKey, rawItem, index);
+        const split = splitPlannerItemForDb(rawItem);
+        statements.push(env.DB.prepare(`
+            INSERT INTO planner_items (
+                id, meta_object_key, situation_id, situation_name, situation_index, image_number, count,
+                status, stage, stage_label, selected_image, final_image, error_message,
+                background_job_id, background_item_id, generation_json, extra_json, sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+            itemId,
+            objectKey,
+            split.item.situationId,
+            split.item.situationName,
+            split.item.situationIndex,
+            split.item.imageNumber,
+            split.item.count,
+            split.item.status,
+            split.item.stage,
+            split.item.stageLabel,
+            split.item.selectedImage,
+            split.item.finalImage,
+            split.item.errorMessage,
+            split.item.backgroundJobId,
+            split.item.backgroundItemId,
+            JSON.stringify(split.item.generation || {}),
+            JSON.stringify(split.item.extra || {}),
+            index,
+            timestamp,
+            timestamp
+        ));
+        split.v4Rows.forEach((row, rowIndex) => {
+            statements.push(env.DB.prepare(`
+                INSERT INTO planner_item_v4_rows (item_id, row_index, subject, clothing, expression, action, negative)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+            `).bind(itemId, rowIndex, row?.subject || '', row?.clothing || '', row?.expression || '', row?.action || '', row?.negative || ''));
+        });
+        split.images.forEach((imageKey, imageIndex) => {
+            statements.push(env.DB.prepare(`
+                INSERT INTO planner_item_images (item_id, image_key, sort_order, created_at)
+                VALUES (?, ?, ?, ?)
+            `).bind(itemId, imageKey, imageIndex, timestamp));
+            if (split.snapshots[imageKey]) {
+                statements.push(env.DB.prepare(`
+                    INSERT INTO planner_item_image_snapshots (item_id, image_key, snapshot_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                `).bind(itemId, imageKey, JSON.stringify(split.snapshots[imageKey] || {}), timestamp, timestamp));
+            }
+        });
+    });
+    for (let i = 0; i < statements.length; i += 50) {
+        await env.DB.batch(statements.slice(i, i + 50));
+    }
+    await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS json_documents (
+            doc_type TEXT NOT NULL,
+            object_key TEXT NOT NULL,
+            data_json TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'db',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (doc_type, object_key)
+        )
+    `).run();
+    await env.DB.prepare(
+        'DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?'
+    ).bind('planner_meta', objectKey).run();
+}
+
 async function saveMetadata(env, outputPrefix, fileName, metadata) {
     const key = `${outputPrefix}_meta.json`;
     const db = await readJsonObject(env.imgBucket, key, {});
@@ -1100,6 +1394,10 @@ async function resetPlannerMetaAfterBackgroundCancel(env, jobId) {
 
     const bySituation = new Map(items.map(item => [item.situation_id, item]));
     const meta = storedMeta;
+    meta.projectId = meta.projectId || job.project_id || "";
+    meta.projectPrefix = meta.projectPrefix || job.project_prefix || "";
+    meta.characterId = meta.characterId || job.character_id || "";
+    meta.characterPrefix = meta.characterPrefix || job.character_prefix || "";
     meta.status = "draft";
     meta.stage = "";
     meta.stageLabel = "";
@@ -1171,6 +1469,10 @@ export async function syncPlannerMetaToR2(env, jobId) {
     const storedMeta = await readJsonObject(env.imgBucket, metaKey, null);
     if (!storedMeta || typeof storedMeta !== "object") return;
     const meta = storedMeta;
+    meta.projectId = meta.projectId || job.project_id || "";
+    meta.projectPrefix = meta.projectPrefix || job.project_prefix || "";
+    meta.characterId = meta.characterId || job.character_id || "";
+    meta.characterPrefix = meta.characterPrefix || job.character_prefix || "";
     const bySituation = new Map(items.map(item => [item.situation_id, item]));
     const currentIds = new Set(Array.isArray(meta.items) ? meta.items.map(item => item.situationId) : []);
     const snapshotTargetIds = new Set(items.map(item => item.situation_id));

@@ -7,6 +7,44 @@ const PLANNER_DEFAULT_IMAGE_COUNT = 20;
 const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
 
+function derivePlannerStoredMetaStatus(meta) {
+    const items = Array.isArray(meta?.items) ? meta.items : [];
+    if (!items.length) return meta?.status || 'draft';
+    const statuses = items.map(item => getPlannerStoredItemStatus(item, meta));
+    if (statuses.every(status => status === 'confirmed')) return 'confirmed';
+    if (statuses.every(status => status === 'done' || status === 'confirmed')) return 'completed';
+    if (statuses.every(status => status === 'failed')) return 'failed';
+    if (statuses.some(status => status === 'failed' || status === 'partial_failed')) return 'partial_failed';
+    return 'draft';
+}
+
+function normalizePlannerStoredMeta(meta = {}) {
+    const normalized = normalizePlannerMeta(meta || {});
+    const hasBackgroundJob = !!normalized.backgroundJobId;
+    const staleActiveMeta = isPlannerActiveStatus(normalized.status) && !hasBackgroundJob;
+    const staleActiveBackground = isPlannerActiveStatus(normalized.backgroundStatus?.status) && !hasBackgroundJob;
+    if (staleActiveMeta || staleActiveBackground) {
+        delete normalized.backgroundStatus;
+        delete normalized.runningSituationIds;
+        normalized.stage = '';
+        normalized.stageLabel = '';
+        normalized.items = (normalized.items || []).map(item => {
+            if (!isPlannerActiveStatus(item.status) && item.status !== 'paused') return item;
+            return {
+                ...item,
+                status: getPlannerStoredItemStatus(item, normalized),
+                stage: '',
+                stageLabel: ''
+            };
+        });
+        normalized.status = derivePlannerStoredMetaStatus(normalized);
+    } else if (!hasBackgroundJob && isPlannerTerminalStatus(normalized.status)) {
+        delete normalized.backgroundStatus;
+        delete normalized.runningSituationIds;
+    }
+    return normalized;
+}
+
 function clampPlannerImageCount(value, fallback = PLANNER_DEFAULT_IMAGE_COUNT) {
     const parsed = parseInt(value, 10);
     const count = Number.isFinite(parsed) ? parsed : fallback;
@@ -53,15 +91,15 @@ export async function loadPlannerMeta(project, characterId = '') {
     if (!project?.prefix) return null;
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
     const targetKey = getPlannerMetaKey(project, targetCharacterId);
-    let res = await fetch(`/api/db/json-document?type=planner_meta&key=${encodeURIComponent(targetKey)}&fallbackKey=${encodeURIComponent(targetKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    let res = await fetch(`/api/planner/meta?key=${encodeURIComponent(targetKey)}&fallbackKey=${encodeURIComponent(targetKey)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404 && targetCharacterId) {
         const legacyKey = getPlannerMetaKey(project);
-        res = await fetch(`/api/db/json-document?type=planner_meta&key=${encodeURIComponent(legacyKey)}&fallbackKey=${encodeURIComponent(legacyKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+        res = await fetch(`/api/planner/meta?key=${encodeURIComponent(legacyKey)}&fallbackKey=${encodeURIComponent(legacyKey)}&_t=${Date.now()}`, { cache: 'no-store' });
     }
     if (res.status === 404) return null;
     if (!res.ok) throw new Error('플래너 메타데이터를 불러오지 못했습니다.');
     const payload = await res.json();
-    const meta = normalizePlannerMeta(payload.data || {});
+    const meta = normalizePlannerStoredMeta(payload.data || {});
     if (targetCharacterId && meta?.characterId && meta.characterId !== targetCharacterId) return null;
     return meta;
 }
@@ -78,13 +116,15 @@ export async function loadPlannerQueueMetas(project, characters = getProjectItem
 
 export async function savePlannerMeta(project, meta) {
     const key = getPlannerMetaKey(project, meta?.characterId || getSelectedPlannerCharacterId(project));
-    const normalized = normalizePlannerMeta(meta || {});
-    const res = await fetch('/api/db/json-document?_t=' + Date.now(), {
+    const normalized = normalizePlannerStoredMeta(meta || {});
+    normalized.projectId = normalized.projectId || project?.id || '';
+    normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
+    const res = await fetch('/api/planner/meta?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
-        body: JSON.stringify({ type: 'planner_meta', key, fallbackKey: key, data: normalized }),
+        body: JSON.stringify({ key, fallbackKey: key, data: normalized }),
         cache: 'no-store'
     });
     if (!res.ok) {
@@ -96,10 +136,10 @@ export async function savePlannerMeta(project, meta) {
 export async function deletePlannerMeta(project, characterId = '') {
     if (!project?.prefix) return;
     const key = getPlannerMetaKey(project, characterId || getSelectedPlannerCharacterId(project));
-    await fetch('/api/db/json-document', {
+    await fetch('/api/planner/meta', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ type: 'planner_meta', key, fallbackKey: key })
+        body: JSON.stringify({ key, fallbackKey: key })
     }).catch(() => null);
 }
 
@@ -245,18 +285,20 @@ function isPlannerTerminalStatus(status) {
 
 function isPlannerConfirmBlocked(meta = {}, item = null) {
     if (!item) return false;
+    const itemActive = ['running', 'cancel_requested'].includes(item.status);
+    const backgroundJobId = meta.backgroundJobId || meta.backgroundStatus?.jobId || item.backgroundJobId;
     if (isPlannerTerminalStatus(meta.status) || isPlannerTerminalStatus(meta.backgroundStatus?.status)) {
-        return ['running', 'cancel_requested'].includes(item.status);
+        return itemActive && !!backgroundJobId;
     }
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
-        const metaActive = isPlannerActiveStatus(meta.status);
-        const backgroundActive = isPlannerActiveStatus(meta.backgroundStatus?.status);
+        const metaActive = !!backgroundJobId && isPlannerActiveStatus(meta.status);
+        const backgroundActive = !!backgroundJobId && isPlannerActiveStatus(meta.backgroundStatus?.status);
         if (metaActive || backgroundActive) return true;
     } else {
         const browserRun = window.PROJECT_PLANNER_BROWSER_RUN;
         if (browserRun?.status === 'running' && (browserRun.runningSituationIds || []).includes(item.situationId)) return true;
     }
-    return ['running', 'cancel_requested'].includes(item.status);
+    return itemActive && !!backgroundJobId;
 }
 
 function isPlannerResumableStatus(status) {
