@@ -104,6 +104,7 @@ export async function initGenerationQueue() {
  */
 function isPersistableQueueTask(task) {
     return !!task
+        && !task.planner
         && !task.preloadedVibeBase64
         && !task.preloadedDirectorBase64
         && !task.inpaintPayload;

@@ -241,6 +241,14 @@ function isPlannerActiveStatus(status) {
     return ['queued', 'running', 'cancel_requested'].includes(status);
 }
 
+function isPlannerConfirmBlocked(meta = {}, item = null) {
+    if (!item) return false;
+    if (isPlannerActiveStatus(meta.status)) return true;
+    if (isPlannerActiveStatus(meta.backgroundStatus?.status)) return true;
+    if (isPlannerActiveStatus(item.status)) return true;
+    return Array.isArray(meta.runningSituationIds) && meta.runningSituationIds.includes(item.situationId);
+}
+
 function isPlannerResumableStatus(status) {
     return status === 'paused';
 }
@@ -784,6 +792,7 @@ export function renderPlannerResultModal(meta) {
     if (!item) return '';
 
     const images = Array.isArray(item.images) ? item.images : [];
+    const confirmBlocked = isPlannerConfirmBlocked(meta, item);
     return `
         <div id="planner-result-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
             <div class="w-full max-w-5xl max-h-[88vh] rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden flex flex-col">
@@ -815,8 +824,8 @@ export function renderPlannerResultModal(meta) {
                     <p id="planner-result-selected-label" class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.'}</p>
                     <div class="flex items-center gap-2">
                         <button type="button" onclick="window.closePlannerResultModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
-                        <button type="button" onclick="window.startPlannerGeneration('${escapeJsString(item.situationId)}')" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">다시 생성</button>
-                        <button id="planner-result-confirm-button" type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}')" ${item.selectedImage ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
+                        <button type="button" onclick="window.startPlannerGeneration('${escapeJsString(item.situationId)}', { clearExisting: true })" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">다시 생성</button>
+                        <button id="planner-result-confirm-button" type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}')" ${item.selectedImage && !confirmBlocked ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
                     </div>
                 </div>
             </div>
@@ -951,7 +960,7 @@ export function syncPlannerResultModalSelection(item) {
     const label = document.getElementById('planner-result-selected-label');
     if (label) label.textContent = item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.';
     const confirmButton = document.getElementById('planner-result-confirm-button');
-    if (confirmButton) confirmButton.disabled = !item.selectedImage;
+    if (confirmButton) confirmButton.disabled = !item.selectedImage || isPlannerConfirmBlocked(window.PROJECT_PLANNER_META || {}, item);
 }
 
 export function renderPlannerProgressPanel(meta) {
@@ -1042,7 +1051,7 @@ function renderPlannerRunControls(summary) {
     const canStart = !summary.active && !summary.paused;
     return `
         ${canStart ? `
-            <button type="button" onclick="window.startPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
+            <button type="button" onclick="window.startPlannerGeneration(null, { clearExisting: true })" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
                 <i data-lucide="play" class="w-4 h-4"></i> 실행 시작
             </button>
         ` : ''}
@@ -2276,6 +2285,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     meta = readPlannerEditsFromDom(meta);
     await persistPlannerGenerationToSituations(project, meta).catch(() => null);
     const resumeRun = !!options.resume;
+    const clearExisting = options.clearExisting === true && !resumeRun;
     const targetItems = situationId
         ? meta.items.filter(item => item.situationId === situationId && isPlannerRunnableItem(item, meta, resumeRun))
         : meta.items.filter(item => isPlannerRunnableItem(item, meta, resumeRun));
@@ -2302,7 +2312,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     try {
         for (const item of targetItems) {
-            if (!resumeRun && (item.images?.length || item.selectedImage)) {
+            if (clearExisting && (item.images?.length || item.selectedImage)) {
                 await clearPlannerItemImages(project, item);
             }
             item.status = 'running';
@@ -2454,7 +2464,8 @@ export function buildPlannerMetadataFallback(item) {
 
 export async function confirmPlannerSelection(situationId = null) {
     const project = getActiveProject();
-    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    let meta = project ? await loadPlannerMeta(project).catch(() => null) : null;
+    if (!meta) meta = window.PROJECT_PLANNER_META || null;
     if (!project || !meta?.items?.length) return;
     const confirmButton = document.getElementById('planner-result-confirm-button');
     if (confirmButton) confirmButton.disabled = true;
@@ -2472,6 +2483,12 @@ export async function confirmPlannerSelection(situationId = null) {
     );
     if (!selectedItems.length) {
         setPlannerStatus('확정 전에 상황별 이미지를 하나 이상 선택하세요.');
+        if (confirmButton) confirmButton.disabled = false;
+        return;
+    }
+    const blockedItems = selectedItems.filter(item => isPlannerConfirmBlocked(meta, item));
+    if (blockedItems.length) {
+        setPlannerStatus('생성 중에는 플랜을 확정할 수 없습니다. 일시정지 또는 완료 후 확정하세요.');
         if (confirmButton) confirmButton.disabled = false;
         return;
     }
@@ -2516,6 +2533,10 @@ export async function confirmPlannerSelection(situationId = null) {
     }
 
     const selectedIds = new Set(selectedItems.map(item => item.situationId));
+    if (Array.isArray(window.GENERATION_QUEUE) && window.GENERATION_QUEUE.length) {
+        window.GENERATION_QUEUE = window.GENERATION_QUEUE.filter(task => !selectedIds.has(task?.planner?.situationId));
+        if (window.saveQueueToStorage) window.saveQueueToStorage();
+    }
     meta.items = meta.items.filter(item => !selectedIds.has(item.situationId));
     meta.status = meta.items.length ? 'draft' : 'confirmed';
     meta.updatedAt = Date.now();
