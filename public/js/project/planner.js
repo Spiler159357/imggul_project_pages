@@ -2177,17 +2177,17 @@ export async function cancelPlannerGeneration() {
     renderPlannerIfVisible();
 }
 
-export async function startPlannerBackgroundGeneration(situationId = null) {
+export async function startPlannerBackgroundGeneration(situationId = null, options = {}) {
     if (window.PLANNER_BACKGROUND_STARTING) return;
     window.PLANNER_BACKGROUND_STARTING = true;
     try {
-        await runPlannerBackgroundGenerationStart(situationId);
+        await runPlannerBackgroundGenerationStart(situationId, options);
     } finally {
         window.PLANNER_BACKGROUND_STARTING = false;
     }
 }
 
-export async function runPlannerBackgroundGenerationStart(situationId = null) {
+export async function runPlannerBackgroundGenerationStart(situationId = null, options = {}) {
     const project = getActiveProject();
     if (!project) return;
 
@@ -2217,6 +2217,15 @@ export async function runPlannerBackgroundGenerationStart(situationId = null) {
     if (unsupportedReference) {
         setPlannerStatus('백그라운드 생성은 아직 참조 이미지를 지원하지 않습니다. 브라우저 모드를 사용하세요.');
         return;
+    }
+
+    const clearExisting = options.clearExisting === true;
+    if (clearExisting) {
+        for (const item of targetItems) {
+            if (item.images?.length || item.selectedImage) {
+                await clearPlannerItemImages(project, item);
+            }
+        }
     }
 
     for (const item of targetItems) {
@@ -2266,7 +2275,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null) {
 
 export async function startPlannerGeneration(situationId = null, options = {}) {
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
-        await startPlannerBackgroundGeneration(situationId);
+        await startPlannerBackgroundGeneration(situationId, options);
         return;
     }
 
