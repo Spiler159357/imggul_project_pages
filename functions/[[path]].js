@@ -220,6 +220,18 @@ function getPlannerItemDbId(objectKey, item, index) {
     return `${objectKey}#${item?.situationId || item?.imageNumber || index}`;
 }
 
+function getPlannerIdentityFromKey(objectKey = '') {
+    const key = String(objectKey || '');
+    const marker = '_planner_temp_image/';
+    const markerIndex = key.indexOf(marker);
+    const projectPrefix = markerIndex >= 0 ? key.slice(0, markerIndex) : '';
+    const planMatch = key.match(/\/plans\/([^/]+)_planner_meta\.json$/);
+    return {
+        projectPrefix,
+        characterId: planMatch?.[1] || ''
+    };
+}
+
 function splitPlannerMetaForDb(meta = {}) {
     const {
         items,
@@ -417,6 +429,102 @@ async function putPlannerMetaDocument(env, objectKey, meta = {}) {
     ).bind('planner_meta', objectKey).run();
 }
 
+async function plannerBackgroundTablesExist(env) {
+    const rows = await env.DB.prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN ('planner_background_jobs', 'planner_background_items')
+    `).all();
+    return (rows.results || []).length >= 2;
+}
+
+function compactBackgroundResultKeys(value) {
+    const parsed = parseJsonField(value, []);
+    return Array.isArray(parsed) ? parsed.filter(Boolean) : [];
+}
+
+async function getActivePlannerBackgroundMeta(env, objectKey, baseMeta = null) {
+    if (!await plannerBackgroundTablesExist(env)) return null;
+    const identity = getPlannerIdentityFromKey(objectKey);
+    const projectPrefix = baseMeta?.projectPrefix || identity.projectPrefix;
+    const characterId = baseMeta?.characterId || identity.characterId;
+    if (!projectPrefix) return null;
+    const statuses = ['queued', 'running', 'cancel_requested', 'paused'];
+    const placeholders = statuses.map(() => '?').join(',');
+    const params = characterId
+        ? [projectPrefix, characterId, ...statuses]
+        : [projectPrefix, ...statuses];
+    const job = await env.DB.prepare(`
+        SELECT *
+        FROM planner_background_jobs
+        WHERE project_prefix = ?
+          ${characterId ? 'AND character_id = ?' : ''}
+          AND status IN (${placeholders})
+        ORDER BY updated_at DESC, created_at DESC
+        LIMIT 1
+    `).bind(...params).first();
+    if (!job) return null;
+
+    const rows = (await env.DB.prepare(`
+        SELECT *
+        FROM planner_background_items
+        WHERE job_id = ?
+        ORDER BY
+          CASE WHEN queue_order IS NULL THEN 1 ELSE 0 END,
+          queue_order ASC,
+          image_number ASC
+    `).bind(job.id).all()).results || [];
+    const baseItemsBySituation = new Map((baseMeta?.items || []).map(item => [item.situationId, item]));
+    const items = rows.map((row, index) => {
+        const baseItem = baseItemsBySituation.get(row.situation_id) || {};
+        const resultKeys = compactBackgroundResultKeys(row.result_keys);
+        const generation = parseJsonField(row.generation_json, {});
+        const nextStatus = row.status === 'completed' ? 'done' : (row.status || 'pending');
+        return {
+            ...baseItem,
+            situationId: row.situation_id,
+            situationName: row.situation_name || row.situation_id,
+            situationIndex: baseItem.situationIndex ?? index,
+            imageNumber: row.image_number,
+            count: row.count || baseItem.count || 20,
+            status: nextStatus,
+            stage: row.stage || '',
+            stageLabel: row.stage || '',
+            selectedImage: resultKeys.includes(baseItem.selectedImage) ? baseItem.selectedImage : null,
+            errorMessage: row.error_message || '',
+            backgroundJobId: job.id,
+            backgroundItemId: row.id,
+            generation: Object.keys(generation).length ? generation : (baseItem.generation || {}),
+            images: resultKeys.length ? resultKeys : (baseItem.images || [])
+        };
+    });
+    return {
+        ...(baseMeta || {}),
+        projectId: job.project_id || baseMeta?.projectId || '',
+        projectPrefix: job.project_prefix || projectPrefix,
+        characterId: job.character_id || characterId,
+        characterPrefix: job.character_prefix || baseMeta?.characterPrefix || '',
+        status: job.status,
+        stage: job.stage || '',
+        stageLabel: job.stage || '',
+        defaultCount: baseMeta?.defaultCount || items[0]?.count || 20,
+        backgroundJobId: job.id,
+        backgroundStatus: {
+            jobId: job.id,
+            status: job.status,
+            stage: job.stage || '',
+            totalCount: job.total_count || 0,
+            completedCount: job.completed_count || 0,
+            failedCount: job.failed_count || 0,
+            updatedAt: job.updated_at || ''
+        },
+        runningSituationIds: items.map(item => item.situationId).filter(Boolean),
+        updatedAt: Date.now(),
+        items
+    };
+}
+
 async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
     await ensurePlannerMetaSchema(env);
     const header = await env.DB.prepare('SELECT * FROM planner_metas WHERE object_key = ?').bind(objectKey).first();
@@ -431,6 +539,11 @@ async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
         }
         if (fallback === null || fallback === undefined) {
             fallback = fallbackKey ? await readR2Json(env, fallbackKey, null) : null;
+        }
+        const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, fallback);
+        if (activeBackgroundMeta) {
+            await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
+            return activeBackgroundMeta;
         }
         if (fallback !== null && fallback !== undefined) await putPlannerMetaDocument(env, objectKey, fallback);
         return fallback;
@@ -506,6 +619,11 @@ async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
     if (Object.keys(backgroundStatus).length) meta.backgroundStatus = backgroundStatus;
     const runningSituationIds = parseJsonField(header.running_situation_ids_json, []);
     if (runningSituationIds.length) meta.runningSituationIds = runningSituationIds;
+    const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, meta);
+    if (activeBackgroundMeta) {
+        await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
+        return activeBackgroundMeta;
+    }
     return meta;
 }
 

@@ -2567,6 +2567,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
     if (meta.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
         startPlannerBackgroundPolling(meta.backgroundJobId);
         await refreshPlannerBackgroundStatus(meta.backgroundJobId);
+        setPlannerStatus('이미 백그라운드 생성이 진행 중입니다. 현재 실행 중인 플랜을 불러왔습니다.');
         return;
     }
 
@@ -2626,6 +2627,19 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
         meta.updatedAt = Date.now();
         await savePlannerMeta(project, meta).catch(() => null);
         window.PROJECT_PLANNER_META = meta;
+        renderPlannerSectionByState();
+        return;
+    }
+
+    if (data.existing) {
+        const activeMeta = await loadPlannerMeta(project).catch(() => null);
+        if (activeMeta) {
+            window.PROJECT_PLANNER_META = activeMeta;
+            updatePlannerQueueMetaCache(project, activeMeta);
+        }
+        setPlannerStatus('이미 백그라운드 생성이 진행 중입니다. 새 작업은 시작하지 않고 현재 실행 중인 플랜을 불러왔습니다.');
+        startPlannerBackgroundPolling(data.jobId);
+        await refreshPlannerBackgroundStatus(data.jobId).catch(() => null);
         renderPlannerSectionByState();
         return;
     }
