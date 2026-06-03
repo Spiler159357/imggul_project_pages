@@ -241,9 +241,14 @@ function isPlannerActiveStatus(status) {
 
 function isPlannerConfirmBlocked(meta = {}, item = null) {
     if (!item) return false;
-    const metaActive = isPlannerActiveStatus(meta.status);
-    const backgroundActive = isPlannerActiveStatus(meta.backgroundStatus?.status);
-    if (metaActive || backgroundActive) return true;
+    if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
+        const metaActive = isPlannerActiveStatus(meta.status);
+        const backgroundActive = isPlannerActiveStatus(meta.backgroundStatus?.status);
+        if (metaActive || backgroundActive) return true;
+    } else {
+        const browserRun = window.PROJECT_PLANNER_BROWSER_RUN;
+        if (browserRun?.status === 'running' && (browserRun.runningSituationIds || []).includes(item.situationId)) return true;
+    }
     return ['running', 'cancel_requested'].includes(item.status);
 }
 
@@ -311,6 +316,53 @@ function resetPlannerMetaAfterCancel(meta) {
     }
     meta.updatedAt = Date.now();
     return meta;
+}
+
+function getPlannerStoredItemStatus(item, meta = {}) {
+    if (!item) return 'pending';
+    if (item.status === 'done' || item.status === 'completed') return 'done';
+    if (item.status === 'failed' || item.status === 'partial_failed' || item.status === 'confirmed') return item.status;
+    return isPlannerItemTargetComplete(item, meta) ? 'done' : 'pending';
+}
+
+function buildPlannerBrowserStoredMeta(meta) {
+    const stored = {
+        ...(meta || {}),
+        status: 'draft',
+        stage: '',
+        stageLabel: '',
+        updatedAt: Date.now()
+    };
+    delete stored.backgroundJobId;
+    delete stored.backgroundStatus;
+    delete stored.runningSituationIds;
+    stored.items = (stored.items || []).map(item => ({
+        ...item,
+        status: getPlannerStoredItemStatus(item, stored),
+        stage: '',
+        stageLabel: ''
+    }));
+    if (stored.items.length && stored.items.every(item => item.status === 'done' || item.status === 'confirmed')) {
+        stored.status = 'completed';
+    }
+    return stored;
+}
+
+async function savePlannerBrowserStoredMeta(project, meta) {
+    const stored = buildPlannerBrowserStoredMeta(meta);
+    await savePlannerMeta(project, stored);
+    return stored;
+}
+
+function setPlannerBrowserRunState(patch = null) {
+    window.PROJECT_PLANNER_BROWSER_RUN = patch
+        ? { ...(window.PROJECT_PLANNER_BROWSER_RUN || {}), ...patch, updatedAt: Date.now() }
+        : null;
+    return window.PROJECT_PLANNER_BROWSER_RUN;
+}
+
+function isPlannerBrowserRunActive() {
+    return ['running', 'paused'].includes(window.PROJECT_PLANNER_BROWSER_RUN?.status);
 }
 
 function getPlannerItemGeneratedCount(item) {
@@ -1431,15 +1483,17 @@ export async function refreshPlannerPanel() {
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, characters).catch(() => meta ? [{ character, meta }] : []);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     let refreshedActiveStatus = false;
-    (window.PROJECT_PLANNER_QUEUE_METAS || []).forEach(entry => {
-        if (entry.meta?.backgroundJobId && isPlannerActiveStatus(entry.meta.status)) {
-            startPlannerBackgroundPolling(entry.meta.backgroundJobId);
-            if (!refreshedActiveStatus) {
-                refreshedActiveStatus = true;
-                refreshPlannerBackgroundStatus(entry.meta.backgroundJobId).catch(() => null);
+    if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
+        (window.PROJECT_PLANNER_QUEUE_METAS || []).forEach(entry => {
+            if (entry.meta?.backgroundJobId && isPlannerActiveStatus(entry.meta.status)) {
+                startPlannerBackgroundPolling(entry.meta.backgroundJobId);
+                if (!refreshedActiveStatus) {
+                    refreshedActiveStatus = true;
+                    refreshPlannerBackgroundStatus(entry.meta.backgroundJobId).catch(() => null);
+                }
             }
-        }
-    });
+        });
+    }
     renderPlannerSectionByState({ preserveScroll: true });
 }
 
@@ -1451,6 +1505,7 @@ export function setPlannerView(view = 'plan') {
 export function setPlannerGenerationMode(mode = 'browser') {
     window.PROJECT_PLANNER_GENERATION_MODE = mode === 'background' ? 'background' : 'browser';
     localStorage.setItem('imggul_planner_generation_mode', window.PROJECT_PLANNER_GENERATION_MODE);
+    if (window.PROJECT_PLANNER_GENERATION_MODE !== 'background') stopPlannerBackgroundPolling();
     renderPlannerSectionByState({ preserveScroll: true });
 }
 
@@ -2337,6 +2392,22 @@ export async function pausePlannerGeneration() {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     window.PROJECT_PLANNER_PAUSE_REQUESTED = true;
+    if (window.PROJECT_PLANNER_GENERATION_MODE !== 'background') {
+        setPlannerBrowserRunState({ status: 'paused' });
+        if (window.IS_GENERATING && window.cancelNaiGeneration) window.cancelNaiGeneration();
+        if (meta) {
+            const browserRunIds = new Set(window.PROJECT_PLANNER_BROWSER_RUN?.runningSituationIds || []);
+            meta.items = (meta.items || []).map(item => browserRunIds.has(item.situationId) && !isPlannerItemTargetComplete(item, meta)
+                ? { ...item, status: 'paused', stage: '', stageLabel: '' }
+                : item
+            );
+            window.PROJECT_PLANNER_META = meta;
+            updatePlannerQueueMetaCache(project, meta);
+        }
+        setPlannerStatus('일시정지했습니다.');
+        renderPlannerIfVisible();
+        return;
+    }
     if (meta?.backgroundJobId && ['queued', 'running'].includes(meta.status)) {
         await pausePlannerBackgroundGeneration(meta.backgroundJobId);
         return;
@@ -2361,6 +2432,17 @@ export async function resumePlannerGeneration() {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!meta?.items?.length) return;
+    if (window.PROJECT_PLANNER_GENERATION_MODE !== 'background') {
+        meta.items = meta.items.map(item => item.status === 'paused' && !isPlannerItemTargetComplete(item, meta)
+            ? { ...item, status: 'pending', stage: '', stageLabel: '' }
+            : item
+        );
+        window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
+        setPlannerBrowserRunState({ status: 'running' });
+        await startPlannerGeneration(null, { resume: true });
+        return;
+    }
     if (meta.backgroundJobId && meta.status === 'paused') {
         await resumePlannerBackgroundGeneration(meta.backgroundJobId);
         return;
@@ -2382,6 +2464,18 @@ export async function cancelPlannerGeneration() {
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     window.PROJECT_PLANNER_CANCEL_REQUESTED = true;
     if (window.IS_GENERATING && window.cancelNaiGeneration) window.cancelNaiGeneration();
+    if (window.PROJECT_PLANNER_GENERATION_MODE !== 'background') {
+        setPlannerBrowserRunState(null);
+        if (meta) {
+            resetPlannerMetaAfterCancel(meta);
+            const storedMeta = await savePlannerBrowserStoredMeta(project, meta).catch(() => meta);
+            window.PROJECT_PLANNER_META = storedMeta;
+            updatePlannerQueueMetaCache(project, storedMeta);
+        }
+        setPlannerStatus('취소했습니다. 다시 실행할 수 있습니다.');
+        renderPlannerIfVisible();
+        return;
+    }
     if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) {
         await cancelPlannerBackgroundGeneration(meta.backgroundJobId);
         return;
@@ -2523,6 +2617,12 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     }
     meta.status = 'running';
     meta.runningSituationIds = targetItems.map(item => item.situationId);
+    setPlannerBrowserRunState({
+        status: 'running',
+        projectId: project.id,
+        characterId: meta.characterId || '',
+        runningSituationIds: targetItems.map(item => item.situationId)
+    });
     window.PROJECT_PLANNER_PAUSE_REQUESTED = false;
     window.PROJECT_PLANNER_CANCEL_REQUESTED = false;
     window.PROJECT_PLANNER_VIEW = 'run';
@@ -2530,8 +2630,9 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
         window.PLANNER_IMAGE_PREVIEW_KEY = null;
     }
-    await savePlannerMeta(project, meta);
+    await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
     window.PROJECT_PLANNER_META = meta;
+    updatePlannerQueueMetaCache(project, meta);
     renderPlannerSectionByState();
 
     const previousSettings = window.readCraftSettings ? window.readCraftSettings() : null;
@@ -2542,6 +2643,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         for (const item of targetItems) {
             if (clearExisting && (item.images?.length || item.selectedImage)) {
                 await clearPlannerItemImages(project, item);
+                await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
             }
             item.status = 'running';
             const runGenerations = buildPlannerRunGenerations(item, meta, resumeRun);
@@ -2559,8 +2661,9 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
             generation.batchCount = String(clampPlannerImageCount(variantRun.count || item.count || meta.defaultCount));
             applyPlannerSettingsToGeneration(generation, plannerSettings);
             item.generation = generation;
-            await savePlannerMeta(project, meta);
+            await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
             window.PROJECT_PLANNER_META = meta;
+            updatePlannerQueueMetaCache(project, meta);
             renderPlannerSectionByState({ preserveScroll: true });
             setPlannerStatus(`${item.imageNumber}.webp 생성 중...`);
 
@@ -2590,15 +2693,16 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
                 });
             item.images = afterImages;
             meta.updatedAt = Date.now();
-            await savePlannerMeta(project, meta);
+            await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
             }
             item.images = await listPlannerImages(project, item.imageNumber);
             item.status = result.stopped
                 ? (window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'pending' : 'paused')
                 : (isPlannerItemTargetComplete(item, meta) ? 'done' : 'failed');
             meta.updatedAt = Date.now();
-            await savePlannerMeta(project, meta);
+            await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
             window.PROJECT_PLANNER_META = meta;
+            updatePlannerQueueMetaCache(project, meta);
             renderPlannerSectionByState({ preserveScroll: true });
             if (result.stopped) {
                 meta.status = window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'draft' : 'paused';
@@ -2609,14 +2713,17 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         if (!['draft', 'paused'].includes(meta.status)) meta.status = targetItems.every(item => item.status === 'done') ? 'completed' : 'failed';
         delete meta.runningSituationIds;
         meta.updatedAt = Date.now();
-        await savePlannerMeta(project, meta);
+        await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
         window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
         setPlannerStatus(meta.status);
     } finally {
+        const browserRunStatus = window.PROJECT_PLANNER_BROWSER_RUN?.status;
         window.VIBE_IMAGE_FILE = previousVibeFile;
         window.PRECISE_IMAGE_FILE = previousPreciseFile;
         window.PROJECT_PLANNER_PAUSE_REQUESTED = false;
         window.PROJECT_PLANNER_CANCEL_REQUESTED = false;
+        if (browserRunStatus !== 'paused') setPlannerBrowserRunState(null);
         if (previousSettings && window.applyCraftSettings) window.applyCraftSettings(previousSettings);
         renderPlannerSectionByState({ preserveScroll: true });
     }
