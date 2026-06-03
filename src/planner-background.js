@@ -510,22 +510,6 @@ export async function startPlannerBackgroundJob(env, body) {
     const hasPendingGeneration = initialCompletedCount < totalCount;
     const initialJobStatus = hasPendingGeneration ? "queued" : "completed";
     const initialJobStage = initialJobStatus;
-    const metaForStorage = {
-        ...plannerMeta,
-        status: initialJobStatus,
-        backgroundJobId: jobId,
-        stage: initialJobStage,
-        stageLabel: STAGE_LABELS[initialJobStage],
-        runningSituationIds: hasPendingGeneration ? targetItems.map(item => item.situationId) : [],
-        updatedAt: Date.now(),
-        items: plannerMeta.items.map(item => {
-            if (!targetItems.includes(item)) return item;
-            const count = parsePositiveInt(item.count || plannerMeta.defaultCount, 1);
-            const existingKeys = getExistingPlannerResultKeys(item, count);
-            const itemStatus = existingKeys.length >= count ? "completed" : "queued";
-            return { ...item, status: itemStatus, stage: itemStatus, stageLabel: STAGE_LABELS[itemStatus], backgroundJobId: jobId };
-        })
-    };
 
     const inserts = [
         env.DB.prepare(`
@@ -545,7 +529,7 @@ export async function startPlannerBackgroundJob(env, body) {
             totalCount,
             initialCompletedCount,
             targetSituationId,
-            JSON.stringify(metaForStorage),
+            "{}",
             activeKey,
             activeProjectKey,
             createdAt,
@@ -561,6 +545,9 @@ export async function startPlannerBackgroundJob(env, body) {
         const completedCount = Math.min(count, getResultKeyCount(resultKeys));
         const itemStatus = completedCount >= count ? "completed" : "queued";
         const outputPrefix = getPlannerImagePrefix(projectPrefix, item.imageNumber);
+        const generationJson = itemStatus === "completed"
+            ? "{}"
+            : JSON.stringify(item.generation || {});
         inserts.push(env.DB.prepare(`
             INSERT INTO planner_background_items (
                 id, job_id, situation_id, situation_name, image_number, output_prefix,
@@ -574,7 +561,7 @@ export async function startPlannerBackgroundJob(env, body) {
             item.situationName || item.situationId || "",
             String(item.imageNumber),
             outputPrefix,
-            JSON.stringify(item.generation || {}),
+            generationJson,
             count,
             completedCount,
             itemStatus,
@@ -698,17 +685,12 @@ export async function cancelPlannerBackgroundJob(env, jobId) {
         UPDATE planner_background_items
         SET status = 'cancelled',
             stage = 'cancelled',
+            generation_json = '{}',
             updated_at = ?,
             completed_at = COALESCE(completed_at, ?)
             WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
         `).bind(updatedAt, updatedAt, jobId),
-        env.DB.prepare(`
-        UPDATE planner_background_queue
-        SET status = 'cancelled',
-            updated_at = ?,
-            completed_at = COALESCE(completed_at, ?)
-            WHERE job_id = ? AND status NOT IN ('completed', 'failed', 'cancelled')
-        `).bind(updatedAt, updatedAt, jobId)
+        env.DB.prepare("DELETE FROM planner_background_queue WHERE job_id = ?").bind(jobId)
     ]);
     await syncPlannerMetaToR2(env, jobId).catch(() => null);
     await cleanupFinishedBackgroundJobs(env).catch(() => null);
@@ -881,10 +863,11 @@ export async function resumePlannerBackgroundJob(env, jobId) {
             SET completed_count = ?,
                 status = ?,
                 stage = ?,
+                generation_json = CASE WHEN ? = 1 THEN '{}' ELSE generation_json END,
                 updated_at = ?,
                 completed_at = CASE WHEN ? = 1 THEN COALESCE(completed_at, ?) ELSE completed_at END
             WHERE id = ?
-        `).bind(completedCount, complete ? "completed" : "queued", complete ? "completed" : "queued", updatedAt, complete ? 1 : 0, updatedAt, item.id));
+        `).bind(completedCount, complete ? "completed" : "queued", complete ? "completed" : "queued", complete ? 1 : 0, updatedAt, complete ? 1 : 0, updatedAt, item.id));
     }
 
     await env.DB.batch([
@@ -1158,7 +1141,7 @@ async function refreshJobRollup(env, jobId) {
 
 export async function syncPlannerMetaToR2(env, jobId) {
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job?.planner_meta_json) return;
+    if (!job) return;
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
     const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
     const storedMeta = await readJsonObject(env.imgBucket, metaKey, null);
@@ -1227,9 +1210,14 @@ async function markItemFailure(env, item, errorMessage) {
         : "queued";
     await env.DB.prepare(`
         UPDATE planner_background_items
-        SET failed_count = ?, status = ?, stage = 'failed', error_message = ?, updated_at = ?
+        SET failed_count = ?,
+            status = ?,
+            stage = 'failed',
+            generation_json = CASE WHEN ? IN ('partial_failed', 'failed') THEN '{}' ELSE generation_json END,
+            error_message = ?,
+            updated_at = ?
         WHERE id = ?
-    `).bind(failedCount, status, errorMessage.slice(0, 1000), nowIso(), item.id).run();
+    `).bind(failedCount, status, status, errorMessage.slice(0, 1000), nowIso(), item.id).run();
 }
 
 async function enqueueRetry(env, message, attempt, delaySeconds) {
@@ -1298,13 +1286,7 @@ export async function processPlannerQueueMessage(env, message) {
     const storedResultKeys = parseResultKeys(item.result_keys);
     if (storedResultKeys[imageIndex]) {
         if (queueEntry) {
-            await env.DB.prepare(`
-                UPDATE planner_background_queue
-                SET status = 'completed',
-                    updated_at = ?,
-                    completed_at = COALESCE(completed_at, ?)
-                WHERE id = ?
-            `).bind(nowIso(), nowIso(), queueEntry.id).run();
+            await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
         }
         await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, stage: "duplicate_message_skip" });
         await enqueueNextPlannerQueueMessage(env, jobId).catch(() => null);
@@ -1320,19 +1302,11 @@ export async function processPlannerQueueMessage(env, message) {
             `).bind(nowIso(), nowIso(), nowIso(), jobId),
             env.DB.prepare(`
                 UPDATE planner_background_items
-                SET status = 'cancelled', stage = 'cancelled', updated_at = ?, completed_at = COALESCE(completed_at, ?)
+                SET status = 'cancelled', stage = 'cancelled', generation_json = '{}', updated_at = ?, completed_at = COALESCE(completed_at, ?)
                 WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
             `).bind(nowIso(), nowIso(), jobId)
         ]);
-        if (queueEntry) {
-            await env.DB.prepare(`
-                UPDATE planner_background_queue
-                SET status = 'cancelled',
-                    updated_at = ?,
-                    completed_at = COALESCE(completed_at, ?)
-                WHERE id = ?
-            `).bind(nowIso(), nowIso(), queueEntry.id).run();
-        }
+        await env.DB.prepare("DELETE FROM planner_background_queue WHERE job_id = ?").bind(jobId).run();
         await syncPlannerMetaToR2Safely(env, jobId, { itemId, stage: "cancelled_sync" });
         await cleanupFinishedBackgroundJobs(env).catch(() => null);
         return;
@@ -1440,9 +1414,16 @@ export async function processPlannerQueueMessage(env, message) {
         const status = completedCount + failedCount >= count ? "completed" : (pausedAfterRequest ? PAUSED_JOB_STATUS : "queued");
         await env.DB.prepare(`
             UPDATE planner_background_items
-            SET completed_count = ?, status = ?, stage = ?, result_keys = ?, error_message = NULL, updated_at = ?, completed_at = CASE WHEN ? IN ('completed', 'partial_failed') THEN ? ELSE completed_at END
+            SET completed_count = ?,
+                status = ?,
+                stage = ?,
+                result_keys = ?,
+                generation_json = CASE WHEN ? IN ('completed', 'partial_failed', 'failed', 'cancelled') THEN '{}' ELSE generation_json END,
+                error_message = NULL,
+                updated_at = ?,
+                completed_at = CASE WHEN ? IN ('completed', 'partial_failed') THEN ? ELSE completed_at END
             WHERE id = ?
-        `).bind(completedCount, status, status === "completed" ? "completed" : status, JSON.stringify(resultKeys), nowIso(), status, nowIso(), itemId).run();
+        `).bind(completedCount, status, status === "completed" ? "completed" : status, JSON.stringify(resultKeys), status, nowIso(), status, nowIso(), itemId).run();
         if (pausedAfterRequest) {
             if (queueEntry) {
                 await env.DB.prepare(`
@@ -1456,25 +1437,13 @@ export async function processPlannerQueueMessage(env, message) {
             return;
         }
         if (queueEntry) {
-            await env.DB.prepare(`
-                UPDATE planner_background_queue
-                SET status = 'completed',
-                    updated_at = ?,
-                    completed_at = COALESCE(completed_at, ?)
-                WHERE id = ?
-            `).bind(nowIso(), nowIso(), queueEntry.id).run();
+            await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
         }
     } catch (error) {
         const errorMessage = error.message || String(error);
         if (error?.code === "BACKGROUND_JOB_CANCELLED") {
             if (queueEntry) {
-                await env.DB.prepare(`
-                    UPDATE planner_background_queue
-                    SET status = 'cancelled',
-                        updated_at = ?,
-                        completed_at = COALESCE(completed_at, ?)
-                    WHERE id = ?
-                `).bind(nowIso(), nowIso(), queueEntry.id).run();
+                await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
             }
             await syncPlannerMetaToR2(env, jobId).catch(() => null);
             await cleanupFinishedBackgroundJobs(env).catch(() => null);
@@ -1524,14 +1493,7 @@ export async function processPlannerQueueMessage(env, message) {
         }
         await markItemFailure(env, item, errorMessage);
         if (queueEntry) {
-            await env.DB.prepare(`
-                UPDATE planner_background_queue
-                SET status = 'failed',
-                    error_message = ?,
-                    updated_at = ?,
-                    completed_at = COALESCE(completed_at, ?)
-                WHERE id = ?
-            `).bind(errorMessage.slice(0, 1000), nowIso(), nowIso(), queueEntry.id).run();
+            await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
         }
         await refreshJobRollup(env, jobId);
         await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "failure_sync" });
