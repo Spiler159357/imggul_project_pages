@@ -1268,6 +1268,7 @@ async function getActivePlannerBackgroundMeta(env, objectKey, baseMeta = null) {
             status: nextStatus,
             stage: row.stage || '',
             stageLabel: row.stage || '',
+            failedCount: row.failed_count || 0,
             selectedImage: resultKeys.includes(baseItem.selectedImage) ? baseItem.selectedImage : null,
             errorMessage: row.error_message || '',
             backgroundJobId: job.id,

@@ -6,6 +6,63 @@ import { combinePromptParts, getSituationById } from './situation.js';
 const PLANNER_DEFAULT_IMAGE_COUNT = 20;
 const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
+const PLANNER_META_CACHE_TTL_MS = 3000;
+const plannerMetaMemoryCache = new Map();
+
+function clonePlannerMetaValue(meta) {
+    if (!meta) return meta;
+    try {
+        return structuredClone(meta);
+    } catch {
+        return JSON.parse(JSON.stringify(meta));
+    }
+}
+
+function getPlannerMetaCacheKey(project, characterId = '') {
+    if (!project?.prefix) return '';
+    return getPlannerMetaKey(project, characterId || getSelectedPlannerCharacterId(project));
+}
+
+function readPlannerMetaCache(key) {
+    const cached = plannerMetaMemoryCache.get(key);
+    if (!cached || Date.now() - cached.timestamp > PLANNER_META_CACHE_TTL_MS) return null;
+    return clonePlannerMetaValue(cached.meta);
+}
+
+function writePlannerMetaCache(key, meta) {
+    if (!key) return;
+    if (!meta) {
+        plannerMetaMemoryCache.delete(key);
+        return;
+    }
+    plannerMetaMemoryCache.set(key, { meta: clonePlannerMetaValue(meta), timestamp: Date.now() });
+}
+
+function deletePlannerMetaCache(key) {
+    if (key) plannerMetaMemoryCache.delete(key);
+}
+
+function setPlannerPendingAction(action) {
+    const token = `${action}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+    window.PROJECT_PLANNER_PENDING_ACTION = { action, token };
+    renderPlannerIfVisible();
+    return token;
+}
+
+function clearPlannerPendingAction(token) {
+    if (!token || window.PROJECT_PLANNER_PENDING_ACTION?.token !== token) return;
+    window.PROJECT_PLANNER_PENDING_ACTION = null;
+    renderPlannerIfVisible();
+}
+
+function getPlannerPendingActionLabel(action) {
+    return {
+        start: '시작 중',
+        pause: '일시정지 중',
+        resume: '재개 중',
+        cancel: '취소 중'
+    }[action] || '처리 중';
+}
 
 function derivePlannerStoredMetaStatus(meta) {
     const items = Array.isArray(meta?.items) ? meta.items : [];
@@ -87,27 +144,28 @@ export function mergePlannerSplitMetadata(item, metadata = {}, imageKey = '') {
     return merged;
 }
 
-export async function loadPlannerMeta(project, characterId = '') {
+export async function loadPlannerMeta(project, characterId = '', options = {}) {
     if (!project?.prefix) return null;
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
     const targetKey = getPlannerMetaKey(project, targetCharacterId);
-    let res = await fetch(`/api/planner/meta?key=${encodeURIComponent(targetKey)}&_t=${Date.now()}`, { cache: 'no-store' });
-    if (res.status === 404 && targetCharacterId) {
-        const legacyKey = getPlannerMetaKey(project);
-        res = await fetch(`/api/planner/meta?key=${encodeURIComponent(legacyKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    if (!options.force) {
+        const cached = readPlannerMetaCache(targetKey);
+        if (cached !== null) return cached;
     }
+    let res = await fetch(`/api/planner/meta?key=${encodeURIComponent(targetKey)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error('플래너 메타데이터를 불러오지 못했습니다.');
     const payload = await res.json();
     const meta = normalizePlannerStoredMeta(payload.data || {});
     if (targetCharacterId && meta?.characterId && meta.characterId !== targetCharacterId) return null;
+    writePlannerMetaCache(targetKey, meta);
     return meta;
 }
 
-export async function loadPlannerQueueMetas(project, characters = getProjectItems(project, 'characters')) {
+export async function loadPlannerQueueMetas(project, characters = getProjectItems(project, 'characters'), options = {}) {
     const selectedCharacterId = getSelectedPlannerCharacterId(project);
     const metas = await Promise.all(characters.map(async character => {
-        const meta = await loadPlannerMeta(project, character.id).catch(() => null);
+        const meta = await loadPlannerMeta(project, character.id, options).catch(() => null);
         if (meta && !meta.characterId && characters.length > 1 && character.id !== selectedCharacterId) return null;
         return meta?.items?.length ? { character, meta } : null;
     }));
@@ -131,6 +189,7 @@ export async function savePlannerMeta(project, meta) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || '플래너 메타데이터 저장에 실패했습니다.');
     }
+    writePlannerMetaCache(key, normalized);
 }
 
 export async function deletePlannerMeta(project, characterId = '') {
@@ -141,6 +200,8 @@ export async function deletePlannerMeta(project, characterId = '') {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ key })
     }).catch(() => null);
+    deletePlannerMetaCache(key);
+    deletePlannerMetaCache(getPlannerMetaKey(project));
 }
 
 export function getPlannerImagePrefix(project, imageNumber) {
@@ -313,13 +374,19 @@ function getPlannerQueueItems(queueMetas = []) {
     })));
 }
 
+function getPlannerItemFailedCount(item = {}) {
+    const failedCount = Number(item.failedCount ?? item.failed_count ?? 0);
+    if (Number.isFinite(failedCount) && failedCount > 0) return failedCount;
+    return ['failed', 'partial_failed'].includes(item.status) ? 1 : 0;
+}
+
 function getPlannerQueueSummary(queueMetas = []) {
     const entries = getPlannerQueueItems(queueMetas);
     const totalImages = entries.reduce((sum, entry) => sum + clampPlannerImageCount(entry.item.count), 0);
     const completedImages = entries.reduce((sum, entry) => sum + (Array.isArray(entry.item.images) ? entry.item.images.length : 0), 0);
     const active = queueMetas.some(entry => isPlannerActiveStatus(entry.meta.status));
     const paused = !active && queueMetas.some(entry => isPlannerResumableStatus(entry.meta.status));
-    const failed = entries.filter(entry => ['failed', 'partial_failed'].includes(entry.item.status)).length;
+    const failed = entries.reduce((sum, entry) => sum + getPlannerItemFailedCount(entry.item), 0);
     return {
         entries,
         totalItems: entries.length,
@@ -1071,7 +1138,7 @@ export function renderPlannerProgressPanel(meta) {
     const progressItems = activeIds ? meta.items.filter(item => activeIds.has(item.situationId)) : meta.items;
     const total = progressItems.length;
     const doneCount = progressItems.filter(item => ['done', 'completed', 'confirmed'].includes(item.status)).length;
-    const failedCount = progressItems.filter(item => ['failed', 'partial_failed'].includes(item.status)).length;
+    const failedCount = progressItems.reduce((sum, item) => sum + getPlannerItemFailedCount(item), 0);
     const runningItem = progressItems.find(item => ['queued', 'running', 'cancel_requested'].includes(item.status));
     const runningIndex = runningItem ? progressItems.findIndex(item => item.situationId === runningItem.situationId) + 1 : doneCount + failedCount + 1;
     const progressCount = Math.min(total, doneCount + failedCount);
@@ -1147,25 +1214,29 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
 }
 
 function renderPlannerRunControls(summary) {
+    const pendingAction = window.PROJECT_PLANNER_PENDING_ACTION?.action || '';
+    const isPending = !!pendingAction;
+    const pendingAttrs = isPending ? 'disabled aria-busy="true"' : '';
+    const pendingClass = 'disabled:opacity-60 disabled:cursor-wait';
     const canStart = !summary.active && !summary.paused;
     return `
         ${canStart ? `
-            <button type="button" onclick="window.startPlannerGeneration(null, { clearExisting: true })" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
+            <button type="button" onclick="window.startPlannerGeneration(null, { clearExisting: true })" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 ${pendingClass}">
                 <i data-lucide="play" class="w-4 h-4"></i> 실행 시작
             </button>
         ` : ''}
         ${summary.active ? `
-            <button type="button" onclick="window.pausePlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900 text-amber-700 dark:text-amber-300 text-xs font-bold hover:bg-amber-50 dark:hover:bg-amber-900/20">
+            <button type="button" onclick="window.pausePlannerGeneration()" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-amber-200 dark:border-amber-900 text-amber-700 dark:text-amber-300 text-xs font-bold hover:bg-amber-50 dark:hover:bg-amber-900/20 ${pendingClass}">
                 <i data-lucide="pause" class="w-4 h-4"></i> 일시정지
             </button>
         ` : ''}
         ${summary.paused ? `
-            <button type="button" onclick="window.resumePlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">
+            <button type="button" onclick="window.resumePlannerGeneration()" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 ${pendingClass}">
                 <i data-lucide="rotate-cw" class="w-4 h-4"></i> 재개하기
             </button>
         ` : ''}
         ${(summary.active || summary.paused) ? `
-            <button type="button" onclick="window.cancelPlannerGeneration()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20">
+            <button type="button" onclick="window.cancelPlannerGeneration()" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20 ${pendingClass}">
                 <i data-lucide="square" class="w-4 h-4"></i> 취소
             </button>
         ` : ''}
@@ -1522,14 +1593,14 @@ export async function refreshPlannerPanel() {
     const character = getCharacterById(project, characterId);
     const characters = getProjectItems(project, 'characters');
     const [meta, , projectStyle] = await Promise.all([
-        loadPlannerMeta(project, characterId).catch(() => null),
+        loadPlannerMeta(project, characterId, { force: true }).catch(() => null),
         loadPlannerSettings(project, true).catch(() => normalizePlannerSettings()),
         loadProjectStylePrompt(project).catch(() => ''),
         character ? loadCharacterFiles(character).catch(() => []) : Promise.resolve([]),
         character ? loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
     ]);
     window.PROJECT_PLANNER_META = meta;
-    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, characters).catch(() => meta ? [{ character, meta }] : []);
+    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, characters, { force: true }).catch(() => meta ? [{ character, meta }] : []);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     let refreshedActiveStatus = false;
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
@@ -1572,11 +1643,11 @@ export async function loadPlannerForSelectedCharacter() {
         ]);
     }
     const [meta, projectStyle] = await Promise.all([
-        loadPlannerMeta(project, characterId).catch(() => null),
+        loadPlannerMeta(project, characterId, { force: true }).catch(() => null),
         loadProjectStylePrompt(project).catch(() => '')
     ]);
     window.PROJECT_PLANNER_META = meta;
-    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => meta ? [{ character, meta }] : []);
+    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, undefined, { force: true }).catch(() => meta ? [{ character, meta }] : []);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     renderPlannerSectionByState();
 }
@@ -2295,6 +2366,7 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
                     stage: statusItem.stage || item.stage || '',
                     stageLabel: statusItem.stageLabel || item.stageLabel || '',
                     images: statusItem.resultKeys?.length ? statusItem.resultKeys : (item.images || []),
+                    failedCount: Number(statusItem.failedCount || 0),
                     errorMessage: statusItem.errorMessage || item.errorMessage || ''
                 };
             });
@@ -2443,6 +2515,9 @@ export async function resumePlannerBackgroundGeneration(jobId = null) {
 }
 
 export async function pausePlannerGeneration() {
+    const pendingToken = setPlannerPendingAction('pause');
+    setPlannerStatus(getPlannerPendingActionLabel('pause'));
+    try {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     window.PROJECT_PLANNER_PAUSE_REQUESTED = true;
@@ -2480,9 +2555,15 @@ export async function pausePlannerGeneration() {
     }
     setPlannerStatus('일시정지되었습니다.');
     renderPlannerIfVisible();
+    } finally {
+        clearPlannerPendingAction(pendingToken);
+    }
 }
 
 export async function resumePlannerGeneration() {
+    const pendingToken = setPlannerPendingAction('resume');
+    setPlannerStatus(getPlannerPendingActionLabel('resume'));
+    try {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!meta?.items?.length) return;
@@ -2511,9 +2592,15 @@ export async function resumePlannerGeneration() {
     window.PROJECT_PLANNER_META = meta;
     updatePlannerQueueMetaCache(project, meta);
     await startPlannerGeneration(null, { resume: true });
+    } finally {
+        clearPlannerPendingAction(pendingToken);
+    }
 }
 
 export async function cancelPlannerGeneration() {
+    const pendingToken = setPlannerPendingAction('cancel');
+    setPlannerStatus(getPlannerPendingActionLabel('cancel'));
+    try {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     window.PROJECT_PLANNER_CANCEL_REQUESTED = true;
@@ -2542,15 +2629,21 @@ export async function cancelPlannerGeneration() {
     }
     setPlannerStatus('취소되었습니다. 다시 실행할 수 있습니다.');
     renderPlannerIfVisible();
+    } finally {
+        clearPlannerPendingAction(pendingToken);
+    }
 }
 
 export async function startPlannerBackgroundGeneration(situationId = null, options = {}) {
     if (window.PLANNER_BACKGROUND_STARTING) return;
+    const pendingToken = setPlannerPendingAction('start');
     window.PLANNER_BACKGROUND_STARTING = true;
+    setPlannerStatus(getPlannerPendingActionLabel('start'));
     try {
         await runPlannerBackgroundGenerationStart(situationId, options);
     } finally {
         window.PLANNER_BACKGROUND_STARTING = false;
+        clearPlannerPendingAction(pendingToken);
     }
 }
 

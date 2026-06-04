@@ -1907,6 +1907,7 @@ async function resetPlannerMetaAfterBackgroundCancel(env, jobId) {
             status: complete ? "done" : "pending",
             stage: "",
             stageLabel: "",
+            failedCount: row.failed_count || 0,
             images: hasNewResults ? resultKeys : (item.images || []),
             selectedImage: hasNewResults
                 ? (resultKeys.includes(item.selectedImage) ? item.selectedImage : null)
@@ -2003,6 +2004,7 @@ export async function syncPlannerMetaToR2(env, jobId) {
             status: nextStatus,
             stage: cancelRequestedJob ? "" : (row.stage || ""),
             stageLabel: cancelRequestedJob ? "" : (STAGE_LABELS[row.stage] || row.stage || ""),
+            failedCount: row.failed_count || 0,
             images: hasNewResults ? resultKeys : (item.images || []),
             selectedImage: hasNewResults
                 ? (resultKeys.includes(item.selectedImage) ? item.selectedImage : null)
