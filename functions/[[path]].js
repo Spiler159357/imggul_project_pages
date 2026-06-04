@@ -323,6 +323,34 @@ function getPlannerIdentityFromKey(objectKey = '') {
     };
 }
 
+function getCanonicalPlannerObjectKey(objectKey = '', header = {}) {
+    const identity = getPlannerIdentityFromKey(objectKey);
+    const projectPrefix = header.projectPrefix || identity.projectPrefix || header.projectId || '';
+    const rawCharacterId = header.characterId || identity.characterId || '';
+    const characterId = String(rawCharacterId || '').trim().replace(/[\\/]+/g, '_');
+    if (!projectPrefix) return String(objectKey || '');
+    return characterId
+        ? `${projectPrefix}_planner_temp_image/plans/${characterId}_planner_meta.json`
+        : `${projectPrefix}_planner_temp_image/_planner_meta.json`;
+}
+
+async function ensureV2PlannerSourceSchema(env) {
+    await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS v2_planner_sources (
+            source_key TEXT PRIMARY KEY,
+            planner_run_id TEXT NOT NULL,
+            source_type TEXT NOT NULL DEFAULT 'planner_meta',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (planner_run_id) REFERENCES v2_planner_runs(id) ON DELETE CASCADE
+        )
+    `).run();
+    await env.DB.prepare(`
+        CREATE INDEX IF NOT EXISTS idx_v2_planner_sources_run
+        ON v2_planner_sources(planner_run_id)
+    `).run();
+}
+
 function normalizeV2PlannerRunStatus(status = 'draft') {
     if (status === 'queued') return 'running';
     if (status === 'partial_failed') return 'failed';
@@ -347,14 +375,16 @@ function getAssetIdFromKey(key = '') {
 }
 
 async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
+    await ensureV2PlannerSourceSchema(env);
     const timestamp = nowIso();
-    const identity = getPlannerIdentityFromKey(objectKey);
     const { header, items } = splitPlannerMetaForDb(meta);
+    const canonicalObjectKey = getCanonicalPlannerObjectKey(objectKey, header);
+    const identity = getPlannerIdentityFromKey(canonicalObjectKey);
     const projectPrefix = header.projectPrefix || identity.projectPrefix || header.projectId || makeStableDbId('project', objectKey);
     const projectId = projectPrefix;
     const characterId = header.characterId || identity.characterId || makeStableDbId('character', objectKey);
     const characterPrefix = header.characterPrefix || characterId;
-    const runId = makeStableDbId('run', objectKey);
+    const runId = makeStableDbId('run', canonicalObjectKey);
 
     const statements = [
         env.DB.prepare(`
@@ -383,6 +413,8 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
         env.DB.prepare('DELETE FROM v2_planner_generated_images WHERE planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)')
             .bind(runId),
         env.DB.prepare('DELETE FROM v2_planner_items WHERE planner_run_id = ?').bind(runId),
+        env.DB.prepare('DELETE FROM v2_planner_sources WHERE source_key IN (?, ?)')
+            .bind(objectKey, canonicalObjectKey),
         env.DB.prepare(`
             INSERT INTO v2_planner_runs (
                 id, project_id, character_id, status, mode, default_count, legacy_object_key,
@@ -412,7 +444,7 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
             normalizeV2PlannerRunStatus(header.status),
             header.backgroundJobId ? 'background' : 'browser',
             header.defaultCount,
-            objectKey,
+            canonicalObjectKey,
             header.status || '',
             header.stage || '',
             header.stageLabel || '',
@@ -423,19 +455,43 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
             timestamp,
             ['completed', 'confirmed'].includes(normalizeV2PlannerRunStatus(header.status)) ? timestamp : null,
             normalizeV2PlannerRunStatus(header.status) === 'confirmed' ? timestamp : null
-        )
+        ),
+        env.DB.prepare(`
+            INSERT INTO v2_planner_sources (source_key, planner_run_id, source_type, created_at, updated_at)
+            VALUES (?, ?, 'canonical', ?, ?)
+            ON CONFLICT(source_key) DO UPDATE SET
+                planner_run_id = excluded.planner_run_id,
+                source_type = excluded.source_type,
+                updated_at = excluded.updated_at
+        `).bind(canonicalObjectKey, runId, timestamp, timestamp),
+        env.DB.prepare(`
+            INSERT INTO v2_planner_sources (source_key, planner_run_id, source_type, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(source_key) DO UPDATE SET
+                planner_run_id = excluded.planner_run_id,
+                source_type = excluded.source_type,
+                updated_at = excluded.updated_at
+        `).bind(objectKey, runId, objectKey === canonicalObjectKey ? 'canonical' : 'legacy_alias', timestamp, timestamp)
     ];
+
+    const seenAssetIds = new Set();
 
     items.forEach((rawItem, index) => {
         const split = splitPlannerItemForDb(rawItem);
         const situationId = split.item.situationId || makeStableDbId('situation', `${objectKey}:${index}`);
         const itemId = makeStableDbId('pitem', `${objectKey}:${situationId}`);
         const promptSetId = makeStableDbId('prompt', itemId);
-        const imageIds = split.images.map(imageKey => ({
-            key: imageKey,
-            assetId: getAssetIdFromKey(imageKey),
-            generatedId: makeStableDbId('pgen', `${itemId}:${imageKey}`)
-        }));
+        const imageIds = [];
+        split.images.forEach(imageKey => {
+            const assetId = getAssetIdFromKey(imageKey);
+            if (seenAssetIds.has(assetId)) return;
+            seenAssetIds.add(assetId);
+            imageIds.push({
+                key: imageKey,
+                assetId,
+                generatedId: makeStableDbId('pgen', `${itemId}:${imageKey}`)
+            });
+        });
         const selected = imageIds.find(image => image.key === split.item.selectedImage);
         const confirmed = imageIds.find(image => image.key === split.item.finalImage);
 
@@ -524,6 +580,12 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
                 env.DB.prepare(`
                     INSERT INTO v2_planner_generated_images (id, planner_item_id, asset_id, image_index, status, created_at)
                     VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(asset_id) DO UPDATE SET
+                        id = excluded.id,
+                        planner_item_id = excluded.planner_item_id,
+                        image_index = excluded.image_index,
+                        status = excluded.status,
+                        created_at = excluded.created_at
                 `).bind(
                     image.generatedId,
                     itemId,
@@ -562,6 +624,7 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
 }
 
 async function getV2PlannerMetaDocument(env, objectKey) {
+    await ensureV2PlannerSourceSchema(env);
     const run = await env.DB.prepare(`
         SELECT
             r.*,
@@ -570,9 +633,10 @@ async function getV2PlannerMetaDocument(env, objectKey) {
         FROM v2_planner_runs r
         LEFT JOIN v2_projects p ON p.id = r.project_id
         LEFT JOIN v2_characters c ON c.id = r.character_id
-        WHERE r.legacy_object_key = ?
+        LEFT JOIN v2_planner_sources src ON src.planner_run_id = r.id
+        WHERE r.legacy_object_key = ? OR src.source_key = ?
         LIMIT 1
-    `).bind(objectKey).first();
+    `).bind(objectKey, objectKey).first();
     if (!run) return null;
 
     const itemRows = (await env.DB.prepare(`
@@ -680,7 +744,14 @@ async function getV2PlannerMetaDocument(env, objectKey) {
 }
 
 async function deleteV2PlannerMetaDocument(env, objectKey) {
-    const run = await env.DB.prepare('SELECT id FROM v2_planner_runs WHERE legacy_object_key = ?').bind(objectKey).first();
+    await ensureV2PlannerSourceSchema(env);
+    const run = await env.DB.prepare(`
+        SELECT r.id
+        FROM v2_planner_runs r
+        LEFT JOIN v2_planner_sources src ON src.planner_run_id = r.id
+        WHERE r.legacy_object_key = ? OR src.source_key = ?
+        LIMIT 1
+    `).bind(objectKey, objectKey).first();
     if (!run?.id) return;
     await env.DB.batch([
         env.DB.prepare('DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))')
@@ -692,6 +763,7 @@ async function deleteV2PlannerMetaDocument(env, objectKey) {
         env.DB.prepare('DELETE FROM v2_planner_generated_images WHERE planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)')
             .bind(run.id),
         env.DB.prepare('DELETE FROM v2_planner_items WHERE planner_run_id = ?').bind(run.id),
+        env.DB.prepare('DELETE FROM v2_planner_sources WHERE planner_run_id = ?').bind(run.id),
         env.DB.prepare('DELETE FROM v2_planner_runs WHERE id = ?').bind(run.id)
     ]);
 }
