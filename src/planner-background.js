@@ -1647,6 +1647,15 @@ async function putPlannerMetaDocument(env, objectKey, meta = {}) {
     if (!env?.DB) return;
     await ensurePlannerMetaSchema(env);
     await putV2PlannerMetaDocument(env, objectKey, meta);
+    await env.DB.batch([
+        env.DB.prepare('DELETE FROM planner_item_image_snapshots WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_images WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_v4_rows WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_items WHERE meta_object_key = ?').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_metas WHERE object_key = ?').bind(objectKey),
+        env.DB.prepare('DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?').bind('planner_meta', objectKey)
+    ]);
+    return;
     const timestamp = nowIso();
     const { header, items } = splitPlannerMetaForDb(meta);
     await env.DB.batch([

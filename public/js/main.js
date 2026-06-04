@@ -45,14 +45,30 @@ async function runDbMigrationOnce() {
             cursor = result.truncated ? result.cursor || '' : '';
         } while (cursor);
         const backfill = await postMigrationStep('/api/migration/v2/backfill-legacy-db', { limit: 500 });
+        const cleanups = [];
+        cursor = '';
+        do {
+            const result = await postMigrationStep('/api/migration/v2/cleanup-legacy-planner-state', {
+                limit: 500,
+                ...(cursor ? { cursor } : {})
+            });
+            cleanups.push(result);
+            cursor = result.truncated ? result.cursor || '' : '';
+        } while (cursor);
         const importedCount = imports.reduce((sum, item) => sum + Number(item.importedCount || 0), 0);
         const skippedCount = imports.reduce((sum, item) => sum + Number(item.skippedCount || 0), 0);
+        const deletedLegacyPlannerMetaCount = cleanups.reduce((sum, item) => sum + Number(item.deletedLegacyPlannerMetaCount || 0), 0);
+        const deletedLegacyV2PlannerRunCount = cleanups.reduce((sum, item) => sum + Number(item.deletedLegacyV2PlannerRunCount || 0), 0);
+        const deletedPlannerJsonCount = cleanups.reduce((sum, item) => sum + Number(item.deletedPlannerJsonCount || 0), 0);
         alert([
             'DB 이관이 완료되었습니다.',
             `R2 JSON import: ${importedCount}`,
             `R2 JSON skipped: ${skippedCount}`,
             `Planner backfill: ${Number(backfill?.planner?.importedCount || 0)}`,
             `Background backfill: ${Number(backfill?.background?.importedCount || 0)}`,
+            `Legacy planner meta cleanup: ${deletedLegacyPlannerMetaCount}`,
+            `Legacy v2 planner run cleanup: ${deletedLegacyV2PlannerRunCount}`,
+            `Legacy R2 planner JSON cleanup: ${deletedPlannerJsonCount}`,
             '',
             '이제 프로젝트/캐릭터/상황/플래너 화면을 새로고침해서 확인하세요.'
         ].join('\n'));

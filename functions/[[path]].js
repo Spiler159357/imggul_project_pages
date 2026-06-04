@@ -880,7 +880,7 @@ async function backfillLegacyPlannerToV2(env, limit = 100) {
     `).bind(safeLimit).all()).results || [];
     const imported = [];
     for (const row of rows) {
-        const meta = await getPlannerMetaDocument(env, row.object_key, '');
+        const meta = await getLegacyPlannerMetaDocument(env, row.object_key);
         if (meta) {
             await putV2PlannerMetaDocument(env, row.object_key, meta);
             imported.push(row.object_key);
@@ -950,7 +950,35 @@ async function cleanupLegacyPlannerState(env, limit = 500, cursor = undefined) {
     if (!env.DB) throw new Error('DB binding is not configured');
     if (!env.imgBucket) throw new Error('imgBucket binding is not configured');
     await ensureJsonDbSchema(env);
-    await env.DB.prepare("DELETE FROM json_documents WHERE doc_type = 'planner_meta'").run();
+    await ensurePlannerMetaSchema(env);
+    const legacyMetaRows = (await env.DB.prepare('SELECT COUNT(*) AS count FROM planner_metas').first()) || {};
+    const legacyV2Runs = (await env.DB.prepare(`
+        SELECT id
+        FROM v2_planner_runs
+        WHERE legacy_object_key LIKE '%_planner_temp_image/_planner_meta.json'
+    `).all()).results || [];
+    const legacyV2RunIds = legacyV2Runs.map(row => row.id).filter(Boolean);
+    if (legacyV2RunIds.length) {
+        const placeholders = legacyV2RunIds.map(() => '?').join(',');
+        await env.DB.batch([
+            env.DB.prepare(`DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = 'planner_item' AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders})))`).bind(...legacyV2RunIds),
+            env.DB.prepare(`DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = 'planner_item' AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders})))`).bind(...legacyV2RunIds),
+            env.DB.prepare(`DELETE FROM v2_prompt_sets WHERE owner_type = 'planner_item' AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders}))`).bind(...legacyV2RunIds),
+            env.DB.prepare(`DELETE FROM v2_planner_generated_images WHERE planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders}))`).bind(...legacyV2RunIds),
+            env.DB.prepare(`DELETE FROM v2_planner_items WHERE planner_run_id IN (${placeholders})`).bind(...legacyV2RunIds),
+            env.DB.prepare(`DELETE FROM v2_planner_sources WHERE planner_run_id IN (${placeholders})`).bind(...legacyV2RunIds),
+            env.DB.prepare(`DELETE FROM v2_planner_runs WHERE id IN (${placeholders})`).bind(...legacyV2RunIds)
+        ]);
+    }
+    await env.DB.batch([
+        env.DB.prepare("DELETE FROM v2_planner_sources WHERE source_key LIKE '%_planner_temp_image/_planner_meta.json'"),
+        env.DB.prepare('DELETE FROM planner_item_image_snapshots'),
+        env.DB.prepare('DELETE FROM planner_item_images'),
+        env.DB.prepare('DELETE FROM planner_item_v4_rows'),
+        env.DB.prepare('DELETE FROM planner_items'),
+        env.DB.prepare('DELETE FROM planner_metas'),
+        env.DB.prepare("DELETE FROM json_documents WHERE doc_type = 'planner_meta'")
+    ]);
     const safeLimit = Math.min(1000, Math.max(1, Number.parseInt(limit, 10) || 500));
     const listed = await env.imgBucket.list({ limit: safeLimit, cursor });
     const deletedPlannerJson = [];
@@ -962,6 +990,8 @@ async function cleanupLegacyPlannerState(env, limit = 500, cursor = undefined) {
     }
     return {
         deletedJsonDocuments: true,
+        deletedLegacyPlannerMetaCount: legacyMetaRows.count || 0,
+        deletedLegacyV2PlannerRunCount: legacyV2RunIds.length,
         deletedPlannerJsonCount: deletedPlannerJson.length,
         deletedPlannerJson,
         truncated: !!listed.truncated,
@@ -1061,6 +1091,15 @@ function splitPlannerItemForDb(item = {}) {
 async function putPlannerMetaDocument(env, objectKey, meta = {}) {
     await ensurePlannerMetaSchema(env);
     await putV2PlannerMetaDocument(env, objectKey, meta);
+    await env.DB.batch([
+        env.DB.prepare('DELETE FROM planner_item_image_snapshots WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_images WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_item_v4_rows WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_items WHERE meta_object_key = ?').bind(objectKey),
+        env.DB.prepare('DELETE FROM planner_metas WHERE object_key = ?').bind(objectKey),
+        env.DB.prepare('DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?').bind('planner_meta', objectKey)
+    ]);
+    return;
     const timestamp = nowIso();
     const { header, items } = splitPlannerMetaForDb(meta);
     await env.DB.batch([
@@ -1264,11 +1303,8 @@ async function getActivePlannerBackgroundMeta(env, objectKey, baseMeta = null) {
 }
 
 async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
-    await ensurePlannerMetaSchema(env);
-    const header = await env.DB.prepare('SELECT * FROM planner_metas WHERE object_key = ?').bind(objectKey).first();
     const v2Meta = await getV2PlannerMetaDocument(env, objectKey);
-    const legacyUpdatedAt = Date.parse(header?.updated_at || '') || 0;
-    if (v2Meta && legacyUpdatedAt <= (v2Meta.updatedAt || 0)) {
+    if (v2Meta) {
         const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, v2Meta);
         if (activeBackgroundMeta) {
             await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
@@ -1276,14 +1312,18 @@ async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
         }
         return v2Meta;
     }
-    if (!header) {
-        const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, null);
-        if (activeBackgroundMeta) {
-            await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
-            return activeBackgroundMeta;
-        }
-        return null;
+    const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, null);
+    if (activeBackgroundMeta) {
+        await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
+        return activeBackgroundMeta;
     }
+    return null;
+}
+
+async function getLegacyPlannerMetaDocument(env, objectKey) {
+    await ensurePlannerMetaSchema(env);
+    const header = await env.DB.prepare('SELECT * FROM planner_metas WHERE object_key = ?').bind(objectKey).first();
+    if (!header) return null;
     const itemRows = (await env.DB.prepare('SELECT * FROM planner_items WHERE meta_object_key = ? ORDER BY sort_order, image_number').bind(objectKey).all()).results || [];
     const itemIds = itemRows.map(row => row.id);
     const v4ByItem = new Map();
@@ -1355,12 +1395,6 @@ async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
     if (Object.keys(backgroundStatus).length) meta.backgroundStatus = backgroundStatus;
     const runningSituationIds = parseJsonField(header.running_situation_ids_json, []);
     if (runningSituationIds.length) meta.runningSituationIds = runningSituationIds;
-    const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, meta);
-    if (activeBackgroundMeta) {
-        await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
-        return activeBackgroundMeta;
-    }
-    await putV2PlannerMetaDocument(env, objectKey, meta);
     return meta;
 }
 
