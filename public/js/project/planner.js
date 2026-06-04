@@ -91,10 +91,10 @@ export async function loadPlannerMeta(project, characterId = '') {
     if (!project?.prefix) return null;
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
     const targetKey = getPlannerMetaKey(project, targetCharacterId);
-    let res = await fetch(`/api/planner/meta?key=${encodeURIComponent(targetKey)}&fallbackKey=${encodeURIComponent(targetKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    let res = await fetch(`/api/planner/meta?key=${encodeURIComponent(targetKey)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404 && targetCharacterId) {
         const legacyKey = getPlannerMetaKey(project);
-        res = await fetch(`/api/planner/meta?key=${encodeURIComponent(legacyKey)}&fallbackKey=${encodeURIComponent(legacyKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+        res = await fetch(`/api/planner/meta?key=${encodeURIComponent(legacyKey)}&_t=${Date.now()}`, { cache: 'no-store' });
     }
     if (res.status === 404) return null;
     if (!res.ok) throw new Error('플래너 메타데이터를 불러오지 못했습니다.');
@@ -124,7 +124,7 @@ export async function savePlannerMeta(project, meta) {
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
-        body: JSON.stringify({ key, fallbackKey: key, data: normalized }),
+        body: JSON.stringify({ key, data: normalized }),
         cache: 'no-store'
     });
     if (!res.ok) {
@@ -139,7 +139,7 @@ export async function deletePlannerMeta(project, characterId = '') {
     await fetch('/api/planner/meta', {
         method: 'DELETE',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key, fallbackKey: key })
+        body: JSON.stringify({ key })
     }).catch(() => null);
 }
 
@@ -170,7 +170,7 @@ export async function loadPlannerSettings(project, force = false) {
     if (!force && window.PROJECT_PLANNER_SETTINGS?.projectId === project.id) return window.PROJECT_PLANNER_SETTINGS;
 
     const key = getPlannerSettingsKey(project);
-    const res = await fetch(`/api/db/json-document?type=planner_settings&key=${encodeURIComponent(key)}&fallbackKey=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/db/json-document?type=planner_settings&key=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) {
         window.PROJECT_PLANNER_SETTINGS = { projectId: project.id, ...normalizePlannerSettings() };
         return window.PROJECT_PLANNER_SETTINGS;
@@ -191,7 +191,7 @@ export async function savePlannerSettings(project, settings) {
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
-        body: JSON.stringify({ type: 'planner_settings', key, fallbackKey: key, data: normalized }),
+        body: JSON.stringify({ type: 'planner_settings', key, data: normalized }),
         cache: 'no-store'
     });
     if (!res.ok) {

@@ -903,7 +903,7 @@ async function loadUploadCharacters(projectPath) {
 async function getCraftUploadSituations(projectPath) {
     if (!projectPath) return [];
     const key = `${projectPath}_situations_meta.json`;
-    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(key)}&fallbackKey=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) return [];
     if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
     const payload = await res.json().catch(() => ({}));
@@ -922,7 +922,7 @@ function getCraftUploadSelectedContext() {
 async function getCraftUploadSituation(projectPath, situationId) {
     if (!projectPath || !situationId) return null;
     const key = `${projectPath}_situations_meta.json`;
-    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(key)}&fallbackKey=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) return null;
 
     const payload = await res.json().catch(() => ({}));

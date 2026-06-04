@@ -18,6 +18,9 @@ bucket_name = "imggul-storage"
 [images]
 binding = "IMAGES"
 
+[triggers]
+crons = ["17 */6 * * *"]
+
 [[queues.consumers]]
 queue = "imggul-queue"
 max_batch_size = 1

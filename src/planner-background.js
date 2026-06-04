@@ -129,6 +129,25 @@ function makeId(prefix) {
     return `${prefix}_${crypto.randomUUID()}`;
 }
 
+function makeStableDbId(prefix, value = "") {
+    const source = String(value || prefix);
+    let hash = 2166136261;
+    for (let i = 0; i < source.length; i += 1) {
+        hash ^= source.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    const compact = source.replace(/[^a-zA-Z0-9_-]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 48);
+    return `${prefix}_${compact || "row"}_${(hash >>> 0).toString(16)}`;
+}
+
+function getFileNameFromKey(key = "") {
+    return String(key || "").split("/").filter(Boolean).pop() || String(key || "");
+}
+
+function getAssetIdFromKey(key = "") {
+    return makeStableDbId("asset", key);
+}
+
 function makeLogKey(jobId = "unknown") {
     const parts = getKstDateParts();
     const day = `${parts.year}${parts.month}${parts.day}`;
@@ -528,7 +547,7 @@ export async function startPlannerBackgroundJob(env, body) {
             totalCount,
             initialCompletedCount,
             targetSituationId,
-            "{}",
+            JSON.stringify(plannerMeta),
             activeKey,
             activeProjectKey,
             createdAt,
@@ -1043,20 +1062,12 @@ async function encodeWebP(env, imageBuffer) {
     return await transformed.arrayBuffer();
 }
 
-async function readJsonObject(bucket, key, fallback = {}) {
-    const object = await bucket.get(key);
-    if (!object) return fallback;
+function parseJsonField(value, fallback) {
     try {
-        return await object.json();
+        return value ? JSON.parse(value) : fallback;
     } catch {
         return fallback;
     }
-}
-
-async function putJsonObject(bucket, key, value) {
-    await putR2WithRetry(bucket, key, JSON.stringify(value, null, 2), {
-        httpMetadata: { contentType: "application/json; charset=utf-8" }
-    });
 }
 
 async function putJsonDocument(env, docType, objectKey, value) {
@@ -1172,6 +1183,33 @@ function getPlannerItemDbId(objectKey, item, index) {
     return `${objectKey}#${item?.situationId || item?.imageNumber || index}`;
 }
 
+function getPlannerIdentityFromKey(objectKey = "") {
+    const key = String(objectKey || "");
+    const marker = "_planner_temp_image/";
+    const markerIndex = key.indexOf(marker);
+    const projectPrefix = markerIndex >= 0 ? key.slice(0, markerIndex) : "";
+    const planMatch = key.match(/\/plans\/([^/]+)_planner_meta\.json$/);
+    return {
+        projectPrefix,
+        characterId: planMatch?.[1] || ""
+    };
+}
+
+function normalizeV2PlannerRunStatus(status = "draft") {
+    if (status === "queued") return "running";
+    if (status === "partial_failed") return "failed";
+    if (status === "cancel_requested") return "draft";
+    return ["draft", "running", "paused", "completed", "confirmed", "failed"].includes(status) ? status : "draft";
+}
+
+function normalizeV2PlannerItemStatus(status = "pending") {
+    if (status === "queued") return "running";
+    if (status === "completed") return "done";
+    if (status === "partial_failed") return "failed";
+    if (status === "cancel_requested") return "pending";
+    return ["pending", "running", "paused", "done", "confirmed", "failed"].includes(status) ? status : "pending";
+}
+
 function splitPlannerMetaForDb(meta = {}) {
     const {
         items,
@@ -1259,9 +1297,294 @@ function splitPlannerItemForDb(item = {}) {
     };
 }
 
+async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
+    const timestamp = nowIso();
+    const identity = getPlannerIdentityFromKey(objectKey);
+    const { header, items } = splitPlannerMetaForDb(meta);
+    const projectPrefix = header.projectPrefix || identity.projectPrefix || header.projectId || makeStableDbId("project", objectKey);
+    const projectId = projectPrefix;
+    const characterId = header.characterId || identity.characterId || makeStableDbId("character", objectKey);
+    const characterPrefix = header.characterPrefix || characterId;
+    const runId = makeStableDbId("run", objectKey);
+    const statements = [
+        env.DB.prepare(`
+            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
+        `).bind(projectId, projectPrefix, projectPrefix, timestamp, timestamp),
+        env.DB.prepare(`
+            INSERT INTO v2_characters (id, project_id, name, prefix, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, prefix = excluded.prefix, updated_at = excluded.updated_at
+        `).bind(characterId, projectId, characterPrefix, characterPrefix, timestamp, timestamp),
+        env.DB.prepare("DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))")
+            .bind("planner_item", runId),
+        env.DB.prepare("DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))")
+            .bind("planner_item", runId),
+        env.DB.prepare("DELETE FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)")
+            .bind("planner_item", runId),
+        env.DB.prepare("DELETE FROM v2_planner_generated_images WHERE planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)")
+            .bind(runId),
+        env.DB.prepare("DELETE FROM v2_planner_items WHERE planner_run_id = ?").bind(runId),
+        env.DB.prepare(`
+            INSERT INTO v2_planner_runs (
+                id, project_id, character_id, status, mode, default_count, legacy_object_key,
+                ui_status, stage, stage_label, background_job_id, background_status_json,
+                running_situation_ids_json, created_at, updated_at, completed_at, confirmed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                character_id = excluded.character_id,
+                status = excluded.status,
+                mode = excluded.mode,
+                default_count = excluded.default_count,
+                legacy_object_key = excluded.legacy_object_key,
+                ui_status = excluded.ui_status,
+                stage = excluded.stage,
+                stage_label = excluded.stage_label,
+                background_job_id = excluded.background_job_id,
+                background_status_json = excluded.background_status_json,
+                running_situation_ids_json = excluded.running_situation_ids_json,
+                updated_at = excluded.updated_at,
+                completed_at = excluded.completed_at,
+                confirmed_at = excluded.confirmed_at
+        `).bind(
+            runId,
+            projectId,
+            characterId,
+            normalizeV2PlannerRunStatus(header.status),
+            header.backgroundJobId ? "background" : "browser",
+            header.defaultCount,
+            objectKey,
+            header.status || "",
+            header.stage || "",
+            header.stageLabel || "",
+            header.backgroundJobId || "",
+            JSON.stringify(header.backgroundStatus || {}),
+            JSON.stringify(header.runningSituationIds || []),
+            header.createdAt || timestamp,
+            timestamp,
+            ["completed", "confirmed"].includes(normalizeV2PlannerRunStatus(header.status)) ? timestamp : null,
+            normalizeV2PlannerRunStatus(header.status) === "confirmed" ? timestamp : null
+        )
+    ];
+
+    items.forEach((rawItem, index) => {
+        const split = splitPlannerItemForDb(rawItem);
+        const situationId = split.item.situationId || makeStableDbId("situation", `${objectKey}:${index}`);
+        const itemId = makeStableDbId("pitem", `${objectKey}:${situationId}`);
+        const promptSetId = makeStableDbId("prompt", itemId);
+        const imageIds = split.images.map(imageKey => ({
+            key: imageKey,
+            assetId: getAssetIdFromKey(imageKey),
+            generatedId: makeStableDbId("pgen", `${itemId}:${imageKey}`)
+        }));
+        const selected = imageIds.find(image => image.key === split.item.selectedImage);
+        const confirmed = imageIds.find(image => image.key === split.item.finalImage);
+        statements.push(
+            env.DB.prepare(`
+                INSERT INTO v2_situations (id, project_id, name, image_number, rating, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'sfw', ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, image_number = excluded.image_number, sort_order = excluded.sort_order, updated_at = excluded.updated_at
+            `).bind(situationId, projectId, split.item.situationName || situationId, split.item.imageNumber || String(index + 1), index, timestamp, timestamp),
+            env.DB.prepare(`
+                INSERT INTO v2_planner_items (
+                    id, planner_run_id, situation_id, image_number, status, target_count,
+                    selected_generated_image_id, confirmed_asset_id, sort_order, ui_status, situation_index,
+                    stage, stage_label, error_message, background_job_id, background_item_id, extra_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+                itemId,
+                runId,
+                situationId,
+                split.item.imageNumber || String(index + 1),
+                normalizeV2PlannerItemStatus(split.item.status),
+                split.item.count,
+                selected?.generatedId || null,
+                confirmed?.assetId || null,
+                index,
+                split.item.status || "",
+                split.item.situationIndex,
+                split.item.stage || "",
+                split.item.stageLabel || "",
+                split.item.errorMessage || "",
+                split.item.backgroundJobId || "",
+                split.item.backgroundItemId || "",
+                JSON.stringify(split.item.extra || {}),
+                timestamp,
+                timestamp
+            ),
+            env.DB.prepare(`
+                INSERT INTO v2_prompt_sets (id, owner_type, owner_id, kind, name, is_active, sort_order, compiled_prompt_json, created_at, updated_at)
+                VALUES (?, 'planner_item', ?, 'snapshot', '', 1, 0, ?, ?, ?)
+            `).bind(promptSetId, itemId, JSON.stringify(split.item.generation || {}), timestamp, timestamp)
+        );
+        split.v4Rows.forEach((row, rowIndex) => {
+            statements.push(env.DB.prepare(`
+                INSERT INTO v2_prompt_v4_rows (id, prompt_set_id, row_index, subject, clothing, expression, action, negative)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(makeStableDbId("v4", `${promptSetId}:${rowIndex}`), promptSetId, rowIndex, row?.subject || "", row?.clothing || "", row?.expression || "", row?.action || "", row?.negative || ""));
+        });
+        imageIds.forEach((image, imageIndex) => {
+            statements.push(
+                env.DB.prepare(`
+                    INSERT INTO v2_assets (
+                        id, project_id, owner_type, owner_id, r2_key, file_name, mime_type,
+                        kind, status, is_public, sort_order, created_at, updated_at
+                    ) VALUES (?, ?, 'planner_item', ?, ?, ?, 'image/webp', 'image', 'active', 0, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        project_id = excluded.project_id,
+                        owner_type = excluded.owner_type,
+                        owner_id = excluded.owner_id,
+                        r2_key = excluded.r2_key,
+                        file_name = excluded.file_name,
+                        sort_order = excluded.sort_order,
+                        status = 'active',
+                        deleted_at = NULL,
+                        updated_at = excluded.updated_at
+                `).bind(image.assetId, projectId, itemId, image.key, getFileNameFromKey(image.key), imageIndex, timestamp, timestamp),
+                env.DB.prepare(`
+                    INSERT INTO v2_planner_generated_images (id, planner_item_id, asset_id, image_index, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).bind(image.generatedId, itemId, image.assetId, imageIndex, image.key === split.item.finalImage ? "confirmed" : (image.key === split.item.selectedImage ? "selected" : "candidate"), timestamp)
+            );
+        });
+    });
+
+    for (let i = 0; i < statements.length; i += 50) {
+        await env.DB.batch(statements.slice(i, i + 50));
+    }
+}
+
+function normalizeV2GenerationStatus(status = "queued") {
+    if (status === "cancel_requested") return "queued";
+    return ["queued", "running", "paused", "completed", "partial_failed", "failed"].includes(status) ? status : "queued";
+}
+
+async function syncV2GenerationFromBackgroundJob(env, jobId) {
+    if (!env?.DB) return;
+    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
+    if (!job) return;
+    const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
+    const queueRows = await queryAll(env.DB, "SELECT * FROM planner_background_queue WHERE job_id = ?", jobId);
+    const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
+    const plannerRunId = makeStableDbId("run", metaKey);
+    const projectId = job.project_prefix || job.project_id;
+    const characterId = job.character_id || makeStableDbId("character", metaKey);
+    const timestamp = nowIso();
+    const statements = [
+        env.DB.prepare(`
+            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
+        `).bind(projectId, job.project_prefix || projectId, job.project_prefix || projectId, timestamp, timestamp),
+        env.DB.prepare(`
+            INSERT INTO v2_characters (id, project_id, name, prefix, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, prefix = excluded.prefix, updated_at = excluded.updated_at
+        `).bind(characterId, projectId, job.character_prefix || characterId, job.character_prefix || characterId, timestamp, timestamp),
+        env.DB.prepare(`
+            INSERT INTO v2_generation_jobs (
+                id, planner_run_id, project_id, character_id, status, mode, total_count,
+                completed_count, failed_count, legacy_background_job_id, started_at, completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'background', ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                planner_run_id = excluded.planner_run_id,
+                project_id = excluded.project_id,
+                character_id = excluded.character_id,
+                status = excluded.status,
+                total_count = excluded.total_count,
+                completed_count = excluded.completed_count,
+                failed_count = excluded.failed_count,
+                started_at = excluded.started_at,
+                completed_at = excluded.completed_at,
+                updated_at = excluded.updated_at
+        `).bind(
+            makeStableDbId("genjob", job.id),
+            plannerRunId,
+            projectId,
+            characterId,
+            normalizeV2GenerationStatus(job.status),
+            job.total_count || 0,
+            job.completed_count || 0,
+            job.failed_count || 0,
+            job.id,
+            job.started_at || null,
+            job.completed_at || null,
+            job.created_at || timestamp,
+            job.updated_at || timestamp
+        )
+    ];
+    const itemIdByLegacy = new Map();
+    for (const item of items) {
+        const v2ItemId = makeStableDbId("genitem", item.id);
+        itemIdByLegacy.set(item.id, v2ItemId);
+        const plannerItemId = makeStableDbId("pitem", `${metaKey}:${item.situation_id}`);
+        statements.push(env.DB.prepare(`
+            INSERT INTO v2_generation_job_items (
+                id, generation_job_id, planner_item_id, status, target_count, completed_count,
+                failed_count, error_message, legacy_background_item_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                generation_job_id = excluded.generation_job_id,
+                planner_item_id = excluded.planner_item_id,
+                status = excluded.status,
+                target_count = excluded.target_count,
+                completed_count = excluded.completed_count,
+                failed_count = excluded.failed_count,
+                error_message = excluded.error_message,
+                updated_at = excluded.updated_at
+        `).bind(
+            v2ItemId,
+            makeStableDbId("genjob", job.id),
+            plannerItemId,
+            normalizeV2GenerationStatus(item.status),
+            item.count || 1,
+            item.completed_count || 0,
+            item.failed_count || 0,
+            item.error_message || "",
+            item.id,
+            item.created_at || timestamp,
+            item.updated_at || timestamp
+        ));
+    }
+    for (const queue of queueRows) {
+        const generationJobItemId = itemIdByLegacy.get(queue.item_id);
+        if (!generationJobItemId) continue;
+        statements.push(env.DB.prepare(`
+            INSERT INTO v2_generation_queue (
+                id, generation_job_item_id, image_index, status, attempts, scheduled_at,
+                legacy_background_queue_id, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                generation_job_item_id = excluded.generation_job_item_id,
+                image_index = excluded.image_index,
+                status = excluded.status,
+                attempts = excluded.attempts,
+                scheduled_at = excluded.scheduled_at,
+                updated_at = excluded.updated_at
+        `).bind(
+            makeStableDbId("genqueue", queue.id),
+            generationJobItemId,
+            queue.image_index || 0,
+            normalizeV2GenerationStatus(queue.status),
+            queue.attempts || 0,
+            queue.started_at || null,
+            queue.id,
+            queue.created_at || timestamp,
+            queue.updated_at || timestamp
+        ));
+    }
+    for (let i = 0; i < statements.length; i += 50) {
+        await env.DB.batch(statements.slice(i, i + 50));
+    }
+}
+
 async function putPlannerMetaDocument(env, objectKey, meta = {}) {
     if (!env?.DB) return;
     await ensurePlannerMetaSchema(env);
+    await putV2PlannerMetaDocument(env, objectKey, meta);
     const timestamp = nowIso();
     const { header, items } = splitPlannerMetaForDb(meta);
     await env.DB.batch([
@@ -1378,10 +1701,107 @@ async function putPlannerMetaDocument(env, objectKey, meta = {}) {
 }
 
 async function saveMetadata(env, outputPrefix, fileName, metadata) {
-    const key = `${outputPrefix}_meta.json`;
-    const db = await readJsonObject(env.imgBucket, key, {});
-    db[fileName] = metadata;
-    await putJsonObject(env.imgBucket, key, db);
+    if (!env?.DB) return;
+    const timestamp = nowIso();
+    await env.DB.prepare(`
+        CREATE TABLE IF NOT EXISTS file_metadata (
+            folder_prefix TEXT NOT NULL,
+            file_name TEXT NOT NULL,
+            metadata_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (folder_prefix, file_name)
+        )
+    `).run();
+    await env.DB.prepare(`
+        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+            metadata_json = excluded.metadata_json,
+            updated_at = excluded.updated_at
+    `).bind(outputPrefix, fileName, JSON.stringify(metadata || {}), timestamp, timestamp).run();
+
+    const r2Key = `${outputPrefix}${fileName}`;
+    const projectPrefix = String(outputPrefix || "").split("_planner_temp_image/")[0] || makeStableDbId("project", outputPrefix);
+    await env.DB.prepare(`
+        INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            prefix = excluded.prefix,
+            updated_at = excluded.updated_at
+    `).bind(projectPrefix, projectPrefix, projectPrefix, timestamp, timestamp).run();
+    await env.DB.prepare(`
+        INSERT INTO v2_assets (
+            id, project_id, owner_type, owner_id, r2_key, file_name, mime_type,
+            kind, status, is_public, sort_order, created_at, updated_at
+        ) VALUES (?, ?, 'generation_job', '', ?, ?, 'image/webp', 'image', 'active', 0, 0, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            project_id = excluded.project_id,
+            r2_key = excluded.r2_key,
+            file_name = excluded.file_name,
+            status = 'active',
+            deleted_at = NULL,
+            updated_at = excluded.updated_at
+    `).bind(getAssetIdFromKey(r2Key), projectPrefix, r2Key, fileName, timestamp, timestamp).run();
+    await env.DB.prepare(`
+        INSERT INTO v2_asset_metadata (
+            asset_id, prompt, negative_prompt, model, sampler, steps, scale, seed,
+            width, height, metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(asset_id) DO UPDATE SET
+            prompt = excluded.prompt,
+            negative_prompt = excluded.negative_prompt,
+            model = excluded.model,
+            sampler = excluded.sampler,
+            steps = excluded.steps,
+            scale = excluded.scale,
+            seed = excluded.seed,
+            width = excluded.width,
+            height = excluded.height,
+            metadata_json = excluded.metadata_json,
+            updated_at = excluded.updated_at
+    `).bind(
+        getAssetIdFromKey(r2Key),
+        metadata?.Prompt || "",
+        metadata?.["Negative Prompt"] || "",
+        metadata?.Model || null,
+        metadata?.Sampler || null,
+        metadata?.Steps || null,
+        metadata?.["CFG Scale"] == null ? null : String(metadata["CFG Scale"]),
+        metadata?.Seed == null ? null : String(metadata.Seed),
+        null,
+        null,
+        JSON.stringify(metadata || {}),
+        timestamp,
+        timestamp
+    ).run();
+}
+
+async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
+    if (!env?.DB || !env?.imgBucket) return { scanned: 0, deletedCount: 0, failedCount: 0 };
+    const cutoff = new Date(Date.now() - olderThanHours * 60 * 60 * 1000).toISOString();
+    const rows = await queryAll(env.DB, `
+        SELECT id, r2_key
+        FROM v2_assets
+        WHERE status = 'deleted'
+          AND deleted_at IS NOT NULL
+          AND deleted_at < ?
+        ORDER BY deleted_at
+        LIMIT ?
+    `, cutoff, limit);
+    let deletedCount = 0;
+    let failedCount = 0;
+    for (const row of rows) {
+        try {
+            await env.imgBucket.delete(row.r2_key);
+            await env.DB.prepare("DELETE FROM v2_assets WHERE id = ? AND status = 'deleted'")
+                .bind(row.id).run();
+            deletedCount += 1;
+        } catch {
+            failedCount += 1;
+        }
+    }
+    return { scanned: rows.length, deletedCount, failedCount };
 }
 
 async function resetPlannerMetaAfterBackgroundCancel(env, jobId) {
@@ -1389,7 +1809,7 @@ async function resetPlannerMetaAfterBackgroundCancel(env, jobId) {
     if (!job) return;
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
     const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
-    const storedMeta = await readJsonObject(env.imgBucket, metaKey, null);
+    const storedMeta = parseJsonField(job.planner_meta_json, null);
     if (!storedMeta || typeof storedMeta !== "object") return;
 
     const bySituation = new Map(items.map(item => [item.situation_id, item]));
@@ -1426,7 +1846,8 @@ async function resetPlannerMetaAfterBackgroundCancel(env, jobId) {
         };
     });
 
-    await putJsonObject(env.imgBucket, metaKey, meta);
+    await env.DB.prepare("UPDATE planner_background_jobs SET planner_meta_json = ?, updated_at = ? WHERE id = ?")
+        .bind(JSON.stringify(meta), nowIso(), jobId).run();
     await putJsonDocument(env, "planner_meta", metaKey, meta).catch(() => null);
 }
 
@@ -1464,9 +1885,10 @@ async function refreshJobRollup(env, jobId) {
 export async function syncPlannerMetaToR2(env, jobId) {
     const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
     if (!job) return;
+    await syncV2GenerationFromBackgroundJob(env, jobId).catch(() => null);
     const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
     const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
-    const storedMeta = await readJsonObject(env.imgBucket, metaKey, null);
+    const storedMeta = parseJsonField(job.planner_meta_json, null);
     if (!storedMeta || typeof storedMeta !== "object") return;
     const meta = storedMeta;
     meta.projectId = meta.projectId || job.project_id || "";
@@ -1520,7 +1942,8 @@ export async function syncPlannerMetaToR2(env, jobId) {
         };
     });
 
-    await putJsonObject(env.imgBucket, metaKey, meta);
+    await env.DB.prepare("UPDATE planner_background_jobs SET planner_meta_json = ?, updated_at = ? WHERE id = ?")
+        .bind(JSON.stringify(meta), nowIso(), jobId).run();
     await putJsonDocument(env, "planner_meta", metaKey, meta).catch(() => null);
 }
 
@@ -1836,6 +2259,14 @@ export async function processPlannerQueueMessage(env, message) {
 }
 
 export default {
+    async scheduled(_event, env) {
+        await cleanupDeletedAssets(env).catch(error => writeBackgroundErrorLog(env, error, {
+            stage: "scheduled_asset_cleanup"
+        }));
+        await cleanupFinishedBackgroundJobs(env).catch(error => writeBackgroundErrorLog(env, error, {
+            stage: "scheduled_background_job_cleanup"
+        }));
+    },
     async queue(batch, env) {
         for (const message of batch.messages) {
             try {

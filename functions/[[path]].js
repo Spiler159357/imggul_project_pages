@@ -89,13 +89,6 @@ async function readR2Json(env, key, fallback = null) {
     }
 }
 
-async function writeR2Json(env, key, value) {
-    await env.imgBucket.put(key, JSON.stringify(value, null, 2), {
-        httpMetadata: { contentType: 'application/json; charset=utf-8' },
-        customMetadata: { ispublic: 'false' }
-    });
-}
-
 async function getJsonDocument(env, docType, objectKey, fallbackKey = objectKey, fallbackValue = null) {
     await ensureJsonDbSchema(env);
     const row = await env.DB.prepare(
@@ -106,12 +99,7 @@ async function getJsonDocument(env, docType, objectKey, fallbackKey = objectKey,
             return JSON.parse(row.data_json);
         } catch {}
     }
-
-    const fallback = fallbackKey ? await readR2Json(env, fallbackKey, fallbackValue) : fallbackValue;
-    if (fallback !== null && fallback !== undefined) {
-        await putJsonDocument(env, docType, objectKey, fallback, 'r2_import');
-    }
-    return fallback;
+    return fallbackValue;
 }
 
 async function putJsonDocument(env, docType, objectKey, value, source = 'db') {
@@ -125,6 +113,98 @@ async function putJsonDocument(env, docType, objectKey, value, source = 'db') {
             source = excluded.source,
             updated_at = excluded.updated_at
     `).bind(docType, objectKey, JSON.stringify(value || {}), source, timestamp, timestamp).run();
+    await mirrorJsonDocumentToV2(env, docType, objectKey, value || {}).catch(() => null);
+}
+
+function getProjectPrefixFromDocumentKey(key = '') {
+    const value = String(key || '');
+    const slashIndex = value.indexOf('/');
+    if (slashIndex >= 0) return value.slice(0, slashIndex + 1);
+    const situationSuffix = '_situations_meta.json';
+    if (value.endsWith(situationSuffix)) return `${value.slice(0, -situationSuffix.length)}/`;
+    return '';
+}
+
+async function upsertV2PromptSnapshot(env, ownerType, ownerId, kind, compiledPrompt, timestamp = nowIso()) {
+    const promptSetId = makeStableDbId('prompt', `${ownerType}:${ownerId}:${kind}`);
+    await env.DB.prepare(`
+        INSERT INTO v2_prompt_sets (
+            id, owner_type, owner_id, kind, name, is_active, sort_order,
+            compiled_prompt_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, '', 1, 0, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            compiled_prompt_json = excluded.compiled_prompt_json,
+            is_active = excluded.is_active,
+            updated_at = excluded.updated_at
+    `).bind(promptSetId, ownerType, ownerId, kind, JSON.stringify(compiledPrompt || {}), timestamp, timestamp).run();
+    return promptSetId;
+}
+
+async function mirrorJsonDocumentToV2(env, docType, objectKey, value) {
+    if (!env?.DB) return;
+    const timestamp = nowIso();
+    if (docType === 'character_meta') {
+        const projectPrefix = getProjectPrefixFromDocumentKey(objectKey);
+        const characterId = objectKey.replace(/_character_meta\.json$/, '');
+        const projectId = projectPrefix || makeStableDbId('project', objectKey);
+        await env.DB.prepare(`
+            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
+        `).bind(projectId, projectPrefix || projectId, projectPrefix || projectId, timestamp, timestamp).run();
+        await env.DB.prepare(`
+            INSERT INTO v2_characters (id, project_id, name, prefix, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, prefix = excluded.prefix, updated_at = excluded.updated_at
+        `).bind(characterId, projectId, value?.name || characterId, characterId, timestamp, timestamp).run();
+        await upsertV2PromptSnapshot(env, 'character', characterId, 'default', value, timestamp);
+    }
+    if (docType === 'situations_meta') {
+        const projectPrefix = getProjectPrefixFromDocumentKey(objectKey);
+        const projectId = projectPrefix || makeStableDbId('project', objectKey);
+        await env.DB.prepare(`
+            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
+        `).bind(projectId, projectPrefix || projectId, projectPrefix || projectId, timestamp, timestamp).run();
+        const situations = Array.isArray(value?.situations) ? value.situations : [];
+        const statements = [];
+        situations.forEach((situation, index) => {
+            const situationId = situation?.id || situation?.folderName || makeStableDbId('situation', `${objectKey}:${index}`);
+            statements.push(env.DB.prepare(`
+                INSERT INTO v2_situations (id, project_id, name, image_number, rating, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    name = excluded.name,
+                    image_number = excluded.image_number,
+                    rating = excluded.rating,
+                    sort_order = excluded.sort_order,
+                    updated_at = excluded.updated_at
+            `).bind(
+                situationId,
+                projectId,
+                situation?.name || situation?.alias || situationId,
+                String(situation?.imageNumber ?? index),
+                situation?.rating === 'nsfw' ? 'nsfw' : 'sfw',
+                index,
+                timestamp,
+                timestamp
+            ));
+            statements.push(env.DB.prepare(`
+                INSERT INTO v2_prompt_sets (
+                    id, owner_type, owner_id, kind, name, is_active, sort_order,
+                    compiled_prompt_json, created_at, updated_at
+                ) VALUES (?, 'situation', ?, 'default', '', 1, 0, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    compiled_prompt_json = excluded.compiled_prompt_json,
+                    updated_at = excluded.updated_at
+            `).bind(makeStableDbId('prompt', `situation:${situationId}:default`), situationId, JSON.stringify(situation || {}), timestamp, timestamp));
+        });
+        for (let i = 0; i < statements.length; i += 50) {
+            await env.DB.batch(statements.slice(i, i + 50));
+        }
+    }
 }
 
 async function ensurePlannerMetaSchema(env) {
@@ -220,6 +300,17 @@ function getPlannerItemDbId(objectKey, item, index) {
     return `${objectKey}#${item?.situationId || item?.imageNumber || index}`;
 }
 
+function makeStableDbId(prefix, value = '') {
+    const source = String(value || prefix);
+    let hash = 2166136261;
+    for (let i = 0; i < source.length; i += 1) {
+        hash ^= source.charCodeAt(i);
+        hash = Math.imul(hash, 16777619);
+    }
+    const compact = source.replace(/[^a-zA-Z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 48);
+    return `${prefix}_${compact || 'row'}_${(hash >>> 0).toString(16)}`;
+}
+
 function getPlannerIdentityFromKey(objectKey = '') {
     const key = String(objectKey || '');
     const marker = '_planner_temp_image/';
@@ -229,6 +320,580 @@ function getPlannerIdentityFromKey(objectKey = '') {
     return {
         projectPrefix,
         characterId: planMatch?.[1] || ''
+    };
+}
+
+function normalizeV2PlannerRunStatus(status = 'draft') {
+    if (status === 'queued') return 'running';
+    if (status === 'partial_failed') return 'failed';
+    if (status === 'cancel_requested') return 'draft';
+    return ['draft', 'running', 'paused', 'completed', 'confirmed', 'failed'].includes(status) ? status : 'draft';
+}
+
+function normalizeV2PlannerItemStatus(status = 'pending') {
+    if (status === 'queued') return 'running';
+    if (status === 'completed') return 'done';
+    if (status === 'partial_failed') return 'failed';
+    if (status === 'cancel_requested') return 'pending';
+    return ['pending', 'running', 'paused', 'done', 'confirmed', 'failed'].includes(status) ? status : 'pending';
+}
+
+function getFileNameFromKey(key = '') {
+    return String(key || '').split('/').filter(Boolean).pop() || String(key || '');
+}
+
+function getAssetIdFromKey(key = '') {
+    return makeStableDbId('asset', key);
+}
+
+async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
+    const timestamp = nowIso();
+    const identity = getPlannerIdentityFromKey(objectKey);
+    const { header, items } = splitPlannerMetaForDb(meta);
+    const projectPrefix = header.projectPrefix || identity.projectPrefix || header.projectId || makeStableDbId('project', objectKey);
+    const projectId = projectPrefix;
+    const characterId = header.characterId || identity.characterId || makeStableDbId('character', objectKey);
+    const characterPrefix = header.characterPrefix || characterId;
+    const runId = makeStableDbId('run', objectKey);
+
+    const statements = [
+        env.DB.prepare(`
+            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = COALESCE(NULLIF(excluded.name, ''), v2_projects.name),
+                prefix = excluded.prefix,
+                updated_at = excluded.updated_at
+        `).bind(projectId, projectPrefix, projectPrefix, timestamp, timestamp),
+        env.DB.prepare(`
+            INSERT INTO v2_characters (id, project_id, name, prefix, sort_order, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 0, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                name = COALESCE(NULLIF(excluded.name, ''), v2_characters.name),
+                prefix = excluded.prefix,
+                updated_at = excluded.updated_at
+        `).bind(characterId, projectId, characterPrefix || characterId, characterPrefix || characterId, timestamp, timestamp),
+        env.DB.prepare('DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))')
+            .bind('planner_item', runId),
+        env.DB.prepare('DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))')
+            .bind('planner_item', runId),
+        env.DB.prepare('DELETE FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)')
+            .bind('planner_item', runId),
+        env.DB.prepare('DELETE FROM v2_planner_generated_images WHERE planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)')
+            .bind(runId),
+        env.DB.prepare('DELETE FROM v2_planner_items WHERE planner_run_id = ?').bind(runId),
+        env.DB.prepare(`
+            INSERT INTO v2_planner_runs (
+                id, project_id, character_id, status, mode, default_count, legacy_object_key,
+                ui_status, stage, stage_label, background_job_id, background_status_json,
+                running_situation_ids_json, created_at, updated_at, completed_at, confirmed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                character_id = excluded.character_id,
+                status = excluded.status,
+                mode = excluded.mode,
+                default_count = excluded.default_count,
+                legacy_object_key = excluded.legacy_object_key,
+                ui_status = excluded.ui_status,
+                stage = excluded.stage,
+                stage_label = excluded.stage_label,
+                background_job_id = excluded.background_job_id,
+                background_status_json = excluded.background_status_json,
+                running_situation_ids_json = excluded.running_situation_ids_json,
+                updated_at = excluded.updated_at,
+                completed_at = excluded.completed_at,
+                confirmed_at = excluded.confirmed_at
+        `).bind(
+            runId,
+            projectId,
+            characterId,
+            normalizeV2PlannerRunStatus(header.status),
+            header.backgroundJobId ? 'background' : 'browser',
+            header.defaultCount,
+            objectKey,
+            header.status || '',
+            header.stage || '',
+            header.stageLabel || '',
+            header.backgroundJobId || '',
+            JSON.stringify(header.backgroundStatus || {}),
+            JSON.stringify(header.runningSituationIds || []),
+            header.createdAt || timestamp,
+            timestamp,
+            ['completed', 'confirmed'].includes(normalizeV2PlannerRunStatus(header.status)) ? timestamp : null,
+            normalizeV2PlannerRunStatus(header.status) === 'confirmed' ? timestamp : null
+        )
+    ];
+
+    items.forEach((rawItem, index) => {
+        const split = splitPlannerItemForDb(rawItem);
+        const situationId = split.item.situationId || makeStableDbId('situation', `${objectKey}:${index}`);
+        const itemId = makeStableDbId('pitem', `${objectKey}:${situationId}`);
+        const promptSetId = makeStableDbId('prompt', itemId);
+        const imageIds = split.images.map(imageKey => ({
+            key: imageKey,
+            assetId: getAssetIdFromKey(imageKey),
+            generatedId: makeStableDbId('pgen', `${itemId}:${imageKey}`)
+        }));
+        const selected = imageIds.find(image => image.key === split.item.selectedImage);
+        const confirmed = imageIds.find(image => image.key === split.item.finalImage);
+
+        statements.push(
+            env.DB.prepare(`
+                INSERT INTO v2_situations (id, project_id, name, image_number, rating, sort_order, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 'sfw', ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    project_id = excluded.project_id,
+                    name = COALESCE(NULLIF(excluded.name, ''), v2_situations.name),
+                    image_number = excluded.image_number,
+                    sort_order = excluded.sort_order,
+                    updated_at = excluded.updated_at
+            `).bind(situationId, projectId, split.item.situationName || situationId, split.item.imageNumber || String(index + 1), index, timestamp, timestamp),
+            env.DB.prepare(`
+                INSERT INTO v2_planner_items (
+                    id, planner_run_id, situation_id, image_number, status, target_count,
+                    selected_generated_image_id, confirmed_asset_id, sort_order, ui_status, situation_index,
+                    stage, stage_label, error_message, background_job_id, background_item_id, extra_json,
+                    created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+                itemId,
+                runId,
+                situationId,
+                split.item.imageNumber || String(index + 1),
+                normalizeV2PlannerItemStatus(split.item.status),
+                split.item.count,
+                selected?.generatedId || null,
+                confirmed?.assetId || null,
+                index,
+                split.item.status || '',
+                split.item.situationIndex,
+                split.item.stage || '',
+                split.item.stageLabel || '',
+                split.item.errorMessage || '',
+                split.item.backgroundJobId || '',
+                split.item.backgroundItemId || '',
+                JSON.stringify(split.item.extra || {}),
+                timestamp,
+                timestamp
+            ),
+            env.DB.prepare(`
+                INSERT INTO v2_prompt_sets (
+                    id, owner_type, owner_id, kind, name, is_active, sort_order,
+                    compiled_prompt_json, created_at, updated_at
+                ) VALUES (?, 'planner_item', ?, 'snapshot', '', 1, 0, ?, ?, ?)
+            `).bind(promptSetId, itemId, JSON.stringify(split.item.generation || {}), timestamp, timestamp)
+        );
+
+        split.v4Rows.forEach((row, rowIndex) => {
+            statements.push(env.DB.prepare(`
+                INSERT INTO v2_prompt_v4_rows (
+                    id, prompt_set_id, row_index, subject, clothing, expression, action, negative
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+                makeStableDbId('v4', `${promptSetId}:${rowIndex}`),
+                promptSetId,
+                rowIndex,
+                row?.subject || '',
+                row?.clothing || '',
+                row?.expression || '',
+                row?.action || '',
+                row?.negative || ''
+            ));
+        });
+
+        imageIds.forEach((image, imageIndex) => {
+            statements.push(
+                env.DB.prepare(`
+                    INSERT INTO v2_assets (
+                        id, project_id, owner_type, owner_id, r2_key, file_name, mime_type,
+                        kind, status, is_public, sort_order, created_at, updated_at
+                    ) VALUES (?, ?, 'planner_item', ?, ?, ?, 'image/webp', 'image', 'active', 0, ?, ?, ?)
+                    ON CONFLICT(id) DO UPDATE SET
+                        project_id = excluded.project_id,
+                        owner_type = excluded.owner_type,
+                        owner_id = excluded.owner_id,
+                        r2_key = excluded.r2_key,
+                        file_name = excluded.file_name,
+                        sort_order = excluded.sort_order,
+                        status = 'active',
+                        deleted_at = NULL,
+                        updated_at = excluded.updated_at
+                `).bind(image.assetId, projectId, itemId, image.key, getFileNameFromKey(image.key), imageIndex, timestamp, timestamp),
+                env.DB.prepare(`
+                    INSERT INTO v2_planner_generated_images (id, planner_item_id, asset_id, image_index, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                `).bind(
+                    image.generatedId,
+                    itemId,
+                    image.assetId,
+                    imageIndex,
+                    image.key === split.item.finalImage ? 'confirmed' : (image.key === split.item.selectedImage ? 'selected' : 'candidate'),
+                    timestamp
+                )
+            );
+            const snapshot = split.snapshots[image.key];
+            if (snapshot) {
+                statements.push(env.DB.prepare(`
+                    INSERT INTO v2_asset_metadata (
+                        asset_id, prompt, negative_prompt, metadata_json, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(asset_id) DO UPDATE SET
+                        prompt = excluded.prompt,
+                        negative_prompt = excluded.negative_prompt,
+                        metadata_json = excluded.metadata_json,
+                        updated_at = excluded.updated_at
+                `).bind(
+                    image.assetId,
+                    snapshot.Prompt || '',
+                    snapshot['Negative Prompt'] || '',
+                    JSON.stringify(snapshot || {}),
+                    timestamp,
+                    timestamp
+                ));
+            }
+        });
+    });
+
+    for (let i = 0; i < statements.length; i += 50) {
+        await env.DB.batch(statements.slice(i, i + 50));
+    }
+}
+
+async function getV2PlannerMetaDocument(env, objectKey) {
+    const run = await env.DB.prepare(`
+        SELECT
+            r.*,
+            p.prefix AS project_prefix,
+            c.prefix AS character_prefix
+        FROM v2_planner_runs r
+        LEFT JOIN v2_projects p ON p.id = r.project_id
+        LEFT JOIN v2_characters c ON c.id = r.character_id
+        WHERE r.legacy_object_key = ?
+        LIMIT 1
+    `).bind(objectKey).first();
+    if (!run) return null;
+
+    const itemRows = (await env.DB.prepare(`
+        SELECT
+            i.*,
+            s.name AS situation_name
+        FROM v2_planner_items i
+        LEFT JOIN v2_situations s ON s.id = i.situation_id
+        WHERE i.planner_run_id = ?
+        ORDER BY i.sort_order, i.image_number
+    `).bind(run.id).all()).results || [];
+    const itemIds = itemRows.map(row => row.id);
+    const promptsByItem = new Map();
+    const imagesByItem = new Map();
+    const selectedByGeneratedId = new Map();
+    const assetById = new Map();
+    const v4ByPromptSet = new Map();
+
+    itemRows.forEach(row => imagesByItem.set(row.id, []));
+    if (itemIds.length) {
+        const placeholders = itemIds.map(() => '?').join(',');
+        const promptRows = (await env.DB.prepare(`
+            SELECT * FROM v2_prompt_sets
+            WHERE owner_type = 'planner_item'
+              AND owner_id IN (${placeholders})
+              AND kind = 'snapshot'
+            ORDER BY owner_id, sort_order
+        `).bind(...itemIds).all()).results || [];
+        promptRows.forEach(row => {
+            if (!promptsByItem.has(row.owner_id)) promptsByItem.set(row.owner_id, row);
+            v4ByPromptSet.set(row.id, []);
+        });
+        const promptIds = promptRows.map(row => row.id);
+        if (promptIds.length) {
+            const promptPlaceholders = promptIds.map(() => '?').join(',');
+            const v4Rows = (await env.DB.prepare(`
+                SELECT * FROM v2_prompt_v4_rows
+                WHERE prompt_set_id IN (${promptPlaceholders})
+                ORDER BY prompt_set_id, row_index
+            `).bind(...promptIds).all()).results || [];
+            v4Rows.forEach(row => v4ByPromptSet.get(row.prompt_set_id)?.push({
+                subject: row.subject || '',
+                clothing: row.clothing || '',
+                expression: row.expression || '',
+                action: row.action || '',
+                negative: row.negative || ''
+            }));
+        }
+        const imageRows = (await env.DB.prepare(`
+            SELECT pgi.*, a.r2_key, a.id AS resolved_asset_id
+            FROM v2_planner_generated_images pgi
+            JOIN v2_assets a ON a.id = pgi.asset_id
+            WHERE pgi.planner_item_id IN (${placeholders})
+            ORDER BY pgi.planner_item_id, pgi.image_index
+        `).bind(...itemIds).all()).results || [];
+        imageRows.forEach(row => {
+            imagesByItem.get(row.planner_item_id)?.push(row.r2_key);
+            selectedByGeneratedId.set(row.id, row.r2_key);
+            assetById.set(row.resolved_asset_id, row.r2_key);
+        });
+    }
+
+    const meta = {
+        projectId: run.project_id || '',
+        projectPrefix: run.project_prefix || '',
+        characterId: run.character_id || '',
+        characterPrefix: run.character_prefix || '',
+        status: run.ui_status || run.status || 'draft',
+        stage: run.stage || '',
+        stageLabel: run.stage_label || '',
+        defaultCount: run.default_count || 20,
+        updatedAt: Date.parse(run.updated_at) || Date.now(),
+        items: itemRows.map(row => {
+            const prompt = promptsByItem.get(row.id);
+            const generation = parseJsonField(prompt?.compiled_prompt_json, {});
+            const v4Rows = prompt ? (v4ByPromptSet.get(prompt.id) || []) : [];
+            generation.v4PromptCharacters = v4Rows;
+            generation.v4_prompt = v4Rows;
+            return {
+                ...parseJsonField(row.extra_json, {}),
+                situationId: row.situation_id,
+                situationName: row.situation_name || row.situation_id,
+                situationIndex: row.situation_index,
+                imageNumber: row.image_number,
+                count: row.target_count,
+                status: row.ui_status || row.status,
+                stage: row.stage || '',
+                stageLabel: row.stage_label || '',
+                selectedImage: selectedByGeneratedId.get(row.selected_generated_image_id) || null,
+                finalImage: assetById.get(row.confirmed_asset_id) || null,
+                errorMessage: row.error_message || '',
+                backgroundJobId: row.background_job_id || undefined,
+                backgroundItemId: row.background_item_id || undefined,
+                generation,
+                images: imagesByItem.get(row.id) || []
+            };
+        })
+    };
+    if (run.background_job_id) meta.backgroundJobId = run.background_job_id;
+    const backgroundStatus = parseJsonField(run.background_status_json, {});
+    if (Object.keys(backgroundStatus).length) meta.backgroundStatus = backgroundStatus;
+    const runningSituationIds = parseJsonField(run.running_situation_ids_json, []);
+    if (runningSituationIds.length) meta.runningSituationIds = runningSituationIds;
+    return meta;
+}
+
+async function deleteV2PlannerMetaDocument(env, objectKey) {
+    const run = await env.DB.prepare('SELECT id FROM v2_planner_runs WHERE legacy_object_key = ?').bind(objectKey).first();
+    if (!run?.id) return;
+    await env.DB.batch([
+        env.DB.prepare('DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))')
+            .bind('planner_item', run.id),
+        env.DB.prepare('DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))')
+            .bind('planner_item', run.id),
+        env.DB.prepare('DELETE FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)')
+            .bind('planner_item', run.id),
+        env.DB.prepare('DELETE FROM v2_planner_generated_images WHERE planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)')
+            .bind(run.id),
+        env.DB.prepare('DELETE FROM v2_planner_items WHERE planner_run_id = ?').bind(run.id),
+        env.DB.prepare('DELETE FROM v2_planner_runs WHERE id = ?').bind(run.id)
+    ]);
+}
+
+async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
+    if (!env.DB) throw new Error('DB binding is not configured');
+    if (!env.imgBucket) throw new Error('imgBucket binding is not configured');
+    const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 100));
+    const safeHours = Math.max(0, Number.parseFloat(olderThanHours) || 0);
+    const cutoff = new Date(Date.now() - safeHours * 60 * 60 * 1000).toISOString();
+    const rows = (await env.DB.prepare(`
+        SELECT id, r2_key
+        FROM v2_assets
+        WHERE status = 'deleted'
+          AND deleted_at IS NOT NULL
+          AND deleted_at < ?
+        ORDER BY deleted_at
+        LIMIT ?
+    `).bind(cutoff, safeLimit).all()).results || [];
+    const deleted = [];
+    const failed = [];
+    for (const row of rows) {
+        try {
+            await env.imgBucket.delete(row.r2_key);
+            await env.DB.prepare('DELETE FROM v2_assets WHERE id = ? AND status = ?').bind(row.id, 'deleted').run();
+            deleted.push(row.id);
+        } catch (error) {
+            failed.push({ id: row.id, error: error?.message || String(error) });
+        }
+    }
+    return {
+        scanned: rows.length,
+        deletedCount: deleted.length,
+        failedCount: failed.length,
+        deleted,
+        failed
+    };
+}
+
+async function migrateR2JsonStateToDb(env, limit = 500, cursor = undefined) {
+    if (!env.DB) throw new Error('DB binding is not configured');
+    if (!env.imgBucket) throw new Error('imgBucket binding is not configured');
+    await ensureJsonDbSchema(env);
+    const safeLimit = Math.min(1000, Math.max(1, Number.parseInt(limit, 10) || 500));
+    const listed = await env.imgBucket.list({ limit: safeLimit, cursor });
+    const imported = [];
+    const skipped = [];
+    for (const object of listed.objects || []) {
+        const key = object.key || '';
+        let docType = '';
+        if (key.endsWith('_character_meta.json')) docType = 'character_meta';
+        else if (key.endsWith('_situations_meta.json')) docType = 'situations_meta';
+        else if (key.endsWith('_planner_settings.json')) docType = 'planner_settings';
+        else if (key.endsWith('_meta.json') && !key.endsWith('_planner_meta.json')) docType = 'file_metadata';
+        else if (key === '.imggul_aliases.json') docType = 'aliases_global';
+        else if (key.endsWith('/.aliases.json')) docType = 'aliases_project';
+        else {
+            skipped.push({ key, reason: 'unsupported_json_state' });
+            continue;
+        }
+        const data = await readR2Json(env, key, null);
+        if (data === null || data === undefined) {
+            skipped.push({ key, reason: 'invalid_json' });
+            continue;
+        }
+        if (docType === 'file_metadata') {
+            const folderPrefix = key.slice(0, -'_meta.json'.length);
+            const timestamp = nowIso();
+            const rows = Object.entries(data || {});
+            for (const [fileName, metadata] of rows) {
+                await env.DB.prepare(`
+                    INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+                    VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+                        metadata_json = excluded.metadata_json,
+                        updated_at = excluded.updated_at
+                `).bind(folderPrefix, fileName, JSON.stringify(metadata || {}), timestamp, timestamp).run();
+            }
+            imported.push({ key, docType, rows: rows.length });
+            continue;
+        }
+        if (docType === 'aliases_global' || docType === 'aliases_project') {
+            const projectName = docType === 'aliases_project' ? key.split('/')[0] : '';
+            const scope = docType === 'aliases_project' ? 'project' : 'global';
+            const entries = Object.entries(data || {});
+            for (const [targetKey, alias] of entries) {
+                await putDbAlias(env, scope, projectName, targetKey, alias);
+            }
+            imported.push({ key, docType, rows: entries.length });
+            continue;
+        }
+        await putJsonDocument(env, docType, key, data, 'r2_import');
+        imported.push({ key, docType, rows: 1 });
+    }
+    return {
+        importedCount: imported.length,
+        skippedCount: skipped.length,
+        imported,
+        skipped,
+        truncated: !!listed.truncated,
+        cursor: listed.cursor || ''
+    };
+}
+
+async function backfillLegacyPlannerToV2(env, limit = 100) {
+    if (!env.DB) throw new Error('DB binding is not configured');
+    await ensurePlannerMetaSchema(env);
+    const safeLimit = Math.min(500, Math.max(1, Number.parseInt(limit, 10) || 100));
+    const rows = (await env.DB.prepare(`
+        SELECT object_key
+        FROM planner_metas
+        ORDER BY updated_at DESC
+        LIMIT ?
+    `).bind(safeLimit).all()).results || [];
+    const imported = [];
+    for (const row of rows) {
+        const meta = await getPlannerMetaDocument(env, row.object_key, '');
+        if (meta) {
+            await putV2PlannerMetaDocument(env, row.object_key, meta);
+            imported.push(row.object_key);
+        }
+    }
+    return { importedCount: imported.length, imported };
+}
+
+async function backfillLegacyBackgroundToV2(env, limit = 100) {
+    if (!env.DB) throw new Error('DB binding is not configured');
+    const exists = await plannerBackgroundTablesExist(env);
+    if (!exists) return { importedCount: 0, imported: [] };
+    const safeLimit = Math.min(500, Math.max(1, Number.parseInt(limit, 10) || 100));
+    const jobs = (await env.DB.prepare(`
+        SELECT *
+        FROM planner_background_jobs
+        ORDER BY updated_at DESC
+        LIMIT ?
+    `).bind(safeLimit).all()).results || [];
+    const imported = [];
+    for (const job of jobs) {
+        const metaKey = `${job.project_prefix}_planner_temp_image/plans/${String(job.character_id || '').trim().replace(/[\\/]+/g, '_')}_planner_meta.json`;
+        const baseMeta = parseJsonField(job.planner_meta_json, null);
+        const activeMeta = await getActivePlannerBackgroundMeta(env, metaKey, baseMeta);
+        if (activeMeta) await putPlannerMetaDocument(env, metaKey, activeMeta);
+        const timestamp = nowIso();
+        const projectId = job.project_prefix || job.project_id;
+        const plannerRunId = makeStableDbId('run', metaKey);
+        const generationJobId = makeStableDbId('genjob', job.id);
+        await env.DB.prepare(`
+            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
+        `).bind(projectId, job.project_prefix || projectId, job.project_prefix || projectId, timestamp, timestamp).run();
+        await env.DB.prepare(`
+            INSERT INTO v2_generation_jobs (
+                id, planner_run_id, project_id, character_id, status, mode, total_count,
+                completed_count, failed_count, legacy_background_job_id, started_at, completed_at, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'background', ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                status = excluded.status,
+                total_count = excluded.total_count,
+                completed_count = excluded.completed_count,
+                failed_count = excluded.failed_count,
+                updated_at = excluded.updated_at
+        `).bind(
+            generationJobId,
+            plannerRunId,
+            projectId,
+            null,
+            normalizeV2PlannerRunStatus(job.status) === 'failed' ? 'failed' : (job.status === 'partial_failed' ? 'partial_failed' : (job.status === 'completed' ? 'completed' : 'queued')),
+            job.total_count || 0,
+            job.completed_count || 0,
+            job.failed_count || 0,
+            job.id,
+            job.started_at || null,
+            job.completed_at || null,
+            job.created_at || timestamp,
+            job.updated_at || timestamp
+        ).run();
+        imported.push(job.id);
+    }
+    return { importedCount: imported.length, imported };
+}
+
+async function cleanupLegacyPlannerState(env, limit = 500, cursor = undefined) {
+    if (!env.DB) throw new Error('DB binding is not configured');
+    if (!env.imgBucket) throw new Error('imgBucket binding is not configured');
+    await ensureJsonDbSchema(env);
+    await env.DB.prepare("DELETE FROM json_documents WHERE doc_type = 'planner_meta'").run();
+    const safeLimit = Math.min(1000, Math.max(1, Number.parseInt(limit, 10) || 500));
+    const listed = await env.imgBucket.list({ limit: safeLimit, cursor });
+    const deletedPlannerJson = [];
+    for (const object of listed.objects || []) {
+        const key = object.key || '';
+        if (!key.endsWith('_planner_meta.json')) continue;
+        await env.imgBucket.delete(key);
+        deletedPlannerJson.push(key);
+    }
+    return {
+        deletedJsonDocuments: true,
+        deletedPlannerJsonCount: deletedPlannerJson.length,
+        deletedPlannerJson,
+        truncated: !!listed.truncated,
+        cursor: listed.cursor || ''
     };
 }
 
@@ -323,6 +988,7 @@ function splitPlannerItemForDb(item = {}) {
 
 async function putPlannerMetaDocument(env, objectKey, meta = {}) {
     await ensurePlannerMetaSchema(env);
+    await putV2PlannerMetaDocument(env, objectKey, meta);
     const timestamp = nowIso();
     const { header, items } = splitPlannerMetaForDb(meta);
     await env.DB.batch([
@@ -528,25 +1194,23 @@ async function getActivePlannerBackgroundMeta(env, objectKey, baseMeta = null) {
 async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
     await ensurePlannerMetaSchema(env);
     const header = await env.DB.prepare('SELECT * FROM planner_metas WHERE object_key = ?').bind(objectKey).first();
-    if (!header) {
-        await ensureJsonDbSchema(env);
-        const row = await env.DB.prepare(
-            'SELECT data_json FROM json_documents WHERE doc_type = ? AND object_key = ?'
-        ).bind('planner_meta', objectKey).first();
-        let fallback = null;
-        if (row?.data_json) {
-            fallback = parseJsonField(row.data_json, null);
-        }
-        if (fallback === null || fallback === undefined) {
-            fallback = fallbackKey ? await readR2Json(env, fallbackKey, null) : null;
-        }
-        const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, fallback);
+    const v2Meta = await getV2PlannerMetaDocument(env, objectKey);
+    const legacyUpdatedAt = Date.parse(header?.updated_at || '') || 0;
+    if (v2Meta && legacyUpdatedAt <= (v2Meta.updatedAt || 0)) {
+        const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, v2Meta);
         if (activeBackgroundMeta) {
             await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
             return activeBackgroundMeta;
         }
-        if (fallback !== null && fallback !== undefined) await putPlannerMetaDocument(env, objectKey, fallback);
-        return fallback;
+        return v2Meta;
+    }
+    if (!header) {
+        const activeBackgroundMeta = await getActivePlannerBackgroundMeta(env, objectKey, null);
+        if (activeBackgroundMeta) {
+            await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
+            return activeBackgroundMeta;
+        }
+        return null;
     }
     const itemRows = (await env.DB.prepare('SELECT * FROM planner_items WHERE meta_object_key = ? ORDER BY sort_order, image_number').bind(objectKey).all()).results || [];
     const itemIds = itemRows.map(row => row.id);
@@ -624,11 +1288,13 @@ async function getPlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
         await putPlannerMetaDocument(env, objectKey, activeBackgroundMeta);
         return activeBackgroundMeta;
     }
+    await putV2PlannerMetaDocument(env, objectKey, meta);
     return meta;
 }
 
 async function deletePlannerMetaDocument(env, objectKey, fallbackKey = objectKey) {
     await ensurePlannerMetaSchema(env);
+    await deleteV2PlannerMetaDocument(env, objectKey);
     await env.DB.batch([
         env.DB.prepare('DELETE FROM planner_item_image_snapshots WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
         env.DB.prepare('DELETE FROM planner_item_images WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
@@ -865,7 +1531,6 @@ export async function onRequest(context) {
             const body = await request.json();
             if (!body?.key) return jsonResponse({ error: 'key is required' }, { status: 400 });
             await putPlannerMetaDocument(env, body.key, body.data || {});
-            if (body.fallbackKey) await writeR2Json(env, body.fallbackKey, body.data || {});
             return jsonResponse({ success: true });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
@@ -879,6 +1544,51 @@ export async function onRequest(context) {
             if (!body?.key) return jsonResponse({ error: 'key is required' }, { status: 400 });
             await deletePlannerMetaDocument(env, body.key, body.fallbackKey || body.key);
             return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/assets/cleanup-deleted" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json().catch(() => ({}));
+            const result = await cleanupDeletedAssets(env, body.olderThanHours ?? 24, body.limit ?? 100);
+            return jsonResponse(result);
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/migration/v2/import-r2-json-state" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json().catch(() => ({}));
+            const result = await migrateR2JsonStateToDb(env, body.limit ?? 500, body.cursor || undefined);
+            return jsonResponse(result);
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/migration/v2/backfill-legacy-db" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json().catch(() => ({}));
+            const planner = await backfillLegacyPlannerToV2(env, body.limit ?? 100);
+            const background = await backfillLegacyBackgroundToV2(env, body.limit ?? 100);
+            return jsonResponse({ planner, background });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/migration/v2/cleanup-legacy-planner-state" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json().catch(() => ({}));
+            const result = await cleanupLegacyPlannerState(env, body.limit ?? 500, body.cursor || undefined);
+            return jsonResponse(result);
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
         }
@@ -964,9 +1674,7 @@ export async function onRequest(context) {
             const fallbackKey = url.searchParams.get('fallbackKey') || key;
             if (!docType || !key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
             if (docType === 'planner_meta') {
-                const data = await getPlannerMetaDocument(env, key, fallbackKey);
-                if (data === null || data === undefined) return jsonResponse({ data: null }, { status: 404 });
-                return jsonResponse({ data });
+                return jsonResponse({ error: 'planner_meta is only available through /api/planner/meta' }, { status: 410 });
             }
             const data = await getJsonDocument(env, docType, key, fallbackKey, null);
             if (data === null || data === undefined) return jsonResponse({ data: null }, { status: 404 });
@@ -982,12 +1690,9 @@ export async function onRequest(context) {
             const body = await request.json();
             if (!body?.type || !body?.key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
             if (body.type === 'planner_meta') {
-                await putPlannerMetaDocument(env, body.key, body.data || {});
-                if (body.fallbackKey) await writeR2Json(env, body.fallbackKey, body.data || {});
-                return jsonResponse({ success: true });
+                return jsonResponse({ error: 'planner_meta is only available through /api/planner/meta' }, { status: 410 });
             }
             await putJsonDocument(env, body.type, body.key, body.data || {});
-            if (body.fallbackKey) await writeR2Json(env, body.fallbackKey, body.data || {});
             return jsonResponse({ success: true });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
@@ -1000,14 +1705,12 @@ export async function onRequest(context) {
             const body = await request.json();
             if (!body?.type || !body?.key) return jsonResponse({ error: 'type and key are required' }, { status: 400 });
             if (body.type === 'planner_meta') {
-                await deletePlannerMetaDocument(env, body.key, body.fallbackKey || body.key);
-                return jsonResponse({ success: true });
+                return jsonResponse({ error: 'planner_meta is only available through /api/planner/meta' }, { status: 410 });
             }
             await ensureJsonDbSchema(env);
             await env.DB.prepare(
                 'DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?'
             ).bind(body.type, body.key).run();
-            if (body.fallbackKey) await env.imgBucket.delete(body.fallbackKey).catch(() => null);
             return jsonResponse({ success: true });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
@@ -1034,20 +1737,6 @@ export async function onRequest(context) {
             ).bind(folderPrefix, ...names, fileName).first();
             if (row?.metadata_json) return jsonResponse({ data: JSON.parse(row.metadata_json) });
 
-            const legacy = await readR2Json(env, `${folderPrefix}_meta.json`, {});
-            for (const name of names) {
-                if (legacy?.[name]) {
-                    const timestamp = nowIso();
-                    await env.DB.prepare(`
-                        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
-                        VALUES (?, ?, ?, ?, ?)
-                        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
-                            metadata_json = excluded.metadata_json,
-                            updated_at = excluded.updated_at
-                    `).bind(folderPrefix, name, JSON.stringify(legacy[name]), timestamp, timestamp).run();
-                    return jsonResponse({ data: legacy[name] });
-                }
-            }
             return jsonResponse({ data: null }, { status: 404 });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
@@ -1069,10 +1758,6 @@ export async function onRequest(context) {
                     updated_at = excluded.updated_at
             `).bind(body.folderPrefix, body.fileName, JSON.stringify(body.metadata || {}), timestamp, timestamp).run();
 
-            const metaKey = `${body.folderPrefix}_meta.json`;
-            const legacy = await readR2Json(env, metaKey, {});
-            legacy[body.fileName] = body.metadata || {};
-            await writeR2Json(env, metaKey, legacy);
             return jsonResponse({ success: true });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
@@ -1097,10 +1782,6 @@ export async function onRequest(context) {
                     `DELETE FROM file_metadata WHERE folder_prefix = ? AND file_name IN (${placeholders})`
                 ).bind(body.folderPrefix, ...fileNames).run();
 
-                const metaKey = `${body.folderPrefix}_meta.json`;
-                const legacy = await readR2Json(env, metaKey, {});
-                fileNames.forEach(name => delete legacy[name]);
-                await writeR2Json(env, metaKey, legacy);
             }
             return jsonResponse({ success: true });
         } catch (e) {
@@ -1120,10 +1801,6 @@ export async function onRequest(context) {
                 'SELECT metadata_json FROM file_metadata WHERE folder_prefix = ? AND file_name = ?'
             ).bind(body.oldPrefix, body.oldName).first();
             let metadata = row?.metadata_json ? JSON.parse(row.metadata_json) : null;
-            if (!metadata) {
-                const legacy = await readR2Json(env, `${body.oldPrefix}_meta.json`, {});
-                metadata = legacy?.[body.oldName] || null;
-            }
             if (metadata) {
                 const timestamp = nowIso();
                 await env.DB.batch([
@@ -1136,13 +1813,6 @@ export async function onRequest(context) {
                             updated_at = excluded.updated_at
                     `).bind(body.newPrefix, body.newName, JSON.stringify(metadata), timestamp, timestamp)
                 ]);
-
-                const oldLegacy = await readR2Json(env, `${body.oldPrefix}_meta.json`, {});
-                delete oldLegacy[body.oldName];
-                await writeR2Json(env, `${body.oldPrefix}_meta.json`, oldLegacy);
-                const newLegacy = await readR2Json(env, `${body.newPrefix}_meta.json`, {});
-                newLegacy[body.newName] = metadata;
-                await writeR2Json(env, `${body.newPrefix}_meta.json`, newLegacy);
             }
             return jsonResponse({ success: true });
         } catch (e) {
@@ -1159,20 +1829,11 @@ export async function onRequest(context) {
             globalAliases = await getDbAliases(env, 'global', '');
         } catch(e){}
 
-        try {
-            const gObj = await env.imgBucket.get('.imggul_aliases.json');
-            if (gObj) globalAliases = { ...(await gObj.json()), ...globalAliases };
-        } catch(e){}
-
         const parts = prefix.split('/').filter(Boolean);
         if (parts.length > 0) {
             const projectName = parts[0];
             try {
                 projectAliases = await getDbAliases(env, 'project', projectName);
-            } catch(e){}
-            try {
-                const pObj = await env.imgBucket.get(`${projectName}/.aliases.json`);
-                if (pObj) projectAliases = { ...(await pObj.json()), ...projectAliases };
             } catch(e){}
         }
 
@@ -1189,35 +1850,13 @@ export async function onRequest(context) {
             const parts = fullPath.split('/').filter(Boolean);
             
             if (parts.length === 1) {
-                let aliases = {};
-                const object = await env.imgBucket.get('.imggul_aliases.json');
-                if (object) aliases = await object.json();
-                
-                if (newAlias) aliases[fullPath] = newAlias;
-                else delete aliases[fullPath];
                 await putDbAlias(env, 'global', '', fullPath, newAlias);
-                
-                await env.imgBucket.put('.imggul_aliases.json', JSON.stringify(aliases), {
-                    httpMetadata: { contentType: 'application/json' }
-                });
                 return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
                 
             } else if (parts.length > 1) {
                 const projectName = parts[0];
                 const targetName = parts[parts.length - 1];
-                
-                let aliases = {};
-                const aliasPath = `${projectName}/.aliases.json`;
-                const object = await env.imgBucket.get(aliasPath);
-                if (object) aliases = await object.json();
-                
-                if (newAlias) aliases[targetName] = newAlias;
-                else delete aliases[targetName];
                 await putDbAlias(env, 'project', projectName, targetName, newAlias);
-                
-                await env.imgBucket.put(aliasPath, JSON.stringify(aliases), {
-                    httpMetadata: { contentType: 'application/json' }
-                });
                 return new Response(JSON.stringify({ success: true }), { headers: { 'Content-Type': 'application/json' } });
             }
             
@@ -1294,31 +1933,6 @@ export async function onRequest(context) {
                 }
                 try {
                     await deleteAliasPrefix(env, prefix).catch(() => null);
-                    const obj = await env.imgBucket.get('.imggul_aliases.json');
-                    if (obj) {
-                        let aliases = await obj.json();
-                        if (aliases[prefix]) {
-                            delete aliases[prefix];
-                            await env.imgBucket.put('.imggul_aliases.json', JSON.stringify(aliases), {
-                                httpMetadata: { contentType: 'application/json' }
-                            });
-                        }
-                    }
-                    const parts = prefix.split('/').filter(Boolean);
-                    if (parts.length > 1) {
-                        const aliasPath = `${parts[0]}/.aliases.json`;
-                        const aliasObj = await env.imgBucket.get(aliasPath);
-                        if (aliasObj) {
-                            let aliases = await aliasObj.json();
-                            const targetName = parts[parts.length - 1];
-                            if (aliases[targetName]) {
-                                delete aliases[targetName];
-                                await env.imgBucket.put(aliasPath, JSON.stringify(aliases), {
-                                    httpMetadata: { contentType: 'application/json' }
-                                });
-                            }
-                        }
-                    }
                 } catch(e){}
                 return new Response(JSON.stringify({ success: true }));
             }
@@ -1377,39 +1991,6 @@ export async function onRequest(context) {
 
                 try {
                     await moveAliasPrefix(env, oldPrefix, newPrefix).catch(() => null);
-                    const obj = await env.imgBucket.get('.imggul_aliases.json');
-                    if (obj) {
-                        let aliases = await obj.json();
-                        if (aliases[oldPrefix]) {
-                            aliases[newPrefix] = aliases[oldPrefix];
-                            delete aliases[oldPrefix];
-                            await env.imgBucket.put('.imggul_aliases.json', JSON.stringify(aliases), {
-                                httpMetadata: { contentType: 'application/json' }
-                            });
-                        }
-                    }
-                    const oldParts = oldPrefix.split('/').filter(Boolean);
-                    const newParts = newPrefix.split('/').filter(Boolean);
-                    if (
-                        oldParts.length > 1 &&
-                        newParts.length > 1 &&
-                        oldParts[0] === newParts[0]
-                    ) {
-                        const aliasPath = `${oldParts[0]}/.aliases.json`;
-                        const aliasObj = await env.imgBucket.get(aliasPath);
-                        if (aliasObj) {
-                            let aliases = await aliasObj.json();
-                            const oldName = oldParts[oldParts.length - 1];
-                            const newName = newParts[newParts.length - 1];
-                            if (aliases[oldName]) {
-                                aliases[newName] = aliases[oldName];
-                                delete aliases[oldName];
-                                await env.imgBucket.put(aliasPath, JSON.stringify(aliases), {
-                                    httpMetadata: { contentType: 'application/json' }
-                                });
-                            }
-                        }
-                    }
                 } catch(e){}
 
                 return new Response(JSON.stringify({ success: true, newKey: newPrefix }));

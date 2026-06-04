@@ -530,7 +530,7 @@ export async function loadCharacterMeta(character, force = false) {
     if (!force && character.metaLoaded) return character.meta || {};
 
     const metaKey = getCharacterMetaKey(character);
-    const res = await fetch(`/api/db/json-document?type=character_meta&key=${encodeURIComponent(metaKey)}&fallbackKey=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/db/json-document?type=character_meta&key=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) {
         character.meta = {};
         character.metaLoaded = true;
@@ -551,7 +551,7 @@ export async function saveCharacterMeta(character, meta) {
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
-        body: JSON.stringify({ type: 'character_meta', key: metaKey, fallbackKey: metaKey, data: meta || {} }),
+        body: JSON.stringify({ type: 'character_meta', key: metaKey, data: meta || {} }),
         cache: 'no-store'
     });
 
@@ -641,7 +641,7 @@ export async function loadProjectSituations(project, force = false) {
     if (!force && project.situationsLoaded) return getProjectItems(project, 'situations');
 
     const metaKey = getSituationMetaKey(project);
-    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(metaKey)}&fallbackKey=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
 
     if (res.status === 404) {
         project.situations = [];
@@ -703,7 +703,6 @@ export async function saveProjectSituations(project) {
         body: JSON.stringify({
             type: 'situations_meta',
             key: metaKey,
-            fallbackKey: metaKey,
             data: { situations: getProjectItems(project, 'situations') }
         }),
         cache: 'no-store'
