@@ -12,6 +12,64 @@ import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=temp-focus-key
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals, Project);
 
+async function postMigrationStep(path, body = {}) {
+    const res = await fetch(`${path}?_t=${Date.now()}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify(body),
+        cache: 'no-store'
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `${path} failed with ${res.status}`);
+    return data;
+}
+
+async function runDbMigrationOnce() {
+    const button = document.getElementById('db-migration-btn');
+    if (!confirm('기존 R2 JSON 상태와 legacy DB 데이터를 v2 DB로 이관합니다. 실행할까요?')) return;
+    const originalText = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-lucide="loader" class="w-3.5 h-3.5 animate-spin"></i><span>이관 중</span>';
+        if (window.lucide) window.lucide.createIcons();
+    }
+    try {
+        const imports = [];
+        let cursor = '';
+        do {
+            const result = await postMigrationStep('/api/migration/v2/import-r2-json-state', {
+                limit: 500,
+                ...(cursor ? { cursor } : {})
+            });
+            imports.push(result);
+            cursor = result.truncated ? result.cursor || '' : '';
+        } while (cursor);
+        const backfill = await postMigrationStep('/api/migration/v2/backfill-legacy-db', { limit: 500 });
+        const importedCount = imports.reduce((sum, item) => sum + Number(item.importedCount || 0), 0);
+        const skippedCount = imports.reduce((sum, item) => sum + Number(item.skippedCount || 0), 0);
+        alert([
+            'DB 이관이 완료되었습니다.',
+            `R2 JSON import: ${importedCount}`,
+            `R2 JSON skipped: ${skippedCount}`,
+            `Planner backfill: ${Number(backfill?.planner?.importedCount || 0)}`,
+            `Background backfill: ${Number(backfill?.background?.importedCount || 0)}`,
+            '',
+            '이제 프로젝트/캐릭터/상황/플래너 화면을 새로고침해서 확인하세요.'
+        ].join('\n'));
+    } catch (error) {
+        alert(`DB 이관 실패: ${error.message || error}`);
+        console.error('DB migration failed', error);
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = originalText;
+            if (window.lucide) window.lucide.createIcons();
+        }
+    }
+}
+
+window.runDbMigrationOnce = runDbMigrationOnce;
+
 // 즉시 실행
 window.initSidebarControls();
 lucide.createIcons();
