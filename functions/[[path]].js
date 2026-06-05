@@ -38,8 +38,28 @@ function splitPath(key) {
     return { prefix, fileName };
 }
 
+function getKstDateParts(date = new Date()) {
+    const kstDate = new Date(date.getTime() + (9 * 60 * 60 * 1000));
+    const pad = value => String(value).padStart(2, '0');
+    const padMs = value => String(value).padStart(3, '0');
+    return {
+        year: kstDate.getUTCFullYear(),
+        month: pad(kstDate.getUTCMonth() + 1),
+        day: pad(kstDate.getUTCDate()),
+        hour: pad(kstDate.getUTCHours()),
+        minute: pad(kstDate.getUTCMinutes()),
+        second: pad(kstDate.getUTCSeconds()),
+        millisecond: padMs(kstDate.getUTCMilliseconds())
+    };
+}
+
+function toKstIso(date = new Date()) {
+    const parts = getKstDateParts(date);
+    return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.millisecond}+09:00`;
+}
+
 function nowIso() {
-    return new Date().toISOString();
+    return toKstIso();
 }
 
 async function ensureJsonDbSchema(env) {
@@ -773,7 +793,7 @@ async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
     if (!env.imgBucket) throw new Error('imgBucket binding is not configured');
     const safeLimit = Math.min(100, Math.max(1, Number.parseInt(limit, 10) || 100));
     const safeHours = Math.max(0, Number.parseFloat(olderThanHours) || 0);
-    const cutoff = new Date(Date.now() - safeHours * 60 * 60 * 1000).toISOString();
+    const cutoff = toKstIso(new Date(Date.now() - safeHours * 60 * 60 * 1000));
     const rows = (await env.DB.prepare(`
         SELECT id, r2_key
         FROM v2_assets

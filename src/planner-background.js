@@ -53,7 +53,7 @@ function requireWorkerBindings(env) {
 }
 
 function nowIso() {
-    return new Date().toISOString();
+    return nowKstIso();
 }
 
 function getKstDateParts(date = new Date()) {
@@ -71,13 +71,13 @@ function getKstDateParts(date = new Date()) {
     };
 }
 
-function nowKstIso() {
-    const parts = getKstDateParts();
+function nowKstIso(date = new Date()) {
+    const parts = getKstDateParts(date);
     return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}:${parts.second}.${parts.millisecond}+09:00`;
 }
 
 function isoBeforeNow(ms) {
-    return new Date(Date.now() - ms).toISOString();
+    return nowKstIso(new Date(Date.now() - ms));
 }
 
 function sleep(ms) {
@@ -1850,7 +1850,7 @@ async function saveMetadata(env, outputPrefix, fileName, metadata) {
 
 async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
     if (!env?.DB || !env?.imgBucket) return { scanned: 0, deletedCount: 0, failedCount: 0 };
-    const cutoff = new Date(Date.now() - olderThanHours * 60 * 60 * 1000).toISOString();
+    const cutoff = nowKstIso(new Date(Date.now() - olderThanHours * 60 * 60 * 1000));
     const rows = await queryAll(env.DB, `
         SELECT id, r2_key
         FROM v2_assets
