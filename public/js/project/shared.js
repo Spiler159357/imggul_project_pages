@@ -57,6 +57,7 @@ export const PROJECT_PROMPT_FIELDS = [
 ];
 
 export const CHARACTER_IMAGE_EXTENSIONS = new Set(['webp', 'png', 'jpg', 'jpeg']);
+export const MAX_V4_PROMPT_CHARACTERS = 6;
 
 export function getProjectRoot() {
     return document.getElementById('main-project-content');
@@ -323,7 +324,7 @@ export function normalizePlannerV4PromptRows(rows = []) {
             expression: String(row?.expression || '').trim(),
             action: String(row?.action || '').trim(),
             negative: String(row?.negative || '').trim()
-        })).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean))
+        })).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean)).slice(0, MAX_V4_PROMPT_CHARACTERS)
         : [];
 }
 

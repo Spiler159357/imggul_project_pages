@@ -1,6 +1,7 @@
 // 5. craft.js: 이미지 생성 큐, 설정 로직
 const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
+const MAX_V4_PROMPT_CHARACTERS = 6;
 
 function isCraftVisibleProjectChildFolder(folderPrefix) {
     const folderName = String(folderPrefix || '').split('/').filter(Boolean).pop();
@@ -536,12 +537,13 @@ function renderCraftV4PromptRow(id, row = {}) {
 }
 
 export function addCraftV4PromptRow(row = {}) {
-    if (window.EXTRA_CHAR_COUNT >= 12) return alert('최대 12명까지만 추가할 수 있습니다.');
     const container = document.getElementById('extra-chars-container');
     if (!container) return;
+    const currentCount = container.querySelectorAll('[data-craft-v4-row]').length;
+    if (currentCount >= MAX_V4_PROMPT_CHARACTERS) return alert(`V4 캐릭터는 최대 ${MAX_V4_PROMPT_CHARACTERS}명까지만 추가할 수 있습니다.`);
     const id = Date.now() + Math.floor(Math.random() * 10000);
     container.insertAdjacentHTML('beforeend', renderCraftV4PromptRow(id, row));
-    window.EXTRA_CHAR_COUNT++;
+    window.EXTRA_CHAR_COUNT = currentCount + 1;
     window.saveCraftSettings();
     if (window.lucide) lucide.createIcons();
 }
@@ -549,7 +551,7 @@ export function addCraftV4PromptRow(row = {}) {
 export function readCraftV4PromptRows() {
     const container = document.getElementById('extra-chars-container');
     if (!container) return [];
-    return Array.from(container.querySelectorAll('[id^="char-box-"]')).map(box => {
+    return Array.from(container.querySelectorAll('[id^="char-box-"]')).slice(0, MAX_V4_PROMPT_CHARACTERS).map(box => {
         const id = box.id.replace('char-box-', '');
         return {
             subject: document.getElementById(`char-subject-${id}`)?.value.trim() || '',
@@ -566,7 +568,7 @@ export function setCraftV4PromptRows(rows = []) {
     if (!container) return;
     container.innerHTML = '';
     window.EXTRA_CHAR_COUNT = 0;
-    (Array.isArray(rows) ? rows : []).forEach(row => addCraftV4PromptRow(row));
+    (Array.isArray(rows) ? rows : []).slice(0, MAX_V4_PROMPT_CHARACTERS).forEach(row => addCraftV4PromptRow(row));
     window.saveCraftSettings();
 }
 

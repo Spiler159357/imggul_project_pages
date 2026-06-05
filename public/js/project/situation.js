@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js';
 
@@ -178,7 +178,8 @@ export function renderSituationV4PromptRow(row = {}, index = 0) {
 }
 
 export function renderSituationV4PromptSection(situation) {
-    const rows = getSituationGeneration(situation).v4PromptCharacters || [];
+    const rows = normalizePlannerV4PromptRows(getSituationGeneration(situation).v4PromptCharacters || []);
+    const isAtLimit = rows.length >= MAX_V4_PROMPT_CHARACTERS;
     return `
         <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
             <div class="flex items-center justify-between gap-2 mb-2">
@@ -186,7 +187,7 @@ export function renderSituationV4PromptSection(situation) {
                     <p class="text-xs font-bold text-gray-700 dark:text-gray-300">V4 Prompt</p>
                     <p class="text-[10px] text-gray-400 dark:text-gray-500">상황별 캐릭터 caption을 추가해 이미지 생성과 플래너 v4_prompt에 사용합니다.</p>
                 </div>
-                <button type="button" onclick="window.addSituationV4PromptRow()" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
+                <button id="situation-v4-add-btn" type="button" onclick="window.addSituationV4PromptRow()" ${isAtLimit ? 'disabled' : ''} class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
                     <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> 캐릭터 추가
                 </button>
             </div>
@@ -209,14 +210,23 @@ export function readSituationV4PromptRows() {
             action: document.getElementById(`situation-v4-${rowId}-action`)?.value.trim() || '',
             negative: document.getElementById(`situation-v4-${rowId}-negative`)?.value.trim() || ''
         };
-    }).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean));
+    }).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean)).slice(0, MAX_V4_PROMPT_CHARACTERS);
+}
+
+function syncSituationV4PromptAddButton() {
+    const button = document.getElementById('situation-v4-add-btn');
+    const container = document.getElementById('situation-v4-rows');
+    if (!button || !container) return;
+    button.disabled = container.querySelectorAll('[data-situation-v4-row]').length >= MAX_V4_PROMPT_CHARACTERS;
 }
 
 export function addSituationV4PromptRow() {
     const container = document.getElementById('situation-v4-rows');
     if (!container) return;
+    if (container.querySelectorAll('[data-situation-v4-row]').length >= MAX_V4_PROMPT_CHARACTERS) return alert(`V4 캐릭터는 최대 ${MAX_V4_PROMPT_CHARACTERS}명까지만 추가할 수 있습니다.`);
     const rowId = Date.now();
     container.insertAdjacentHTML('beforeend', renderSituationV4PromptRow({}, rowId));
+    syncSituationV4PromptAddButton();
     refreshProjectIcons();
 }
 
@@ -224,6 +234,7 @@ export function removeSituationV4PromptRow(rowId) {
     document.querySelectorAll('[data-situation-v4-row]').forEach(row => {
         if (row.getAttribute('data-situation-v4-row') === String(rowId)) row.remove();
     });
+    syncSituationV4PromptAddButton();
 }
 
 export function renderSituationDetailShell(project, situation, state = {}) {

@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js';
 import { renderSectionHeader } from './manage.js';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js';
 import { combinePromptParts, getSituationById } from './situation.js';
@@ -743,7 +743,7 @@ export function renderPlannerCheckbox(id, label, checked) {
 export function getPlannerV4PromptRows(item) {
     const rows = item?.generation?.v4PromptCharacters || [];
     return Array.isArray(rows)
-        ? rows.map(row => ({
+        ? rows.slice(0, MAX_V4_PROMPT_CHARACTERS).map(row => ({
             subject: String(row?.subject || ''),
             clothing: String(row?.clothing || ''),
             expression: String(row?.expression || ''),
@@ -756,7 +756,7 @@ export function getPlannerV4PromptRows(item) {
 export function readPlannerV4PromptRows(imageNumber) {
     const container = document.getElementById(`planner-${imageNumber}-v4-rows`);
     if (!container) return [];
-    return Array.from(container.querySelectorAll('[data-planner-v4-row]')).map(row => {
+    return Array.from(container.querySelectorAll('[data-planner-v4-row]')).slice(0, MAX_V4_PROMPT_CHARACTERS).map(row => {
         const rowId = row.getAttribute('data-planner-v4-row');
         return {
             subject: document.getElementById(`planner-${imageNumber}-v4-${rowId}-subject`)?.value.trim() || '',
@@ -792,6 +792,7 @@ export function renderPlannerV4PromptRow(imageNumber, row, index) {
 
 export function renderPlannerV4PromptSection(item) {
     const rows = getPlannerV4PromptRows(item);
+    const isAtLimit = rows.length >= MAX_V4_PROMPT_CHARACTERS;
     return `
         <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
             <div class="flex items-center justify-between gap-2 mb-2">
@@ -799,7 +800,7 @@ export function renderPlannerV4PromptSection(item) {
                     <p class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 Prompt</p>
                     <p class="text-[10px] text-gray-400 dark:text-gray-500">필요할 때 캐릭터를 추가해 v4_prompt char_captions로 전달합니다.</p>
                 </div>
-                <button type="button" onclick="window.addPlannerV4Prompt('${escapeJsString(item.imageNumber)}')" class="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
+                <button type="button" onclick="window.addPlannerV4Prompt('${escapeJsString(item.imageNumber)}')" ${isAtLimit ? 'disabled' : ''} class="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
                     <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> 캐릭터 추가
                 </button>
             </div>
@@ -1834,6 +1835,7 @@ export async function addPlannerV4Prompt(imageNumber) {
     meta = readPlannerEditsFromDom(meta);
     const item = meta.items.find(entry => String(entry.imageNumber) === String(imageNumber));
     if (!item) return;
+    if ((item.generation.v4PromptCharacters || []).length >= MAX_V4_PROMPT_CHARACTERS) return alert(`V4 캐릭터는 최대 ${MAX_V4_PROMPT_CHARACTERS}명까지만 추가할 수 있습니다.`);
     item.generation.v4PromptCharacters = [
         ...(item.generation.v4PromptCharacters || []),
         { subject: '', clothing: '', expression: '', action: '', negative: '' }
