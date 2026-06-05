@@ -760,9 +760,8 @@ export async function openProjectItemCreateModal(type) {
     modal.classList.remove('hidden');
     modal.classList.add('flex');
     setTimeout(() => {
-        const input = document.getElementById('project-item-create-name');
+        const input = document.getElementById('project-item-create-alias');
         input?.focus();
-        if (type === 'situation') input?.select();
     }, 0);
 }
 
