@@ -1,4 +1,5 @@
 // 6. temp_gallery.js: 임시 보관함 및 변환 유예 관리
+import { getProjectByPrefix, getProjectItems, loadProjectCharacters, loadProjectSituations, loadProjects } from './project/shared.js';
 /**
  * 역할: Vibe 참조 이미지를 초기화하고 관련 미리보기/슬라이더 UI를 숨긴다.
  * 매개변수: 없음.
@@ -981,7 +982,7 @@ async function applyInpaintSourceUploadContext(sourceKey) {
 
     state.mode = 'structured';
     state.projectPath = context.projectPath;
-    state.characterPath = (state.characters || []).includes(context.characterPath) ? context.characterPath : '';
+    state.characterPath = (state.characters || []).some(item => item.prefix === context.characterPath) ? context.characterPath : '';
     state.situationId = situationId;
     window.CRAFT_UPLOAD_PICKER_STATE = state;
 
@@ -1076,37 +1077,25 @@ function getUploadItemId(item, index) {
 }
 
 async function loadUploadProjects() {
-    const res = await fetch('/api/list?prefix=&_t=' + Date.now(), { cache: 'no-store' });
-    if (!res.ok) throw new Error('프로젝트 목록을 불러오지 못했습니다.');
-    const data = await res.json();
-    return (data.folders || []).filter(folder => !folder.startsWith(window.TEMP_FOLDER) && isVisibleUploadFolder(folder));
+    return loadProjects();
 }
 
 async function loadUploadCharacters(projectPath) {
     if (!projectPath) return [];
-    const [listRes, aliasRes] = await Promise.all([
-        fetch(`/api/list?prefix=${encodeURIComponent(projectPath)}&_t=${Date.now()}`, { cache: 'no-store' }),
-        fetch(`/api/aliases?prefix=${encodeURIComponent(projectPath)}&_t=${Date.now()}`, { cache: 'no-store' }).catch(() => null)
-    ]);
-    if (aliasRes?.ok) {
-        const aliasData = await aliasRes.json();
-        window.GLOBAL_ALIASES = Object.assign(window.GLOBAL_ALIASES || {}, aliasData.global || {});
-        window.PROJECT_ALIASES = Object.assign(window.PROJECT_ALIASES || {}, aliasData.project || {});
-    }
-    if (!listRes.ok) throw new Error('캐릭터 목록을 불러오지 못했습니다.');
-    const data = await listRes.json();
-    return (data.folders || []).filter(isVisibleUploadFolder);
+    await loadProjects();
+    const project = getProjectByPrefix(projectPath);
+    if (!project) throw new Error('선택한 프로젝트를 찾을 수 없습니다.');
+    await loadProjectCharacters(project, true);
+    return getProjectItems(project, 'characters');
 }
 
 async function getCraftUploadSituations(projectPath) {
     if (!projectPath) return [];
-    const key = `${projectPath}_situations_meta.json`;
-    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
-    if (res.status === 404) return [];
-    if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
-    const payload = await res.json().catch(() => ({}));
-    const data = payload.data || {};
-    return Array.isArray(data.situations) ? data.situations : [];
+    await loadProjects();
+    const project = getProjectByPrefix(projectPath);
+    if (!project) throw new Error('선택한 프로젝트를 찾을 수 없습니다.');
+    await loadProjectSituations(project, true);
+    return getProjectItems(project, 'situations');
 }
 
 function getCraftUploadSelectedContext() {
@@ -1218,8 +1207,7 @@ export function closeCraftUploadModal(e) {
 
 export async function initCraftUploadPicker() {
     const cache = readCraftUploadContextCache();
-    const currentContext = getCraftUploadSelectedContext();
-    const projectPath = normalizeUploadPath(currentContext.projectPath || cache.projectPath || '');
+    const projectPath = normalizeUploadPath(cache.projectPath || document.getElementById('craft-project-select')?.value || '');
     const projectCache = cache.byProject?.[projectPath] || {};
     window.CRAFT_UPLOAD_PICKER_STATE = {
         mode: 'structured',
@@ -1227,8 +1215,8 @@ export async function initCraftUploadPicker() {
         characters: [],
         situations: [],
         projectPath,
-        characterPath: normalizeUploadPath(currentContext.characterPath || projectCache.characterPath || ''),
-        situationId: currentContext.situationId || projectCache.situationId || '',
+        characterPath: normalizeUploadPath(projectCache.characterPath || document.getElementById('craft-char-select')?.value || ''),
+        situationId: projectCache.situationId || document.getElementById('craft-situation-select')?.value || '',
         directPath: normalizeUploadPath(cache.directPath || projectPath || '')
     };
     const directInput = document.getElementById('craft-upload-direct-path');
@@ -1302,10 +1290,10 @@ export async function loadCraftUploadDependentLists(projectPath, restoreCached =
         ]);
         state.characters = characters;
         state.situations = situations;
-        if (restoreCached && !state.characterPath && projectCache.characterPath && characters.includes(projectCache.characterPath)) {
+        if (restoreCached && projectCache.characterPath && characters.some(item => item.prefix === projectCache.characterPath)) {
             state.characterPath = projectCache.characterPath;
         }
-        if (restoreCached && !state.situationId && projectCache.situationId && situations.some((item, index) => String(item?.id || item?.folderName || `situation-${index + 1}`) === String(projectCache.situationId))) {
+        if (restoreCached && projectCache.situationId && situations.some((item, index) => String(item?.id || item?.folderName || `situation-${index + 1}`) === String(projectCache.situationId))) {
             state.situationId = projectCache.situationId;
         }
         window.CRAFT_UPLOAD_PICKER_STATE = state;
@@ -1325,26 +1313,24 @@ export function renderCraftUploadPickerList(type) {
     if (!list) return;
     list.innerHTML = '';
     if (type === 'project') {
-        (state.projects || []).forEach(projectPath => {
-            const label = window.getDisplayName(projectPath, true) || projectPath.split('/').filter(Boolean).pop();
+        (state.projects || []).forEach(project => {
             list.appendChild(makeUploadPickerItem({
                 type,
-                label,
-                subLabel: projectPath,
-                active: normalizeUploadPath(projectPath) === state.projectPath,
-                onClick: async () => window.loadCraftUploadDependentLists(projectPath)
+                label: project.name || project.alias || project.folderName,
+                subLabel: project.prefix,
+                active: project.prefix === state.projectPath,
+                onClick: async () => window.loadCraftUploadDependentLists(project.prefix)
             }));
         });
     } else if (type === 'character') {
-        (state.characters || []).forEach(characterPath => {
-            const label = window.getDisplayName(characterPath, true) || characterPath.split('/').filter(Boolean).pop();
+        (state.characters || []).forEach(character => {
             list.appendChild(makeUploadPickerItem({
                 type,
-                label,
-                subLabel: characterPath,
-                active: normalizeUploadPath(characterPath) === state.characterPath,
+                label: character.name || character.alias || character.folderName || character.id,
+                subLabel: character.prefix,
+                active: character.prefix === state.characterPath,
                 onClick: () => {
-                    state.characterPath = normalizeUploadPath(characterPath);
+                    state.characterPath = character.prefix;
                     window.CRAFT_UPLOAD_PICKER_STATE = state;
                     window.renderCraftUploadPickerList('character');
                     window.updateCraftUploadTargetSummary();
