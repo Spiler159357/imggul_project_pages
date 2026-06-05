@@ -678,9 +678,7 @@ export async function generateNaiImage(options = {}) {
         if (model.includes('nai-diffusion-3') || model.includes('nai-diffusion-4')) { if (window.VIBE_IMAGE_FILE) preloadedVibeBase64 = await processVibeImage(window.VIBE_IMAGE_FILE); }
         if (model.includes('nai-diffusion-4-5') && window.PRECISE_IMAGE_FILE) { preloadedDirectorBase64 = await processDirectorImage(window.PRECISE_IMAGE_FILE); }
         if (window.INPAINT_IMAGE_SOURCE && window.prepareInpaintPayload) {
-            if (window.logFlowToStorage) window.logFlowToStorage('inpaint_generate_prepare_start', { width, height, model, source: inpaintSource });
             inpaintPayload = await window.prepareInpaintPayload(width, height);
-            if (window.logFlowToStorage) window.logFlowToStorage('inpaint_generate_prepare_done', { width, height, model, source: inpaintSource, hasPayload: !!inpaintPayload });
         }
     } catch (err) { if (window.logFlowToStorage) window.logFlowToStorage('inpaint_generate_prepare_failed', { width, height, model, source: inpaintSource, error: err }); alert('이미지 전처리 실패: ' + err.message); window.updateQueueUI(false); return; }
 

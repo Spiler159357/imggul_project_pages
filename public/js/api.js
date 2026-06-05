@@ -226,14 +226,11 @@ export async function extractMetadata(file) {
  * 반환값: WebP File을 resolve하는 Promise. GIF/SVG 등 제외 대상은 원본 file을 반환한다.
  */
 export async function convertToWebP(file) {
-    if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_start', { file, userAgent: navigator.userAgent });
     if (!file) throw new Error("파일이 없습니다.");
     if (!file.type.startsWith('image/')) {
-        if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_skipped', { file, reason: 'not_image_mime' });
         return file;
     }
     if (file.type === 'image/gif' || file.type === 'image/svg+xml') {
-        if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_skipped', { file, reason: 'excluded_type' });
         return file;
     }
     
@@ -247,7 +244,6 @@ export async function convertToWebP(file) {
             try {
                 let width = img.width;
                 let height = img.height;
-                if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_image_loaded', { file, naturalWidth: width, naturalHeight: height });
                 
                 const ratio = width / height;
                 if (Math.abs(ratio - 1) <= 0.05) { width = 1024; height = 1024; }
@@ -274,7 +270,6 @@ export async function convertToWebP(file) {
                     let baseName = file.name || 'image';
                     baseName = baseName.replace(/\.[^/.]+$/, "");
                     const resultFile = new File([blob], baseName + ".webp", { type: 'image/webp', lastModified: Date.now() });
-                    if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_done', { sourceFile: file, blob, resultFile, outputWidth: width, outputHeight: height });
                     resolve(resultFile);
                 }, 'image/webp', 0.8);
             } catch (err) {
