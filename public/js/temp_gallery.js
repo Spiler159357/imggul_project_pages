@@ -172,14 +172,44 @@ function hasInpaintMaskPixels(canvas) {
 function loadImageFromUrl(url) {
     return new Promise((resolve, reject) => {
         const img = new Image();
-        img.onload = () => resolve(img);
+        logInpaintFlow('source_image_load_start', { url: url.split('?')[0] });
+        img.onload = () => {
+            logInpaintFlow('source_image_loaded', { url: url.split('?')[0], naturalWidth: img.naturalWidth, naturalHeight: img.naturalHeight });
+            resolve(img);
+        };
         img.onerror = () => reject(new Error('인페인트 이미지를 불러오지 못했습니다.'));
+        img.addEventListener('error', () => logInpaintFlow('source_image_load_failed', { url: url.split('?')[0] }), { once: true });
         img.src = url;
     });
 }
 
 function canvasToPngBase64(canvas) {
     return canvas.toDataURL('image/png').split(',')[1];
+}
+
+function getInpaintSourceLogDetails(source = window.INPAINT_IMAGE_SOURCE) {
+    if (!source) return null;
+    return {
+        type: source.type || '',
+        key: source.key || '',
+        url: source.url ? source.url.split('?')[0] : '',
+        name: source.name || '',
+        file: source.file || null,
+        hasObjectUrl: !!source.objectUrl
+    };
+}
+
+function logInpaintFlow(stage, details = {}) {
+    if (!window.logFlowToStorage) return;
+    window.logFlowToStorage(`inpaint_${stage}`, {
+        stage,
+        source: getInpaintSourceLogDetails(),
+        maskReady: !!window.INPAINT_MASK_READY,
+        drawMode: window.INPAINT_DRAW_MODE || '',
+        userAgent: navigator.userAgent,
+        viewport: { width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio || 1 },
+        ...details
+    });
 }
 
 function updateInpaintSummary() {
@@ -216,6 +246,7 @@ function setInpaintSource(source) {
     window.INPAINT_IMAGE_SOURCE = source;
     window.INPAINT_IMAGE_FILE = source.type === 'file' ? source.file : null;
     window.INPAINT_IMAGE_OBJECT_URL = source.type === 'file' ? source.objectUrl : null;
+    logInpaintFlow('source_set', { selectedSource: getInpaintSourceLogDetails(source) });
     clearInpaintMask();
     updateInpaintSummary();
     openInpaintEditorModal();
@@ -230,6 +261,7 @@ export function clearInpaintMask() {
 }
 
 export function clearInpaintImage() {
+    logInpaintFlow('image_clear_start');
     window.INPAINT_IMAGE_FILE = null;
     window.INPAINT_IMAGE_SOURCE = null;
     const input = document.getElementById('inpaint-image-input');
@@ -242,6 +274,7 @@ export function clearInpaintImage() {
     if (thumb) thumb.src = '';
     window.clearInpaintMask();
     updateInpaintSummary();
+    logInpaintFlow('image_clear_done');
 }
 
 export function setInpaintDrawMode(mode) {
@@ -292,19 +325,33 @@ export function handleInpaintPointerUp(event) {
 }
 
 export function handleInpaintImageUpload(file) {
+    logInpaintFlow('file_upload_selected', { file });
+    if (!file || !file.type.startsWith('image/')) logInpaintFlow('file_upload_rejected', { file, reason: 'not_image_mime' });
     if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 인페인트 기준 이미지로 사용할 수 있습니다.');
     const objectUrl = URL.createObjectURL(file);
+    logInpaintFlow('file_object_url_created', { file, hasObjectUrl: !!objectUrl });
     setInpaintSource({ type: 'file', file, objectUrl, name: file.name });
 }
 
 export function openInpaintEditorModal() {
     const source = window.INPAINT_IMAGE_SOURCE;
+    if (!source) logInpaintFlow('editor_open_rejected', { reason: 'missing_source' });
     if (!source) return alert('먼저 인페인트 기준 이미지를 선택해 주세요.');
     const modal = document.getElementById('inpaint-editor-modal');
     const preview = document.getElementById('inpaint-image-preview');
+    if (!modal || !preview) logInpaintFlow('editor_open_rejected', { reason: 'missing_dom', hasModal: !!modal, hasPreview: !!preview });
     if (!modal || !preview) return;
-    preview.onload = () => setInpaintCanvasSize(preview.naturalWidth, preview.naturalHeight, true);
-    preview.src = getInpaintSourceUrl(source);
+    const previewUrl = getInpaintSourceUrl(source);
+    logInpaintFlow('editor_open_start', { previewUrl: previewUrl.split('?')[0] });
+    preview.onload = () => {
+        logInpaintFlow('editor_preview_loaded', { naturalWidth: preview.naturalWidth, naturalHeight: preview.naturalHeight });
+        setInpaintCanvasSize(preview.naturalWidth, preview.naturalHeight, true);
+    };
+    preview.onerror = () => {
+        logInpaintFlow('editor_preview_load_failed', { previewUrl: previewUrl.split('?')[0] });
+        if (window.logErrorToStorage) window.logErrorToStorage('inpaint editor preview load failed', new Error(previewUrl.split('?')[0]));
+    };
+    preview.src = previewUrl;
     modal.classList.remove('hidden');
     modal.classList.add('flex');
     setInpaintDrawMode(window.INPAINT_DRAW_MODE);
@@ -453,15 +500,19 @@ export function setInpaintImageFromKey(key, uploaded) {
     const fileName = key.split('/').pop();
     const url = '/' + key + '?t=' + (uploaded ? new Date(uploaded).getTime() : Date.now());
     closeInpaintLibraryModal(null, true);
+    logInpaintFlow('library_image_selected', { key, uploaded: uploaded || '', url: url.split('?')[0] });
     setInpaintSource({ type: 'key', key, url, name: fileName });
 }
 
 export async function prepareInpaintPayload(width, height) {
     if (!window.INPAINT_IMAGE_SOURCE) return null;
+    logInpaintFlow('payload_prepare_start', { targetWidth: width, targetHeight: height });
     const maskCanvas = getInpaintCanvas();
+    if (!hasInpaintMaskPixels(maskCanvas)) logInpaintFlow('payload_prepare_failed', { reason: 'empty_mask', maskWidth: maskCanvas?.width || 0, maskHeight: maskCanvas?.height || 0 });
     if (!hasInpaintMaskPixels(maskCanvas)) throw new Error('인페인트 마스크가 비어 있습니다. 편집기에서 재생성할 영역을 칠해 주세요.');
 
     const sourceImage = await loadImageFromUrl(getInpaintSourceUrl(window.INPAINT_IMAGE_SOURCE));
+    logInpaintFlow('payload_source_loaded', { naturalWidth: sourceImage.naturalWidth, naturalHeight: sourceImage.naturalHeight, targetWidth: width, targetHeight: height });
     const imageCanvas = document.createElement('canvas');
     imageCanvas.width = width;
     imageCanvas.height = height;
@@ -487,11 +538,19 @@ export async function prepareInpaintPayload(width, height) {
     maskCtx.putImageData(imageData, 0, 0);
 
     const strength = parseFloat(document.getElementById('inpaint-strength')?.value) || 1;
-    return {
+    const payload = {
         image: canvasToPngBase64(imageCanvas),
         mask: canvasToPngBase64(scaledMask),
         strength: Math.min(1, Math.max(0.01, strength))
     };
+    logInpaintFlow('payload_prepare_done', {
+        targetWidth: width,
+        targetHeight: height,
+        strength: payload.strength,
+        imageBase64Length: payload.image.length,
+        maskBase64Length: payload.mask.length
+    });
+    return payload;
 }
 
 export async function loadTempImages() {

@@ -25,6 +25,55 @@ function setPromptSidebarOpen(isOpen) {
     if (hamburgerBtn) hamburgerBtn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
 }
 
+export async function logFlowToStorage(flowContext, details = {}) {
+    try {
+        const getKstDateParts = (date = new Date()) => {
+            const kstDate = new Date(date.getTime() + (9 * 60 * 60 * 1000));
+            const pad = (value) => value.toString().padStart(2, '0');
+            const padMs = (value) => value.toString().padStart(3, '0');
+            return {
+                year: kstDate.getUTCFullYear(),
+                month: pad(kstDate.getUTCMonth() + 1),
+                day: pad(kstDate.getUTCDate()),
+                hour: pad(kstDate.getUTCHours()),
+                minute: pad(kstDate.getUTCMinutes()),
+                second: pad(kstDate.getUTCSeconds()),
+                millisecond: padMs(kstDate.getUTCMilliseconds())
+            };
+        };
+        const normalizeValue = (value) => {
+            if (value instanceof File) {
+                return { kind: 'File', name: value.name || '', type: value.type || '', size: value.size || 0, lastModified: value.lastModified || 0 };
+            }
+            if (value instanceof Blob) {
+                return { kind: 'Blob', type: value.type || '', size: value.size || 0 };
+            }
+            if (value instanceof Error) {
+                return { name: value.name || 'Error', message: value.message || String(value), stack: value.stack || '' };
+            }
+            return value;
+        };
+        const safeDetails = JSON.parse(JSON.stringify(details || {}, (_key, value) => normalizeValue(value)));
+        const kstParts = getKstDateParts();
+        const kstTimestamp = `${kstParts.year}-${kstParts.month}-${kstParts.day}T${kstParts.hour}:${kstParts.minute}:${kstParts.second}.${kstParts.millisecond}+09:00`;
+        const logContent = `[${kstTimestamp}]\nFlow: ${flowContext}\n\nDetails:\n${JSON.stringify(safeDetails, null, 2)}\n`;
+        const dateString = `${kstParts.year}${kstParts.month}${kstParts.day}_${kstParts.hour}${kstParts.minute}${kstParts.second}`;
+        const safeFlowName = String(flowContext || 'flow').toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'flow';
+        const fileName = `logs/trace_${safeFlowName}_${dateString}_${Date.now().toString().slice(-4)}.txt`;
+
+        const blob = new Blob([logContent], { type: 'text/plain;charset=utf-8' });
+        const buffer = await new Promise((resolve, reject) => {
+            const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = () => reject(new Error("FileReader Error")); reader.readAsArrayBuffer(blob);
+        });
+
+        await fetch('/api/upload?_t=' + Date.now(), {
+            method: 'PUT',
+            headers: { 'Content-Type': 'text/plain; charset=utf-8', 'X-File-Name': encodeURIComponent(fileName.split('/').pop()), 'X-Absolute-Path': encodeURIComponent(fileName) },
+            body: buffer, cache: 'no-store'
+        });
+    } catch (e) { console.error("trace log save failed:", e); }
+}
+
 /**
  * 역할: 현재 사이드바 상태를 기준으로 열거나 강제로 닫는다.
  * 매개변수: forceClose - true면 현재 상태와 무관하게 닫는다.

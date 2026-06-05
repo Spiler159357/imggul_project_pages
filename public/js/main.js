@@ -258,11 +258,14 @@ if (submitBtn) {
 
         try {
             let finalFile = window.galleryFileToUpload;
+            if (window.logFlowToStorage) window.logFlowToStorage('gallery_upload_start', { file: finalFile, currentPrefix: window.currentPrefix || '' });
             if (finalFile.type.startsWith('image/')) {
                 submitBtn.textContent = '데이터 추출 중...';
                 extractedMetadata = await window.extractMetadata(finalFile);
+                if (window.logFlowToStorage) window.logFlowToStorage('gallery_upload_metadata_extracted', { file: finalFile, hasMetadata: !!extractedMetadata });
                 submitBtn.textContent = 'WebP 변환 중...';
                 finalFile = await window.convertToWebP(finalFile);
+                if (window.logFlowToStorage) window.logFlowToStorage('gallery_upload_converted', { finalFile });
             }
 
             submitBtn.textContent = '업로드 중...';
@@ -274,12 +277,13 @@ if (submitBtn) {
             const headers = { 'X-File-Name': encodeURIComponent(fileName), 'Content-Type': finalFile.type || 'application/octet-stream', 'X-Absolute-Path': encodeURIComponent(finalPath) };
             const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader ArrayBuffer 에러")); r.readAsArrayBuffer(finalFile); });
             const res = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: headers, body: buffer, cache: 'no-store' });
+            if (window.logFlowToStorage) window.logFlowToStorage('gallery_upload_response', { finalPath, fileName, status: res.status, ok: res.ok, contentType: finalFile.type || '' });
             if (!res.ok) { const errTxt = await res.text(); throw new Error(`서버 응답 오류 (상태코드: ${res.status}, 내용: ${errTxt})`); }
             if (extractedMetadata) await window.saveMetadataToDB(window.currentPrefix, fileName, extractedMetadata);
             
             alert('현재 폴더에 업로드 되었습니다.');
             window.closeGalleryUploadModal(); window.refreshGallery();
-        } catch (err) { alert('업로드 실패: ' + err.message); } 
+        } catch (err) { if (window.logFlowToStorage) window.logFlowToStorage('gallery_upload_failed', { file: window.galleryFileToUpload, error: err }); alert('업로드 실패: ' + err.message); } 
         finally { if(submitBtn) { submitBtn.textContent = '업로드 하기'; submitBtn.disabled = false; } }
     });
 }

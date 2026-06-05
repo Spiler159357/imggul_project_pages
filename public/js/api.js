@@ -226,9 +226,16 @@ export async function extractMetadata(file) {
  * 반환값: WebP File을 resolve하는 Promise. GIF/SVG 등 제외 대상은 원본 file을 반환한다.
  */
 export async function convertToWebP(file) {
+    if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_start', { file, userAgent: navigator.userAgent });
     if (!file) throw new Error("파일이 없습니다.");
-    if (!file.type.startsWith('image/')) return file;
-    if (file.type === 'image/gif' || file.type === 'image/svg+xml') return file;
+    if (!file.type.startsWith('image/')) {
+        if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_skipped', { file, reason: 'not_image_mime' });
+        return file;
+    }
+    if (file.type === 'image/gif' || file.type === 'image/svg+xml') {
+        if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_skipped', { file, reason: 'excluded_type' });
+        return file;
+    }
     
     return new Promise((resolve, reject) => {
         const img = new Image();
@@ -240,6 +247,7 @@ export async function convertToWebP(file) {
             try {
                 let width = img.width;
                 let height = img.height;
+                if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_image_loaded', { file, naturalWidth: width, naturalHeight: height });
                 
                 const ratio = width / height;
                 if (Math.abs(ratio - 1) <= 0.05) { width = 1024; height = 1024; }
@@ -261,17 +269,22 @@ export async function convertToWebP(file) {
                 
                 canvas.toBlob((blob) => {
                     canvas.width = 0; canvas.height = 0;
+                    if (!blob && window.logFlowToStorage) window.logFlowToStorage('webp_convert_failed', { file, reason: 'blob_create_failed' });
                     if (!blob) return reject(new Error("WebP 변환에 실패했습니다. (Blob 생성 실패)"));
                     let baseName = file.name || 'image';
                     baseName = baseName.replace(/\.[^/.]+$/, "");
-                    resolve(new File([blob], baseName + ".webp", { type: 'image/webp', lastModified: Date.now() }));
+                    const resultFile = new File([blob], baseName + ".webp", { type: 'image/webp', lastModified: Date.now() });
+                    if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_done', { sourceFile: file, blob, resultFile, outputWidth: width, outputHeight: height });
+                    resolve(resultFile);
                 }, 'image/webp', 0.8);
             } catch (err) {
+                if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_failed', { file, error: err });
                 URL.revokeObjectURL(objectUrl);
                 reject(new Error("WebP 인코딩 중 오류: " + err.message));
             }
         };
         img.onerror = () => {
+            if (window.logFlowToStorage) window.logFlowToStorage('webp_convert_failed', { file, reason: 'image_decode_error' });
             URL.revokeObjectURL(objectUrl);
             reject(new Error("이미지 디코딩에 실패했습니다. 손상된 파일이거나 지원하지 않는 형식입니다."));
         };
