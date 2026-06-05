@@ -53,12 +53,28 @@ export async function logFlowToStorage(flowContext, details = {}) {
             }
             return value;
         };
+        const collectStacks = (value, path = 'details', stacks = []) => {
+            if (!value || typeof value !== 'object') return stacks;
+            if (typeof value.stack === 'string' && value.stack.trim()) {
+                stacks.push({ path, stack: value.stack.trim() });
+            }
+            if (Array.isArray(value)) {
+                value.forEach((item, index) => collectStacks(item, `${path}[${index}]`, stacks));
+                return stacks;
+            }
+            Object.entries(value).forEach(([key, child]) => collectStacks(child, `${path}.${key}`, stacks));
+            return stacks;
+        };
         const safeDetails = JSON.parse(JSON.stringify(details || {}, (_key, value) => normalizeValue(value)));
+        const stackTraces = collectStacks(safeDetails);
         const kstParts = getKstDateParts();
         const kstTimestamp = `${kstParts.year}-${kstParts.month}-${kstParts.day}T${kstParts.hour}:${kstParts.minute}:${kstParts.second}.${kstParts.millisecond}+09:00`;
         const dateString = `${kstParts.year}${kstParts.month}${kstParts.day}_${kstParts.hour}${kstParts.minute}${kstParts.second}`;
         const safeFlowName = String(flowContext || 'flow').toLowerCase().replace(/[^a-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '').slice(0, 60) || 'flow';
-        let logContent = `[${kstTimestamp}]\nFlow: ${flowContext}\n\nDetails:\n${JSON.stringify(safeDetails, null, 2)}\n`;
+        const stackSection = stackTraces.length
+            ? `\nStacktrace:\n${stackTraces.map(item => `[${item.path}]\n${item.stack}`).join('\n\n')}\n`
+            : '';
+        let logContent = `[${kstTimestamp}]\nFlow: ${flowContext}${stackSection}\nDetails:\n${JSON.stringify(safeDetails, null, 2)}\n`;
         let fileName = `logs/trace_${safeFlowName}_${dateString}_${Date.now().toString().slice(-4)}.txt`;
 
         if (safeDetails.attemptId) {
@@ -76,7 +92,7 @@ export async function logFlowToStorage(flowContext, details = {}) {
             try {
                 localStorage.setItem(storageKey, JSON.stringify(events));
             } catch {}
-            logContent = `[${kstTimestamp}]\nAttempt: ${safeDetails.attemptId}\nLatest Flow: ${flowContext}\nLatest Stage: ${safeDetails.stage || ''}\n\nEvents:\n${JSON.stringify(events, null, 2)}\n`;
+            logContent = `[${kstTimestamp}]\nAttempt: ${safeDetails.attemptId}\nLatest Flow: ${flowContext}\nLatest Stage: ${safeDetails.stage || ''}${stackSection}\n\nEvents:\n${JSON.stringify(events, null, 2)}\n`;
             fileName = `logs/trace_attempt_${safeAttemptId}.txt`;
         }
 

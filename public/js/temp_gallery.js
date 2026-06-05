@@ -215,6 +215,35 @@ async function createPreviewObjectUrlFromFile(file) {
     return URL.createObjectURL(blob);
 }
 
+function wait(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function readFileArrayBufferWithRetry(file, attemptId) {
+    const delays = [0, 120, 250, 500, 900];
+    let lastError = null;
+    for (let index = 0; index < delays.length; index += 1) {
+        if (window.INPAINT_ATTEMPT_ID !== attemptId) throw new Error('인페인트 파일 선택이 다른 시도로 대체되었습니다.');
+        if (delays[index] > 0) await wait(delays[index]);
+        try {
+            return await file.arrayBuffer();
+        } catch (error) {
+            lastError = error;
+        }
+    }
+    throw lastError || new Error('파일 내용을 읽지 못했습니다.');
+}
+
+async function stabilizeInpaintFile(file, attemptId) {
+    if (!file || !file.type.startsWith('image/')) throw new Error('이미지 파일만 인페인트 기준 이미지로 사용할 수 있습니다.');
+    const buffer = await readFileArrayBufferWithRetry(file, attemptId);
+    if (window.INPAINT_ATTEMPT_ID !== attemptId) throw new Error('인페인트 파일 선택이 다른 시도로 대체되었습니다.');
+    return new File([buffer], file.name || 'inpaint-source', {
+        type: file.type || 'application/octet-stream',
+        lastModified: file.lastModified || Date.now()
+    });
+}
+
 function getInpaintSourceLogDetails(source = window.INPAINT_IMAGE_SOURCE) {
     if (!source) return null;
     return {
@@ -407,21 +436,21 @@ export async function handleInpaintImageUpload(file) {
     let objectUrl = '';
     let previewObjectUrl = '';
     try {
-        if (!file || !file.type.startsWith('image/')) throw new Error('이미지 파일만 인페인트 기준 이미지로 사용할 수 있습니다.');
-        objectUrl = URL.createObjectURL(file);
-        previewObjectUrl = await createPreviewObjectUrlFromFile(file);
+        const stableFile = await stabilizeInpaintFile(file, attemptId);
+        objectUrl = URL.createObjectURL(stableFile);
+        previewObjectUrl = await createPreviewObjectUrlFromFile(stableFile);
         if (window.INPAINT_ATTEMPT_ID !== attemptId) {
             URL.revokeObjectURL(objectUrl);
             URL.revokeObjectURL(previewObjectUrl);
             return;
         }
-        setInpaintSource({ type: 'file', file, objectUrl, previewObjectUrl, name: file.name });
+        setInpaintSource({ type: 'file', file: stableFile, objectUrl, previewObjectUrl, name: stableFile.name });
     } catch (error) {
         if (objectUrl) URL.revokeObjectURL(objectUrl);
         if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
         const fileProbe = await inspectInpaintFile(file).catch(probeError => ({ probeError: probeError?.message || String(probeError) }));
         window.INPAINT_LAST_FILE_PROBE = fileProbe;
-        logInpaintFlow('file_upload_failed', { file, fileProbe, error });
+        logInpaintFlow('file_stabilize_failed', { file, fileProbe, error });
         alert(error.message || '인페인트 기준 이미지를 불러오지 못했습니다.');
     }
 }
