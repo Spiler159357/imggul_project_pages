@@ -144,7 +144,7 @@ function applyImportedMetadataToCraft(meta, options = {}) {
  * 주요 변수: fileName, prefix, metaPath, meta, optStyle, optSettings - 조회 경로와 적용 옵션.
  * 반환값: 명시 반환 없음.
  */
-window.importMetadata = async function(fileKey) {
+window.importMetadata = async function(fileKey, applyOptions = getFullImportApplyOptions()) {
     const parts = fileKey.split('/');
     const fileName = parts.pop();
     const prefix = parts.length > 0 ? parts.join('/') + '/' : '';
@@ -162,19 +162,20 @@ window.importMetadata = async function(fileKey) {
             return;
         }
 
-        // 각 체크박스 상태 확인 (요소를 찾지 못하면 기본값 적용)
-        const optStyle = document.getElementById('import-opt-style')?.checked ?? true;
-        const optComp = document.getElementById('import-opt-composition')?.checked ?? true;
-        const optChar = document.getElementById('import-opt-character')?.checked ?? true;
-        const optCloth = document.getElementById('import-opt-clothing')?.checked ?? true;
-        const optExp = document.getElementById('import-opt-expression')?.checked ?? true;
-        const optAct = document.getElementById('import-opt-action')?.checked ?? true;
-        const optBg = document.getElementById('import-opt-background')?.checked ?? true;
-
-        const optNegative = document.getElementById('import-opt-negative')?.checked ?? true;
-        const optRes = document.getElementById('import-opt-res')?.checked ?? true;
-        const optSettings = document.getElementById('import-opt-settings')?.checked ?? false;
-        const optSeed = document.getElementById('import-opt-seed')?.checked ?? false;
+        // Determine which metadata fields this import path should apply.
+        const {
+            optStyle,
+            optComp,
+            optChar,
+            optCloth,
+            optExp,
+            optAct,
+            optBg,
+            optNegative,
+            optRes,
+            optSettings,
+            optSeed
+        } = normalizeImportApplyOptions(applyOptions);
 
         if (window.applyCraftPromptValues) {
             applyImportedMetadataToCraft(meta, { optStyle, optComp, optChar, optCloth, optExp, optAct, optBg, optNegative });
@@ -612,6 +613,29 @@ window.saveEditedText = async function() {
  * 주요 변수: projSelect, charSelect, proj, char, IMPORT_BASE_PREFIX, targetPath - 탐색 시작 경로.
  * 반환값: 명시 반환 없음.
  */
+function getFullImportApplyOptions() {
+    return {
+        optStyle: true,
+        optComp: true,
+        optChar: true,
+        optCloth: true,
+        optExp: true,
+        optAct: true,
+        optBg: true,
+        optNegative: true,
+        optRes: true,
+        optSettings: true,
+        optSeed: true
+    };
+}
+
+function normalizeImportApplyOptions(options = {}) {
+    return {
+        ...getFullImportApplyOptions(),
+        ...(options || {})
+    };
+}
+
 function getImportApplyOptions() {
     return {
         optStyle: document.getElementById('import-opt-style')?.checked ?? true,
@@ -628,14 +652,14 @@ function getImportApplyOptions() {
     };
 }
 
-function applyImportedMetadataObject(meta) {
+function applyImportedMetadataObject(meta, applyOptions = getImportApplyOptions()) {
     if (!meta) throw new Error('불러올 메타데이터가 없습니다.');
     if (meta['Raw Data'] && !meta['Prompt'] && !meta['Split Prompts']) {
         alert('지원되는 NovelAI 메타데이터 형식이 아닙니다. 원본 텍스트:\n' + meta['Raw Data']);
         return false;
     }
 
-    const options = getImportApplyOptions();
+    const options = normalizeImportApplyOptions(applyOptions);
     applyImportedMetadataToCraft(meta, options);
 
     if (options.optRes && meta['Resolution']) {
@@ -695,7 +719,7 @@ window.openModalImageInInpaint = async function(fileKey = window.currentFileKey)
     try {
         try {
             const meta = await loadFileMetadataForImport(key);
-            const applied = applyImportedMetadataObject(meta);
+            const applied = applyImportedMetadataObject(meta, getFullImportApplyOptions());
             if (!applied && window.switchTab) window.switchTab('craft');
         } catch (err) {
             console.warn('Prompt metadata could not be imported for inpaint handoff:', err);
@@ -1179,7 +1203,7 @@ window.loadImportPath = async function(prefix) {
             
             const div = document.createElement('div');
             div.className = 'relative w-full aspect-[3/4] bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden shadow-sm border border-gray-200 dark:border-gray-700 cursor-pointer hover:border-indigo-500 hover:ring-2 hover:ring-indigo-500/50 transition-all group';
-            div.onclick = async () => { await window.importMetadata(file.key); };
+            div.onclick = async () => { await window.importMetadata(file.key, getImportApplyOptions()); };
             div.innerHTML = `
                 <img src="${fileUrl}" class="absolute inset-0 object-cover w-full h-full transition-opacity duration-200 opacity-80 group-hover:opacity-100" loading="lazy">
                 <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent p-2 flex flex-col items-center">
