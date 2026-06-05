@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js';
 
@@ -705,7 +705,7 @@ export function renderProjectItemCreateModal() {
 
                     <div id="project-item-create-rating-wrap" class="hidden">
                         <label for="project-item-create-rating" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">상황 구분</label>
-                        <select id="project-item-create-rating" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white">
+                        <select id="project-item-create-rating" onchange="window.cacheProjectItemCreateRatingSelection?.()" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white">
                             <option value="sfw">SFW</option>
                             <option value="nsfw">NSFW</option>
                         </select>
@@ -732,6 +732,7 @@ export async function openProjectItemCreateModal(type) {
     const title = document.getElementById('project-item-create-title');
     const help = document.getElementById('project-item-create-help');
     const ratingWrap = document.getElementById('project-item-create-rating-wrap');
+    const ratingInput = document.getElementById('project-item-create-rating');
     const error = document.getElementById('project-item-create-error');
     if (!modal || !typeInput) return;
 
@@ -753,6 +754,7 @@ export async function openProjectItemCreateModal(type) {
     if (type === 'situation' && project) {
         if (!project.situationsLoaded) await loadProjectSituations(project).catch(() => []);
         if (nameInput) nameInput.value = getNextSituationFolderName(project);
+        if (ratingInput) ratingInput.value = getCachedSituationRating(project);
     }
 
     modal.classList.remove('hidden');
@@ -781,6 +783,12 @@ export function setProjectItemCreateError(message) {
     error.classList.toggle('hidden', !message);
 }
 
+export function cacheProjectItemCreateRatingSelection() {
+    const project = getActiveProject();
+    const ratingInput = document.getElementById('project-item-create-rating');
+    setCachedSituationRating(project, ratingInput?.value);
+}
+
 export async function submitProjectItemCreate(event) {
     if (event) event.preventDefault();
 
@@ -792,6 +800,7 @@ export async function submitProjectItemCreate(event) {
     const submitBtn = document.getElementById('project-item-create-submit');
     const itemName = normalizeProjectFolderName(nameInput?.value || '');
     const alias = (aliasInput?.value || '').trim();
+    const situationScrollTop = document.getElementById('situation-list-scroll')?.scrollTop || 0;
 
     if (!project || !['character', 'situation'].includes(type)) return;
 
@@ -811,9 +820,11 @@ export async function submitProjectItemCreate(event) {
             window.closeProjectItemCreateModal();
             renderCharacterSection(PROJECT_SECTIONS.find(section => section.key === 'character'));
         } else {
-            await createSituation(project, itemName, alias, getSituationRating({ rating: ratingInput?.value }));
+            const rating = getSituationRating({ rating: ratingInput?.value });
+            setCachedSituationRating(project, rating);
+            await createSituation(project, itemName, alias, rating);
             window.closeProjectItemCreateModal();
-            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'));
+            renderSituationSection(PROJECT_SECTIONS.find(section => section.key === 'situation'), { scrollTop: situationScrollTop });
         }
     } catch (err) {
         setProjectItemCreateError(err.message || '생성에 실패했습니다.');

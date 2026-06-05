@@ -255,6 +255,7 @@ export function getPlannerSettingsKey(project) {
 
 export const DEFAULT_PLANNER_RESOLUTION = '832x1216';
 export const PLANNER_CHARACTER_CACHE_KEY = 'imggul_planner_selected_characters';
+export const SITUATION_RATING_CACHE_KEY = 'imggul_situation_selected_ratings';
 
 export const DEFAULT_PLANNER_SETTINGS = {
     model: 'nai-diffusion-4-5-full',
@@ -505,6 +506,27 @@ export function cachePlannerCharacterSelection() {
     setCachedPlannerCharacterId(project, characterId);
     window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = characterId;
     window.loadPlannerForSelectedCharacter?.();
+}
+
+export function readSituationRatingCache() {
+    try {
+        return JSON.parse(localStorage.getItem(SITUATION_RATING_CACHE_KEY) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+export function getCachedSituationRating(project) {
+    return project?.id ? getSituationRating({ rating: readSituationRatingCache()[project.id] }) : 'sfw';
+}
+
+export function setCachedSituationRating(project, rating) {
+    if (!project?.id) return;
+    const cache = readSituationRatingCache();
+    cache[project.id] = getSituationRating({ rating });
+    try {
+        localStorage.setItem(SITUATION_RATING_CACHE_KEY, JSON.stringify(cache));
+    } catch {}
 }
 
 export function isImageFile(file) {

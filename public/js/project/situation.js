@@ -43,7 +43,7 @@ export function renderSituationSection(section, state = {}) {
                     ${state.loading ? renderEmptyState('상황을 불러오는 중입니다.') : ''}
                     ${state.error ? renderEmptyState(state.error) : ''}
                     ${!state.loading && !state.error && situations.length ? `
-                        <div class="min-h-0 flex-1 overflow-y-auto pr-1 space-y-6">
+                        <div id="situation-list-scroll" class="min-h-0 flex-1 overflow-y-auto pr-1 space-y-6">
                             <section>
                                 <div class="mb-2 flex items-center justify-between gap-3">
                                     <h4 class="text-xs font-extrabold uppercase tracking-wide text-gray-500 dark:text-gray-400">SFW 상황</h4>
@@ -66,6 +66,11 @@ export function renderSituationSection(section, state = {}) {
         </div>
         ${renderProjectItemCreateModal()}
     `);
+
+    if (Number.isFinite(Number(state.scrollTop))) {
+        const scrollContainer = document.getElementById('situation-list-scroll');
+        if (scrollContainer) scrollContainer.scrollTop = Number(state.scrollTop);
+    }
 }
 
 export function getSituationById(project, situationId) {
