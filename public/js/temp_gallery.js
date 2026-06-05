@@ -81,7 +81,7 @@ function getInpaintCanvas() {
 
 function getInpaintSourceUrl(source) {
     if (!source) return '';
-    if (source.type === 'file') return source.objectUrl || '';
+    if (source.type === 'file') return source.previewObjectUrl || source.objectUrl || '';
     if (source.url) return source.url;
     if (source.key) return '/' + source.key + '?t=' + Date.now();
     return '';
@@ -176,13 +176,43 @@ function loadImageFromUrl(url) {
             resolve(img);
         };
         img.onerror = () => reject(new Error('인페인트 이미지를 불러오지 못했습니다.'));
-        img.addEventListener('error', () => logInpaintFlow('source_image_load_failed', { url: url.split('?')[0] }), { once: true });
         img.src = url;
     });
 }
 
 function canvasToPngBase64(canvas) {
     return canvas.toDataURL('image/png').split(',')[1];
+}
+
+function canvasToBlob(canvas, type = 'image/png', quality) {
+    return new Promise((resolve, reject) => {
+        canvas.toBlob((blob) => {
+            if (blob) resolve(blob);
+            else reject(new Error(`${type} Blob 생성에 실패했습니다.`));
+        }, type, quality);
+    });
+}
+
+async function createCanvasFromFile(file, width, height) {
+    if (typeof createImageBitmap !== 'function') throw new Error('createImageBitmap을 지원하지 않는 브라우저입니다.');
+    const bitmap = await createImageBitmap(file);
+    try {
+        const canvas = document.createElement('canvas');
+        canvas.width = width || bitmap.width;
+        canvas.height = height || bitmap.height;
+        canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+        return canvas;
+    } finally {
+        bitmap.close?.();
+    }
+}
+
+async function createPreviewObjectUrlFromFile(file) {
+    const canvas = await createCanvasFromFile(file);
+    const blob = await canvasToBlob(canvas, 'image/png');
+    canvas.width = 0;
+    canvas.height = 0;
+    return URL.createObjectURL(blob);
 }
 
 function getInpaintSourceLogDetails(source = window.INPAINT_IMAGE_SOURCE) {
@@ -193,7 +223,8 @@ function getInpaintSourceLogDetails(source = window.INPAINT_IMAGE_SOURCE) {
         url: source.url ? source.url.split('?')[0] : '',
         name: source.name || '',
         file: source.file || null,
-        hasObjectUrl: !!source.objectUrl
+        hasObjectUrl: !!source.objectUrl,
+        hasPreviewObjectUrl: !!source.previewObjectUrl
     };
 }
 
@@ -283,9 +314,13 @@ function setInpaintSource(source) {
     if (window.INPAINT_IMAGE_OBJECT_URL && source.objectUrl !== window.INPAINT_IMAGE_OBJECT_URL) {
         URL.revokeObjectURL(window.INPAINT_IMAGE_OBJECT_URL);
     }
+    if (window.INPAINT_PREVIEW_OBJECT_URL && source.previewObjectUrl !== window.INPAINT_PREVIEW_OBJECT_URL) {
+        URL.revokeObjectURL(window.INPAINT_PREVIEW_OBJECT_URL);
+    }
     window.INPAINT_IMAGE_SOURCE = source;
     window.INPAINT_IMAGE_FILE = source.type === 'file' ? source.file : null;
     window.INPAINT_IMAGE_OBJECT_URL = source.type === 'file' ? source.objectUrl : null;
+    window.INPAINT_PREVIEW_OBJECT_URL = source.type === 'file' ? source.previewObjectUrl || null : null;
     clearInpaintMask();
     updateInpaintSummary();
     openInpaintEditorModal();
@@ -309,7 +344,9 @@ export function clearInpaintImage() {
     const thumb = document.getElementById('inpaint-selected-thumb');
     if (input) input.value = '';
     if (window.INPAINT_IMAGE_OBJECT_URL) URL.revokeObjectURL(window.INPAINT_IMAGE_OBJECT_URL);
+    if (window.INPAINT_PREVIEW_OBJECT_URL) URL.revokeObjectURL(window.INPAINT_PREVIEW_OBJECT_URL);
     window.INPAINT_IMAGE_OBJECT_URL = null;
+    window.INPAINT_PREVIEW_OBJECT_URL = null;
     if (preview) preview.src = '';
     if (thumb) thumb.src = '';
     window.clearInpaintMask();
@@ -364,39 +401,62 @@ export function handleInpaintPointerUp(event) {
 }
 
 export async function handleInpaintImageUpload(file) {
-    window.INPAINT_ATTEMPT_ID = createInpaintAttemptId('file', file);
-    const fileProbe = await inspectInpaintFile(file);
-    window.INPAINT_LAST_FILE_PROBE = fileProbe;
-    logInpaintFlow('file_probe', { fileProbe });
-    if (!file || !file.type.startsWith('image/')) logInpaintFlow('file_upload_rejected', { file, reason: 'not_image_mime' });
-    if (!file || !file.type.startsWith('image/')) return alert('이미지 파일만 인페인트 기준 이미지로 사용할 수 있습니다.');
-    const objectUrl = URL.createObjectURL(file);
-    setInpaintSource({ type: 'file', file, objectUrl, name: file.name });
+    const attemptId = createInpaintAttemptId('file', file);
+    window.INPAINT_ATTEMPT_ID = attemptId;
+    window.INPAINT_LAST_FILE_PROBE = null;
+    let objectUrl = '';
+    let previewObjectUrl = '';
+    try {
+        if (!file || !file.type.startsWith('image/')) throw new Error('이미지 파일만 인페인트 기준 이미지로 사용할 수 있습니다.');
+        objectUrl = URL.createObjectURL(file);
+        previewObjectUrl = await createPreviewObjectUrlFromFile(file);
+        if (window.INPAINT_ATTEMPT_ID !== attemptId) {
+            URL.revokeObjectURL(objectUrl);
+            URL.revokeObjectURL(previewObjectUrl);
+            return;
+        }
+        setInpaintSource({ type: 'file', file, objectUrl, previewObjectUrl, name: file.name });
+    } catch (error) {
+        if (objectUrl) URL.revokeObjectURL(objectUrl);
+        if (previewObjectUrl) URL.revokeObjectURL(previewObjectUrl);
+        const fileProbe = await inspectInpaintFile(file).catch(probeError => ({ probeError: probeError?.message || String(probeError) }));
+        window.INPAINT_LAST_FILE_PROBE = fileProbe;
+        logInpaintFlow('file_upload_failed', { file, fileProbe, error });
+        alert(error.message || '인페인트 기준 이미지를 불러오지 못했습니다.');
+    }
 }
 
 export function openInpaintEditorModal() {
     const source = window.INPAINT_IMAGE_SOURCE;
-    if (!source) logInpaintFlow('editor_open_rejected', { reason: 'missing_source' });
-    if (!source) return alert('먼저 인페인트 기준 이미지를 선택해 주세요.');
+    if (!source) {
+        const error = new Error('missing_source');
+        logInpaintFlow('editor_open_failed', { reason: 'missing_source', error });
+        return alert('먼저 인페인트 기준 이미지를 선택해 주세요.');
+    }
     const modal = document.getElementById('inpaint-editor-modal');
     const preview = document.getElementById('inpaint-image-preview');
-    if (!modal || !preview) logInpaintFlow('editor_open_rejected', { reason: 'missing_dom', hasModal: !!modal, hasPreview: !!preview });
-    if (!modal || !preview) return;
+    if (!modal || !preview) {
+        logInpaintFlow('editor_open_failed', { reason: 'missing_dom', hasModal: !!modal, hasPreview: !!preview, error: new Error('missing_dom') });
+        return;
+    }
     const previewUrl = getInpaintSourceUrl(source);
-    logInpaintFlow('editor_open_start', { previewUrl: previewUrl.split('?')[0] });
     preview.onload = () => {
-        logInpaintFlow('editor_preview_loaded', { naturalWidth: preview.naturalWidth, naturalHeight: preview.naturalHeight, lastFileProbe: window.INPAINT_LAST_FILE_PROBE || null });
         setInpaintCanvasSize(preview.naturalWidth, preview.naturalHeight, true);
     };
     preview.onerror = () => {
-        logInpaintFlow('editor_preview_load_failed', {
-            previewUrl: previewUrl.split('?')[0],
-            complete: !!preview.complete,
-            naturalWidth: preview.naturalWidth || 0,
-            naturalHeight: preview.naturalHeight || 0,
-            currentSrc: preview.currentSrc ? preview.currentSrc.split('?')[0] : '',
-            lastFileProbe: window.INPAINT_LAST_FILE_PROBE || null
-        });
+        (async () => {
+            const fileProbe = source.type === 'file' ? await inspectInpaintFile(source.file).catch(error => ({ probeError: error?.message || String(error) })) : null;
+            window.INPAINT_LAST_FILE_PROBE = fileProbe;
+            logInpaintFlow('editor_preview_load_failed', {
+                previewUrl: previewUrl.split('?')[0],
+                complete: !!preview.complete,
+                naturalWidth: preview.naturalWidth || 0,
+                naturalHeight: preview.naturalHeight || 0,
+                currentSrc: preview.currentSrc ? preview.currentSrc.split('?')[0] : '',
+                fileProbe,
+                error: new Error('inpaint preview image load failed')
+            });
+        })();
     };
     preview.src = previewUrl;
     modal.classList.remove('hidden');
@@ -549,21 +609,31 @@ export function setInpaintImageFromKey(key, uploaded) {
     closeInpaintLibraryModal(null, true);
     window.INPAINT_ATTEMPT_ID = createInpaintAttemptId('key', key);
     window.INPAINT_LAST_FILE_PROBE = null;
-    logInpaintFlow('library_image_selected', { key, uploaded: uploaded || '', url: url.split('?')[0] });
     setInpaintSource({ type: 'key', key, url, name: fileName });
 }
 
 export async function prepareInpaintPayload(width, height) {
     if (!window.INPAINT_IMAGE_SOURCE) return null;
     const maskCanvas = getInpaintCanvas();
-    if (!hasInpaintMaskPixels(maskCanvas)) logInpaintFlow('payload_prepare_failed', { reason: 'empty_mask', maskWidth: maskCanvas?.width || 0, maskHeight: maskCanvas?.height || 0 });
     if (!hasInpaintMaskPixels(maskCanvas)) throw new Error('인페인트 마스크가 비어 있습니다. 편집기에서 재생성할 영역을 칠해 주세요.');
 
-    const sourceImage = await loadImageFromUrl(getInpaintSourceUrl(window.INPAINT_IMAGE_SOURCE));
     const imageCanvas = document.createElement('canvas');
     imageCanvas.width = width;
     imageCanvas.height = height;
-    imageCanvas.getContext('2d').drawImage(sourceImage, 0, 0, width, height);
+    if (window.INPAINT_IMAGE_SOURCE.type === 'file' && window.INPAINT_IMAGE_SOURCE.file) {
+        try {
+            const sourceCanvas = await createCanvasFromFile(window.INPAINT_IMAGE_SOURCE.file, width, height);
+            imageCanvas.getContext('2d').drawImage(sourceCanvas, 0, 0, width, height);
+            sourceCanvas.width = 0;
+            sourceCanvas.height = 0;
+        } catch (error) {
+            logInpaintFlow('payload_source_decode_failed', { error });
+            throw error;
+        }
+    } else {
+        const sourceImage = await loadImageFromUrl(getInpaintSourceUrl(window.INPAINT_IMAGE_SOURCE));
+        imageCanvas.getContext('2d').drawImage(sourceImage, 0, 0, width, height);
+    }
 
     const scaledMask = document.createElement('canvas');
     scaledMask.width = width;

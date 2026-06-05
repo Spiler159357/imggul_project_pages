@@ -12,6 +12,7 @@ window.PRECISE_IMAGE_FILE = null;
 window.INPAINT_IMAGE_FILE = null;
 window.INPAINT_IMAGE_SOURCE = null;
 window.INPAINT_IMAGE_OBJECT_URL = null;
+window.INPAINT_PREVIEW_OBJECT_URL = null;
 window.INPAINT_MASK_READY = false;
 window.INPAINT_DRAW_MODE = 'brush';
 window.INPAINT_IS_DRAWING = false;
