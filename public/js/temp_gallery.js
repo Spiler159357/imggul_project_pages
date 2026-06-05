@@ -1218,7 +1218,8 @@ export function closeCraftUploadModal(e) {
 
 export async function initCraftUploadPicker() {
     const cache = readCraftUploadContextCache();
-    const projectPath = normalizeUploadPath(cache.projectPath || document.getElementById('craft-project-select')?.value || '');
+    const currentContext = getCraftUploadSelectedContext();
+    const projectPath = normalizeUploadPath(currentContext.projectPath || cache.projectPath || '');
     const projectCache = cache.byProject?.[projectPath] || {};
     window.CRAFT_UPLOAD_PICKER_STATE = {
         mode: 'structured',
@@ -1226,8 +1227,8 @@ export async function initCraftUploadPicker() {
         characters: [],
         situations: [],
         projectPath,
-        characterPath: normalizeUploadPath(projectCache.characterPath || document.getElementById('craft-char-select')?.value || ''),
-        situationId: projectCache.situationId || document.getElementById('craft-situation-select')?.value || '',
+        characterPath: normalizeUploadPath(currentContext.characterPath || projectCache.characterPath || ''),
+        situationId: currentContext.situationId || projectCache.situationId || '',
         directPath: normalizeUploadPath(cache.directPath || projectPath || '')
     };
     const directInput = document.getElementById('craft-upload-direct-path');
@@ -1301,10 +1302,10 @@ export async function loadCraftUploadDependentLists(projectPath, restoreCached =
         ]);
         state.characters = characters;
         state.situations = situations;
-        if (restoreCached && projectCache.characterPath && characters.includes(projectCache.characterPath)) {
+        if (restoreCached && !state.characterPath && projectCache.characterPath && characters.includes(projectCache.characterPath)) {
             state.characterPath = projectCache.characterPath;
         }
-        if (restoreCached && projectCache.situationId && situations.some((item, index) => String(item?.id || item?.folderName || `situation-${index + 1}`) === String(projectCache.situationId))) {
+        if (restoreCached && !state.situationId && projectCache.situationId && situations.some((item, index) => String(item?.id || item?.folderName || `situation-${index + 1}`) === String(projectCache.situationId))) {
             state.situationId = projectCache.situationId;
         }
         window.CRAFT_UPLOAD_PICKER_STATE = state;
