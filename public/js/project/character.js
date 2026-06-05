@@ -693,14 +693,14 @@ export function renderProjectItemCreateModal() {
                 <form id="project-item-create-form" class="p-4 sm:p-5 space-y-4" onsubmit="window.submitProjectItemCreate(event)">
                     <input id="project-item-create-type" type="hidden">
                     <div>
-                        <label for="project-item-create-name" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">경로</label>
-                        <input id="project-item-create-name" type="text" required class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="저장 경로">
-                        <p id="project-item-create-help" class="mt-1 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                        <label for="project-item-create-alias" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">이름</label>
+                        <input id="project-item-create-alias" type="text" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="이름">
                     </div>
 
                     <div>
-                        <label for="project-item-create-alias" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">이름</label>
-                        <input id="project-item-create-alias" type="text" class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="이름">
+                        <label for="project-item-create-name" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">경로</label>
+                        <input id="project-item-create-name" type="text" required class="w-full p-2.5 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white" placeholder="저장 경로">
+                        <p id="project-item-create-help" class="mt-1 text-[11px] text-gray-400 dark:text-gray-500"></p>
                     </div>
 
                     <div id="project-item-create-rating-wrap" class="hidden">
