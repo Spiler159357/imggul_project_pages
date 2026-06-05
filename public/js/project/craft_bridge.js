@@ -12,7 +12,8 @@ export function getCraftPromptFields() {
         expression: document.getElementById('prompt-expression')?.value.trim() || '',
         action: document.getElementById('prompt-action')?.value.trim() || '',
         background: document.getElementById('prompt-background')?.value.trim() || '',
-        negative: document.getElementById('nai-negative')?.value.trim() || ''
+        negative: document.getElementById('nai-negative')?.value.trim() || '',
+        res: document.querySelector('input[name="nai-res"]:checked')?.value || ''
     };
 }
 
@@ -455,17 +456,18 @@ export async function submitCraftPromptSaveModal() {
                 expression: fields.expression,
                 action: fields.action,
                 background: fields.background,
-                negative: fields.negative
+                negative: baseVariant.prompt?.negative || situation.prompt?.negative || ''
             };
             const currentGeneration = baseVariant.generation || getSituationGeneration(situation);
             const v4PromptCharacters = window.readCraftV4PromptRows ? normalizePlannerV4PromptRows(window.readCraftV4PromptRows()) : [];
-            const generation = { ...currentGeneration, v4PromptCharacters, v4_prompt: v4PromptCharacters };
+            const generation = { ...currentGeneration, res: fields.res || currentGeneration.res, v4PromptCharacters, v4_prompt: v4PromptCharacters };
             const nextVariants = variants.map(variant => variant.id === targetVariantId
                 ? { ...variant, prompt, generation, updatedAt: Date.now() }
                 : variant
             );
             situation.prompt = prompt;
             situation.generation = generation;
+            situation.resolution = generation.res;
             situation.promptVariants = nextVariants;
             situation.activePromptVariantId = targetVariantId;
             situation.v4PromptCharacters = v4PromptCharacters;
@@ -606,12 +608,13 @@ export async function saveCraftPromptToSituation() {
             expression: fields.expression,
             action: fields.action,
             background: fields.background,
-            negative: fields.negative
+            negative: situation.prompt?.negative || ''
         };
         const currentGeneration = getSituationGeneration(situation);
         const v4PromptCharacters = window.readCraftV4PromptRows ? normalizePlannerV4PromptRows(window.readCraftV4PromptRows()) : [];
         const generation = {
             ...currentGeneration,
+            res: fields.res || currentGeneration.res,
             v4PromptCharacters,
             v4_prompt: v4PromptCharacters
         };
@@ -623,6 +626,7 @@ export async function saveCraftPromptToSituation() {
         );
         situation.prompt = prompt;
         situation.generation = generation;
+        situation.resolution = generation.res;
         situation.promptVariants = nextVariants;
         situation.activePromptVariantId = activeVariantId;
         situation.v4PromptCharacters = v4PromptCharacters;

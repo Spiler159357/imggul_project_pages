@@ -137,6 +137,11 @@ export function mergePlannerSplitMetadata(item, metadata = {}, imageKey = '') {
         ...source,
         ...(snapshot || {})
     };
+    Object.entries(fallback || {}).forEach(([key, value]) => {
+        if (merged[key] === undefined || merged[key] === null || merged[key] === '') {
+            merged[key] = value;
+        }
+    });
     if (Object.keys(splitPrompts).length) {
         merged['Split Prompts'] = splitPrompts;
         delete merged.Prompt;
