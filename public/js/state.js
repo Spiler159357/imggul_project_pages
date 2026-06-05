@@ -16,6 +16,8 @@ window.INPAINT_MASK_READY = false;
 window.INPAINT_DRAW_MODE = 'brush';
 window.INPAINT_IS_DRAWING = false;
 window.INPAINT_LAST_POINT = null;
+window.INPAINT_ATTEMPT_ID = '';
+window.INPAINT_LAST_FILE_PROBE = null;
 window.EXTRA_CHAR_COUNT = 0;
 
 window.GENERATION_QUEUE = [];

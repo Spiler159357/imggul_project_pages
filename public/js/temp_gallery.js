@@ -200,6 +200,7 @@ function getInpaintSourceLogDetails(source = window.INPAINT_IMAGE_SOURCE) {
 function logInpaintFlow(stage, details = {}) {
     if (!window.logFlowToStorage) return;
     window.logFlowToStorage(`inpaint_${stage}`, {
+        attemptId: window.INPAINT_ATTEMPT_ID || '',
         stage,
         source: getInpaintSourceLogDetails(),
         maskReady: !!window.INPAINT_MASK_READY,
@@ -208,6 +209,15 @@ function logInpaintFlow(stage, details = {}) {
         viewport: { width: window.innerWidth, height: window.innerHeight, devicePixelRatio: window.devicePixelRatio || 1 },
         ...details
     });
+}
+
+function createInpaintAttemptId(sourceType, fileOrKey = '') {
+    if (fileOrKey instanceof File) {
+        const baseName = (fileOrKey.name || 'file').replace(/[^a-zA-Z0-9._-]+/g, '_');
+        return `${sourceType}_${Date.now()}_${baseName}_${fileOrKey.size || 0}_${fileOrKey.lastModified || 0}`;
+    }
+    const safeKey = String(fileOrKey || 'source').replace(/[^a-zA-Z0-9._-]+/g, '_').slice(-80);
+    return `${sourceType}_${Date.now()}_${safeKey}`;
 }
 
 async function inspectInpaintFile(file) {
@@ -292,6 +302,7 @@ export function clearInpaintMask() {
 export function clearInpaintImage() {
     window.INPAINT_IMAGE_FILE = null;
     window.INPAINT_IMAGE_SOURCE = null;
+    window.INPAINT_ATTEMPT_ID = '';
     window.INPAINT_LAST_FILE_PROBE = null;
     const input = document.getElementById('inpaint-image-input');
     const preview = document.getElementById('inpaint-image-preview');
@@ -353,6 +364,7 @@ export function handleInpaintPointerUp(event) {
 }
 
 export async function handleInpaintImageUpload(file) {
+    window.INPAINT_ATTEMPT_ID = createInpaintAttemptId('file', file);
     const fileProbe = await inspectInpaintFile(file);
     window.INPAINT_LAST_FILE_PROBE = fileProbe;
     logInpaintFlow('file_probe', { fileProbe });
@@ -535,6 +547,7 @@ export function setInpaintImageFromKey(key, uploaded) {
     const fileName = key.split('/').pop();
     const url = '/' + key + '?t=' + (uploaded ? new Date(uploaded).getTime() : Date.now());
     closeInpaintLibraryModal(null, true);
+    window.INPAINT_ATTEMPT_ID = createInpaintAttemptId('key', key);
     window.INPAINT_LAST_FILE_PROBE = null;
     logInpaintFlow('library_image_selected', { key, uploaded: uploaded || '', url: url.split('?')[0] });
     setInpaintSource({ type: 'key', key, url, name: fileName });
