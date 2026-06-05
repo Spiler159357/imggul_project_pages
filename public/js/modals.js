@@ -625,14 +625,15 @@ function getFullImportApplyOptions() {
         optNegative: true,
         optRes: true,
         optSettings: true,
-        optSeed: true
+        optSeed: false
     };
 }
 
 function normalizeImportApplyOptions(options = {}) {
     return {
         ...getFullImportApplyOptions(),
-        ...(options || {})
+        ...(options || {}),
+        optSeed: false
     };
 }
 
@@ -648,7 +649,7 @@ function getImportApplyOptions() {
         optNegative: document.getElementById('import-opt-negative')?.checked ?? true,
         optRes: document.getElementById('import-opt-res')?.checked ?? true,
         optSettings: document.getElementById('import-opt-settings')?.checked ?? false,
-        optSeed: document.getElementById('import-opt-seed')?.checked ?? false
+        optSeed: false
     };
 }
 
