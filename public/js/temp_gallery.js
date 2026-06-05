@@ -960,13 +960,25 @@ async function getTempImageInpaintSourceKey(imgData) {
         const metadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, tempFileName).catch(() => null);
         if (metadata?.['Inpaint Source Key']) return metadata['Inpaint Source Key'];
     }
-    if (window.INPAINT_IMAGE_SOURCE?.key) return window.INPAINT_IMAGE_SOURCE.key;
     if (window.CRAFT_UPLOAD_INPAINT_SOURCE_KEY) return window.CRAFT_UPLOAD_INPAINT_SOURCE_KEY;
     try {
         return localStorage.getItem('imggul_inpaint_upload_source_key') || '';
     } catch {
         return '';
     }
+}
+
+function clearInpaintUploadSourceHint(sourceKey = '') {
+    const normalizedSourceKey = String(sourceKey || '');
+    if (!normalizedSourceKey || window.CRAFT_UPLOAD_INPAINT_SOURCE_KEY === normalizedSourceKey) {
+        window.CRAFT_UPLOAD_INPAINT_SOURCE_KEY = '';
+    }
+    try {
+        const storedKey = localStorage.getItem('imggul_inpaint_upload_source_key') || '';
+        if (!normalizedSourceKey || storedKey === normalizedSourceKey) {
+            localStorage.removeItem('imggul_inpaint_upload_source_key');
+        }
+    } catch {}
 }
 
 async function applyInpaintSourceUploadContext(sourceKey) {
@@ -1140,6 +1152,7 @@ export async function prepareUploadActiveTempImage() {
     window.CRAFT_UPLOAD_ACTIVE_INDEX = index;
     window.CRAFT_UPLOAD_TARGET_PATH = '';
     window.CRAFT_UPLOAD_SELECTED_SITUATION = null;
+    window.CRAFT_UPLOAD_ACTIVE_INPAINT_SOURCE_KEY = inpaintSourceKey || '';
 
     const uploadModal = document.getElementById('craft-upload-modal');
     const uploadPreview = document.getElementById('craft-upload-preview');
@@ -1660,6 +1673,8 @@ async function uploadActiveTempImageToTarget(targetPath, fileNameInput) {
         }
         await fetch('/api/manage', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'delete', key: imgData.key }) });
         await window.removeMetadataFromDB(window.TEMP_FOLDER, tempFileName);
+        clearInpaintUploadSourceHint(window.CRAFT_UPLOAD_ACTIVE_INPAINT_SOURCE_KEY);
+        window.CRAFT_UPLOAD_ACTIVE_INPAINT_SOURCE_KEY = '';
 
         alert('성공적으로 업로드했습니다.');
         window.TEMP_IMAGES.splice(index, 1);
