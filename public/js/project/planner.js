@@ -1429,6 +1429,14 @@ export function renderPlannerPanel(project, situations) {
         ? window.PROJECT_PLANNER_QUEUE_METAS
         : (meta?.items?.length ? [{ character: activeCharacter, meta }] : []);
     const queueSummary = getPlannerQueueSummary(queueMetas);
+    const characterSelector = characters.length ? `
+        <label class="block min-w-[180px] sm:min-w-[240px]">
+            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">대상 캐릭터</span>
+            <select id="planner-character-select" onchange="window.cachePlannerCharacterSelection()" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
+                ${characters.map(character => `<option value="${escapeHtml(character.id)}" ${activeCharacter?.id === character.id ? 'selected' : ''}>${escapeHtml(character.name || character.folderName)}</option>`).join('')}
+            </select>
+        </label>
+    ` : '';
 
     const modeButton = (mode, label, icon) => `
         <button type="button" onclick="window.setPlannerView('${mode}')" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${view === mode ? 'bg-indigo-600 text-white' : 'border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-400'}">
@@ -1470,14 +1478,6 @@ export function renderPlannerPanel(project, situations) {
     ` : '<div class="flex-1 flex items-center justify-center text-sm font-bold text-gray-500 dark:text-gray-400 text-center">캐릭터와 상황을 선택한 뒤 추가하기를 눌러 플랜 작성안을 만드세요.</div>';
 
     const planView = `
-        <div class="mb-4 max-w-md">
-            <label class="block min-w-0">
-                <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">캐릭터</span>
-                <select id="planner-character-select" onchange="window.cachePlannerCharacterSelection()" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
-                    ${characters.map(character => `<option value="${escapeHtml(character.id)}" ${activeCharacter?.id === character.id ? 'selected' : ''}>${escapeHtml(character.name || character.folderName)}</option>`).join('')}
-                </select>
-            </label>
-        </div>
         <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
             <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">상황을 선택하면 해당 상황의 플랜을 구성합니다.</p>
             <div class="flex flex-wrap justify-end gap-2">
@@ -1529,7 +1529,7 @@ export function renderPlannerPanel(project, situations) {
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
                 <p class="text-xs font-bold text-gray-900 dark:text-white">결과 확인</p>
-                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">상황별 결과 목록을 열어 이미지를 확인하고 선택합니다.</p>
+                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">현재 선택한 캐릭터의 상황별 결과를 확인하고 선택합니다.</p>
             </div>
         </div>
         ${renderPlannerSituationGrid(project, situations, activeCharacter, meta, 'result')}
@@ -1541,18 +1541,17 @@ export function renderPlannerPanel(project, situations) {
                 <div>
                     <h3 class="font-bold text-sm text-gray-900 dark:text-white">플래너 데모</h3>
                     <p id="planner-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(meta?.status))}</p>
-                    <p class="mt-1 inline-flex items-center gap-1.5 max-w-full rounded-full border border-indigo-100 dark:border-indigo-900/60 bg-indigo-50 dark:bg-indigo-950/30 px-2 py-1 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
-                        <i data-lucide="user" class="w-3.5 h-3.5 flex-shrink-0"></i>
-                        <span class="truncate">대상 캐릭터: ${escapeHtml(activeCharacterName)}</span>
-                    </p>
                 </div>
-                <div class="flex items-center gap-1">
-                    <button type="button" onclick="window.openPlannerSettingsModal()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="플래너 설정">
-                        <i data-lucide="settings" class="w-4 h-4"></i>
-                    </button>
-                    <button type="button" onclick="window.refreshPlannerPanel()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="새로고침">
-                        <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-                    </button>
+                <div class="flex flex-col sm:flex-row sm:items-end gap-2">
+                    ${characterSelector || `<p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(activeCharacterName)}</p>`}
+                    <div class="flex items-center justify-end gap-1">
+                        <button type="button" onclick="window.openPlannerSettingsModal()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="플래너 설정">
+                            <i data-lucide="settings" class="w-4 h-4"></i>
+                        </button>
+                        <button type="button" onclick="window.refreshPlannerPanel()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="새로고침">
+                            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
             <div class="flex flex-wrap gap-2 mb-4 flex-shrink-0">
@@ -1596,6 +1595,7 @@ export async function refreshPlannerPanel() {
     if (!project) return;
     const characterId = getSelectedPlannerCharacterId(project);
     window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = characterId;
+    setCachedPlannerCharacterId(project, characterId);
     const character = getCharacterById(project, characterId);
     const characters = getProjectItems(project, 'characters');
     const [meta, , projectStyle] = await Promise.all([
@@ -1641,6 +1641,9 @@ export async function loadPlannerForSelectedCharacter() {
     const characterId = getSelectedPlannerCharacterId(project);
     window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = characterId;
     setCachedPlannerCharacterId(project, characterId);
+    window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+    window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     const character = getCharacterById(project, characterId);
     if (character) {
         await Promise.all([
@@ -1655,6 +1658,9 @@ export async function loadPlannerForSelectedCharacter() {
     window.PROJECT_PLANNER_META = meta;
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, undefined, { force: true }).catch(() => meta ? [{ character, meta }] : []);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
+    renderPlannerSituationPlanOverlay();
+    renderPlannerResultOverlay();
+    renderPlannerPreviewOverlay();
     renderPlannerSectionByState();
 }
 
