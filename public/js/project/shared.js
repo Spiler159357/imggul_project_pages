@@ -1,6 +1,14 @@
 import { loadPlannerForSelectedCharacter } from './planner.js';
 
-export const EXCLUDED_PROJECT_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
+export const EXCLUDED_PROJECT_FOLDERS = new Set([
+    'logs',
+    '_temp_craft',
+    '_planner_temp_image',
+    'editor_session',
+    'editor_sessions',
+    '__editor_sessions',
+    '__editor_backups'
+]);
 
 export const PROJECT_SECTIONS = [
     {
