@@ -54,11 +54,6 @@ export function renderImageEditor(skipHistory = false, options = {}) {
                     </div>
                 </section>
                 <aside class="image-editor-inspector">
-                    <div class="image-editor-tabs">
-                        <button data-editor-panel="properties" class="active">Properties</button>
-                        <button data-editor-panel="layers">Layers</button>
-                        <button data-editor-panel="history">History</button>
-                    </div>
                     <div id="image-editor-panel"></div>
                 </aside>
             </div>
@@ -125,12 +120,6 @@ function bindImageEditorUi(options = {}) {
     document.getElementById('image-editor-zoom-out-btn')?.addEventListener('click', () => editor.zoomBy(-0.1));
     document.querySelectorAll('.image-editor-tool-btn[data-tool]').forEach(btn => {
         btn.addEventListener('click', () => editor.setTool(btn.dataset.tool));
-    });
-    document.querySelectorAll('[data-editor-panel]').forEach(btn => {
-        btn.addEventListener('click', () => {
-            document.querySelectorAll('[data-editor-panel]').forEach(item => item.classList.toggle('active', item === btn));
-            renderInspector(btn.dataset.editorPanel);
-        });
     });
     if (!globalListenersBound) {
         document.addEventListener('keydown', handleEditorShortcut);
@@ -377,20 +366,34 @@ function refreshEditorUi() {
     document.getElementById('image-editor-zoom').textContent = `zoom ${Math.round((state.zoom || 1) * 100)}%`;
     document.getElementById('image-editor-size').textContent = state.imageWidth ? `${state.imageWidth} x ${state.imageHeight}` : 'size -';
     document.getElementById('image-editor-output').textContent = state.outputKey || 'output -';
-    const activePanel = document.querySelector('[data-editor-panel].active')?.dataset.editorPanel || 'properties';
-    renderInspector(activePanel);
+    renderInspector();
     window.lucide?.createIcons();
 }
 
-function renderInspector(panel = 'properties') {
+function renderInspector() {
     const target = document.getElementById('image-editor-panel');
     if (!target || !editor) return;
-    if (panel === 'layers') return renderLayersPanel(target);
-    if (panel === 'history') return renderHistoryPanel(target);
-    renderPropertiesPanel(target);
+    target.innerHTML = `
+        <section class="image-editor-inspector-section">
+            <h3>Properties</h3>
+            <div id="image-editor-properties-panel"></div>
+        </section>
+        <section class="image-editor-inspector-section">
+            <h3>Layers</h3>
+            <div id="image-editor-layers-panel"></div>
+        </section>
+        <section class="image-editor-inspector-section">
+            <h3>History</h3>
+            <div id="image-editor-history-panel"></div>
+        </section>
+    `;
+    renderPropertiesPanel(document.getElementById('image-editor-properties-panel'));
+    renderLayersPanel(document.getElementById('image-editor-layers-panel'));
+    renderHistoryPanel(document.getElementById('image-editor-history-panel'));
 }
 
 function renderPropertiesPanel(target) {
+    if (!target) return;
     const tool = editor.state.activeTool;
     const selectedLayer = editor.state.layers.find(layer => layer.id === editor.state.selectedLayerIds[0]);
     if (selectedLayer && selectedLayer.type !== 'sourceImage') {
@@ -399,7 +402,7 @@ function renderPropertiesPanel(target) {
                 <h4>선택 레이어</h4>
                 <label>이름 <input data-layer-field="name" value="${escapeHtml(selectedLayer.name || '')}"></label>
                 <label>Opacity <input data-layer-field="opacity" type="range" min="0" max="1" step="0.05" value="${selectedLayer.opacity ?? 1}"></label>
-                <button id="image-editor-delete-layer" class="image-editor-danger-btn"><i data-lucide="trash-2"></i><span>삭제</span></button>
+                <button id="image-editor-delete-layer" class="image-editor-danger-btn" ${selectedLayer.locked ? 'disabled' : ''}><i data-lucide="trash-2"></i><span>삭제</span></button>
             </div>
         `;
         target.querySelectorAll('[data-layer-field]').forEach(input => {
@@ -463,6 +466,7 @@ function optionHtml(title, rows, tool) {
 }
 
 function renderLayersPanel(target) {
+    if (!target) return;
     target.innerHTML = `
         <div class="image-editor-layer-list">
             ${[...editor.state.layers].reverse().map(layer => `
@@ -471,6 +475,7 @@ function renderLayersPanel(target) {
                     <button data-layer-lock="${layer.id}" title="잠금" aria-label="잠금"><i data-lucide="${layer.locked ? 'lock' : 'unlock'}"></i></button>
                     <span>${escapeHtml(layer.name || layer.type)}</span>
                     <small>${escapeHtml(layer.type)}</small>
+                    <button data-layer-delete="${layer.id}" title="삭제" aria-label="삭제" ${layer.type === 'sourceImage' || layer.locked ? 'disabled' : ''}><i data-lucide="trash-2"></i></button>
                 </div>
             `).join('')}
         </div>
@@ -495,9 +500,18 @@ function renderLayersPanel(target) {
             if (layer.type !== 'sourceImage') editor.setLayerPatch(layer.id, { locked: !layer.locked });
         });
     });
+    target.querySelectorAll('[data-layer-delete]').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const layer = editor.state.layers.find(item => item.id === btn.dataset.layerDelete);
+            if (!layer || layer.type === 'sourceImage') return;
+            editor.state.selectedLayerIds = [layer.id];
+            editor.deleteSelectedLayer();
+        });
+    });
 }
 
 function renderHistoryPanel(target) {
+    if (!target) return;
     target.innerHTML = `
         <div class="image-editor-history-list">
             ${editor.history.stack.map((cmd, index) => `
