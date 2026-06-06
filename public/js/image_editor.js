@@ -28,21 +28,6 @@ export function renderImageEditor(skipHistory = false, options = {}) {
     if (!root) return;
     root.innerHTML = `
         <div class="image-editor-shell">
-            <div class="image-editor-topbar">
-                <button id="image-editor-back-btn" class="image-editor-icon-btn" title="프로젝트로 돌아가기" aria-label="프로젝트로 돌아가기"><i data-lucide="arrow-left"></i></button>
-                <button id="image-editor-open-library-btn" class="image-editor-command-btn"><i data-lucide="folder-open"></i><span>열기</span></button>
-                <div class="image-editor-title">
-                    <strong id="image-editor-name">이미지 편집기</strong>
-                    <span id="image-editor-dirty">${currentStatus}</span>
-                </div>
-                <div class="image-editor-top-actions">
-                    <button id="image-editor-undo-btn" class="image-editor-icon-btn" title="Undo" aria-label="Undo"><i data-lucide="undo-2"></i></button>
-                    <button id="image-editor-redo-btn" class="image-editor-icon-btn" title="Redo" aria-label="Redo"><i data-lucide="redo-2"></i></button>
-                    <button id="image-editor-save-btn" class="image-editor-command-btn" disabled><i data-lucide="save"></i><span>저장</span></button>
-                    <button id="image-editor-save-as-btn" class="image-editor-command-btn" disabled><i data-lucide="copy-plus"></i><span>다른 이름</span></button>
-                    <button id="image-editor-recover-btn" class="image-editor-icon-btn" title="복구" aria-label="복구"><i data-lucide="history"></i></button>
-                </div>
-            </div>
             <div class="image-editor-body">
                 <aside class="image-editor-toolbar">
                     ${TOOL_ITEMS.map(([id, icon, label]) => `

@@ -365,7 +365,7 @@ body {
 
 .image-editor-shell {
     display: grid;
-    grid-template-rows: 52px minmax(0, 1fr) 32px;
+    grid-template-rows: minmax(0, 1fr) 32px;
     width: 100%;
     height: 100%;
     min-width: 0;
@@ -373,7 +373,6 @@ body {
     background: #f9fafb;
 }
 
-.image-editor-topbar,
 .image-editor-statusbar {
     display: flex;
     align-items: center;
@@ -382,21 +381,7 @@ body {
 }
 
 .dark .image-editor-shell {
-    background: #111827;
-}
-
-.dark .image-editor-topbar,
-.dark .image-editor-statusbar {
-    background: #1f2937;
-}
-
-.image-editor-topbar {
-    padding: 0 0.75rem;
-    border-bottom: 1px solid #e5e7eb;
-}
-
-.dark .image-editor-topbar {
-    border-bottom-color: #374151;
+    background: #0a0a0a;
 }
 
 .image-editor-statusbar {
@@ -409,7 +394,8 @@ body {
 
 .dark .image-editor-statusbar {
     color: #9ca3af;
-    border-top-color: #374151;
+    border-top-color: #404040;
+    background: #171717;
 }
 
 .image-editor-statusbar span {
@@ -417,36 +403,6 @@ body {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-}
-
-.image-editor-title {
-    min-width: 0;
-    flex: 1;
-    display: flex;
-    flex-direction: column;
-    line-height: 1.15;
-}
-
-.image-editor-title strong,
-.image-editor-title span {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-}
-
-.image-editor-title strong {
-    font-size: 0.9rem;
-}
-
-.image-editor-title span {
-    font-size: 0.7rem;
-    color: #6b7280;
-}
-
-.image-editor-top-actions {
-    display: flex;
-    align-items: center;
-    gap: 0.35rem;
 }
 
 .image-editor-body {
@@ -463,7 +419,7 @@ body {
 
 .dark .image-editor-toolbar,
 .dark .image-editor-inspector {
-    background: #1f2937;
+    background: #171717;
 }
 
 .image-editor-toolbar {
@@ -494,8 +450,8 @@ body {
 .dark .image-editor-tool-btn,
 .dark .image-editor-command-btn,
 .dark .image-editor-danger-btn {
-    border-color: #374151;
-    background: #1f2937;
+    border-color: #404040;
+    background: #171717;
     color: #d1d5db;
 }
 
@@ -554,7 +510,7 @@ body {
 }
 
 .dark .image-editor-stage-wrap {
-    background: #111827;
+    background: #0a0a0a;
 }
 
 .image-editor-stage {
@@ -588,7 +544,7 @@ body {
     min-width: 10rem;
     min-height: 3rem;
     padding: 0.35rem 0.45rem;
-    border: 1px solid #38bdf8;
+    border: 1px solid #4f46e5;
     border-radius: 0.25rem;
     background: rgba(255, 255, 255, 0.94);
     color: #111827;
@@ -612,7 +568,7 @@ body {
 }
 
 .dark .image-editor-empty {
-    background: #111827;
+    background: #0a0a0a;
 }
 
 .image-editor-empty.hidden {
@@ -682,13 +638,13 @@ body {
 }
 
 .dark .image-editor-library-parent-card {
-    border-color: #4b5563;
-    background: #374151;
+    border-color: #404040;
+    background: #262626;
     color: #d1d5db;
 }
 
 .dark .image-editor-library-parent-card:hover {
-    background: #4b5563;
+    background: #404040;
 }
 
 .image-editor-library-folder-card {
@@ -763,8 +719,8 @@ body {
 }
 
 .dark .image-editor-library-image-card {
-    border-color: #374151;
-    background: #1f2937;
+    border-color: #404040;
+    background: #171717;
     color: #d1d5db;
 }
 
@@ -781,7 +737,7 @@ body {
 }
 
 .dark .image-editor-library-image-card img {
-    background: #111827;
+    background: #0a0a0a;
 }
 
 .image-editor-library-image-card span {
@@ -806,8 +762,8 @@ body {
 }
 
 .dark .image-editor-panel-section input {
-    border-color: #374151;
-    background: #111827;
+    border-color: #404040;
+    background: #0a0a0a;
     color: #f9fafb;
 }
 
@@ -827,7 +783,7 @@ body {
 }
 
 .dark .image-editor-tabs {
-    border-color: #374151;
+    border-color: #404040;
 }
 
 .image-editor-tabs button {
@@ -839,7 +795,7 @@ body {
 }
 
 .dark .image-editor-tabs button {
-    border-color: #374151;
+    border-color: #404040;
     color: #d1d5db;
 }
 
@@ -892,8 +848,8 @@ body {
 
 .dark .image-editor-layer-item,
 .dark .image-editor-history-list div {
-    border-color: #374151;
-    background: #1f2937;
+    border-color: #404040;
+    background: #171717;
 }
 
 .image-editor-layer-item.active,
@@ -935,7 +891,7 @@ body {
 
 @media (max-width: 767px) {
     .image-editor-shell {
-        grid-template-rows: 48px minmax(0, 1fr) 36px;
+        grid-template-rows: minmax(0, 1fr) 36px;
     }
 
     .image-editor-body {

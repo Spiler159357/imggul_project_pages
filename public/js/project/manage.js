@@ -424,7 +424,34 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
     else if (section.key === 'image-editor') {
         const project = getActiveProject();
         renderProjectShell(`
-            ${renderSectionHeader(section.title)}
+            ${renderSectionHeader(section.title, {
+                backButtonId: 'image-editor-back-btn',
+                backOnClick: '',
+                actionsHtml: `
+                    <div class="hidden sm:flex min-w-0 flex-col items-end mr-1">
+                        <span id="image-editor-name" class="max-w-48 truncate text-xs font-bold text-gray-700 dark:text-gray-200">이미지 편집기</span>
+                        <span id="image-editor-dirty" class="max-w-48 truncate text-[11px] text-gray-500 dark:text-gray-400">이미지 없음</span>
+                    </div>
+                    <button id="image-editor-open-library-btn" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs font-bold hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition" title="이미지 열기">
+                        <i data-lucide="folder-open" class="w-4 h-4"></i><span class="hidden sm:inline">열기</span>
+                    </button>
+                    <button id="image-editor-undo-btn" type="button" class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed transition" title="되돌리기" aria-label="되돌리기">
+                        <i data-lucide="undo-2" class="w-4 h-4"></i>
+                    </button>
+                    <button id="image-editor-redo-btn" type="button" class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed transition" title="다시 실행" aria-label="다시 실행">
+                        <i data-lucide="redo-2" class="w-4 h-4"></i>
+                    </button>
+                    <button id="image-editor-save-btn" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition" disabled title="저장">
+                        <i data-lucide="save" class="w-4 h-4"></i><span class="hidden sm:inline">저장</span>
+                    </button>
+                    <button id="image-editor-save-as-btn" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs font-bold hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed transition" disabled title="다른 이름으로 저장">
+                        <i data-lucide="copy-plus" class="w-4 h-4"></i><span class="hidden sm:inline">다른 이름</span>
+                    </button>
+                    <button id="image-editor-recover-btn" type="button" class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition" title="복구" aria-label="복구">
+                        <i data-lucide="history" class="w-4 h-4"></i>
+                    </button>
+                `
+            })}
             <div id="project-image-editor-content" class="flex-1 min-h-0 bg-gray-100 dark:bg-gray-900"></div>
         `);
         renderImageEditor(true, {
@@ -441,12 +468,18 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
     else rememberProjectRoute(routeState, routeHash);
 }
 
-export function renderSectionHeader(title) {
+export function renderSectionHeader(title, options = {}) {
     const project = getActiveProject() || { id: getDefaultProjectId(), name: '프로젝트 이름' };
+    const backButtonId = options.backButtonId ? ` id="${escapeHtml(options.backButtonId)}"` : '';
+    const backOnClick = options.backOnClick !== undefined
+        ? options.backOnClick
+        : `window.openProjectDetail('${escapeJsString(project.id)}', false)`;
+    const backOnClickAttr = backOnClick ? ` onclick="${backOnClick}"` : '';
+    const actionsHtml = options.actionsHtml || '';
     return `
-        <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0">
+        <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
             <div class="flex items-center gap-2 min-w-0">
-                <button type="button" onclick="window.openProjectDetail('${escapeJsString(project.id)}', false)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="프로젝트로 돌아가기" aria-label="프로젝트로 돌아가기">
+                <button${backButtonId} type="button"${backOnClickAttr} class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="프로젝트로 돌아가기" aria-label="프로젝트로 돌아가기">
                     <i data-lucide="arrow-left" class="w-5 h-5"></i>
                 </button>
                 <div class="min-w-0">
@@ -454,6 +487,7 @@ export function renderSectionHeader(title) {
                     <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${escapeHtml(title)}</p>
                 </div>
             </div>
+            ${actionsHtml ? `<div class="flex items-center justify-end gap-1.5 min-w-0 flex-shrink-0">${actionsHtml}</div>` : ''}
         </div>
     `;
 }
