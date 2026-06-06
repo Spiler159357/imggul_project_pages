@@ -25,9 +25,9 @@
         }
     </script>
     <style>
-        #nav-explorer, #nav-craft, #nav-project {
-            flex: 0 0 90px !important;
-            width: 90px !important;
+        #nav-explorer, #nav-craft, #nav-project, #nav-image-editor {
+            flex: 0 0 78px !important;
+            width: 78px !important;
             height: 2rem !important;
             padding: 0 !important;
             border-radius: 0.5rem !important;
@@ -38,16 +38,16 @@
         }
 
         @media (min-width: 400px) {
-            #nav-explorer, #nav-craft, #nav-project {
-                flex-basis: 110px !important;
-                width: 110px !important;
+            #nav-explorer, #nav-craft, #nav-project, #nav-image-editor {
+                flex-basis: 96px !important;
+                width: 96px !important;
             }
         }
 
         @media (min-width: 640px) {
-            #nav-explorer, #nav-craft, #nav-project {
-                flex-basis: 130px !important;
-                width: 130px !important;
+            #nav-explorer, #nav-craft, #nav-project, #nav-image-editor {
+                flex-basis: 118px !important;
+                width: 118px !important;
                 height: 2.25rem !important;
                 font-size: 0.875rem !important;
                 line-height: 1.25rem !important;
@@ -68,7 +68,7 @@
         </div>
 
         <!-- [버그 해결] 모든 탭에 고정 너비(w-[...])를 주고 최초부터 탐색기 탭이 활성화 색상(shadow-sm bg-white text-indigo-600)을 가지도록 하드코딩했습니다. -->
-        <div class="flex w-[280px] xs:w-[340px] sm:w-[400px] bg-gray-100 dark:bg-gray-900/50 rounded-xl p-1 border border-gray-200 dark:border-gray-700 mx-2 flex-shrink-0 overflow-x-auto scrollbar-hide flex-nowrap whitespace-nowrap">
+        <div class="flex w-[280px] xs:w-[340px] sm:w-[500px] bg-gray-100 dark:bg-gray-900/50 rounded-xl p-1 border border-gray-200 dark:border-gray-700 mx-2 flex-shrink-0 overflow-x-auto scrollbar-hide flex-nowrap whitespace-nowrap">
             <button id="nav-explorer" onclick="window.switchTab('explorer')" class="w-[90px] xs:w-[110px] sm:w-[130px] h-8 sm:h-9 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400">
                 <i data-lucide="folder-search" class="w-3.5 h-3.5 mr-1.5 flex-shrink-0"></i> <span>탐색기</span>
             </button>
@@ -77,6 +77,9 @@
             </button>
             <button id="nav-project" onclick="window.switchTab('project')" class="w-[90px] xs:w-[110px] sm:w-[130px] h-8 sm:h-9 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
                 <i data-lucide="kanban" class="w-3.5 h-3.5 mr-1.5 flex-shrink-0"></i> <span>프로젝트</span>
+            </button>
+            <button id="nav-image-editor" onclick="window.switchTab('image-editor')" class="w-[90px] xs:w-[110px] sm:w-[130px] h-8 sm:h-9 text-xs sm:text-sm font-bold rounded-lg transition-colors flex items-center justify-center whitespace-nowrap flex-shrink-0 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                <i data-lucide="scissors" class="w-3.5 h-3.5 mr-1.5 flex-shrink-0"></i> <span>편집기</span>
             </button>
         </div>
 
@@ -564,6 +567,9 @@
                 </div>
             </div>
 
+            <div id="main-image-editor-content" class="hidden flex-col absolute inset-0 w-full h-full bg-gray-100 dark:bg-gray-900 text-gray-800 dark:text-gray-100">
+            </div>
+
         </main>
     </div>
 
@@ -1049,6 +1055,9 @@
                          </button>
                          <div id="img-actions" class="hidden flex gap-2 w-full sm:w-auto">
                              <input type="file" id="replace-input" class="hidden" accept="image/*" onchange="window.handleReplaceFile(this)">
+                             <button onclick="window.openImageEditorForKey(window.currentFileKey)" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="이미지 편집">
+                                <i data-lucide="scissors" class="w-4 h-4"></i><span class="modal-action-label">편집</span>
+                             </button>
                              <button onclick="document.getElementById('replace-input').click()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="교체">
                                 <i data-lucide="upload" class="w-4 h-4"></i><span class="modal-action-label">교체</span>
                              </button>

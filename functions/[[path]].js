@@ -1490,6 +1490,243 @@ async function moveAliasPrefix(env, oldPrefix, newPrefix) {
     }
 }
 
+async function ensureImageEditorSchema(env) {
+    await ensureJsonDbSchema(env);
+    await env.DB.batch([
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS image_editor_documents (
+                id TEXT PRIMARY KEY,
+                source_key TEXT NOT NULL,
+                output_key TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'draft',
+                document_json_key TEXT NOT NULL,
+                preview_key TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                saved_at TEXT NOT NULL DEFAULT '',
+                extra_json TEXT NOT NULL DEFAULT '{}'
+            )
+        `),
+        env.DB.prepare(`
+            CREATE INDEX IF NOT EXISTS idx_image_editor_documents_source
+            ON image_editor_documents(source_key, updated_at)
+        `),
+        env.DB.prepare(`
+            CREATE TABLE IF NOT EXISTS image_editor_revisions (
+                id TEXT PRIMARY KEY,
+                document_id TEXT NOT NULL,
+                revision_number INTEGER NOT NULL,
+                document_json_key TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                summary_json TEXT NOT NULL DEFAULT '{}'
+            )
+        `)
+    ]);
+}
+
+function normalizeR2Key(key = '') {
+    return String(key || '')
+        .replace(/\\/g, '/')
+        .replace(/^\/+/, '')
+        .replace(/\/{2,}/g, '/')
+        .trim();
+}
+
+function isSafeR2Key(key = '') {
+    const value = normalizeR2Key(key);
+    if (!value || value.includes('..') || /[\x00-\x1f\x7f]/.test(value)) return false;
+    if (value.startsWith('__editor_sessions/') || value.startsWith('__editor_backups/')) return false;
+    const fileName = splitPath(value).fileName;
+    if (!fileName || ['_meta.json', '.aliases.json', '.memos.json'].some(name => fileName.endsWith(name))) return false;
+    return true;
+}
+
+function isEditableImageKey(key = '') {
+    return /\.(png|jpe?g|webp)$/i.test(String(key || ''));
+}
+
+function makeEditorRevisionId(documentId = '') {
+    const parts = getKstDateParts();
+    return `rev_${parts.year}${parts.month}${parts.day}_${parts.hour}${parts.minute}${parts.second}_${Date.now().toString(36)}`;
+}
+
+async function readFileMetadata(env, key = '') {
+    await ensureJsonDbSchema(env);
+    const { prefix, fileName } = splitPath(key);
+    const names = [fileName];
+    const baseName = fileName.replace(/\.[^/.]+$/, '');
+    for (const ext of ['.png', '.webp', '.jpg', '.jpeg']) {
+        const fallbackName = baseName + ext;
+        if (!names.includes(fallbackName)) names.push(fallbackName);
+    }
+    const placeholders = names.map(() => '?').join(',');
+    const row = await env.DB.prepare(
+        `SELECT metadata_json FROM file_metadata WHERE folder_prefix = ? AND file_name IN (${placeholders}) ORDER BY CASE file_name WHEN ? THEN 0 ELSE 1 END LIMIT 1`
+    ).bind(prefix, ...names, fileName).first();
+    return row?.metadata_json ? JSON.parse(row.metadata_json) : {};
+}
+
+async function putFileMetadataForKey(env, key = '', metadata = {}) {
+    await ensureJsonDbSchema(env);
+    const { prefix, fileName } = splitPath(key);
+    const timestamp = nowIso();
+    await env.DB.prepare(`
+        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+            metadata_json = excluded.metadata_json,
+            updated_at = excluded.updated_at
+    `).bind(prefix, fileName, JSON.stringify(metadata || {}), timestamp, timestamp).run();
+}
+
+function buildEditedMetadata(baseMetadata = {}, { sourceKey, outputKey, documentId, operationsSummary = [] } = {}) {
+    return {
+        ...(baseMetadata || {}),
+        edited: true,
+        editorVersion: 1,
+        sourceKey,
+        savedAsKey: outputKey,
+        derivedFromKey: outputKey === sourceKey ? (baseMetadata?.derivedFromKey || sourceKey) : sourceKey,
+        editorDocumentId: documentId,
+        editedAt: nowIso(),
+        operationsSummary
+    };
+}
+
+async function saveEditorDocumentRecord(env, document, status = 'draft', savedAt = '') {
+    await ensureImageEditorSchema(env);
+    const timestamp = nowIso();
+    const documentId = String(document?.documentId || '').trim();
+    if (!documentId) throw new Error('documentId is required');
+    const documentJsonKey = `__editor_sessions/${documentId}/document.json`;
+    await env.imgBucket.put(documentJsonKey, JSON.stringify(document || {}), {
+        httpMetadata: { contentType: 'application/json; charset=UTF-8' }
+    });
+    const existing = await env.DB.prepare('SELECT id, created_at FROM image_editor_documents WHERE id = ?').bind(documentId).first();
+    await env.DB.prepare(`
+        INSERT INTO image_editor_documents (
+            id, source_key, output_key, status, document_json_key, preview_key,
+            created_at, updated_at, saved_at, extra_json
+        ) VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, '{}')
+        ON CONFLICT(id) DO UPDATE SET
+            source_key = excluded.source_key,
+            output_key = excluded.output_key,
+            status = excluded.status,
+            document_json_key = excluded.document_json_key,
+            updated_at = excluded.updated_at,
+            saved_at = excluded.saved_at
+    `).bind(
+        documentId,
+        document.sourceKey || '',
+        document.outputKey || '',
+        status,
+        documentJsonKey,
+        existing?.created_at || timestamp,
+        timestamp,
+        savedAt
+    ).run();
+    return { documentId, documentJsonKey };
+}
+
+async function getEditorDocumentById(env, documentId = '') {
+    await ensureImageEditorSchema(env);
+    const row = await env.DB.prepare('SELECT * FROM image_editor_documents WHERE id = ?').bind(documentId).first();
+    if (!row) return null;
+    const object = await env.imgBucket.get(row.document_json_key);
+    return {
+        row,
+        document: object ? await object.json() : null
+    };
+}
+
+async function getLatestEditorDocumentForSource(env, sourceKey = '') {
+    await ensureImageEditorSchema(env);
+    const row = await env.DB.prepare(`
+        SELECT * FROM image_editor_documents
+        WHERE source_key = ? AND status IN ('draft', 'saved')
+        ORDER BY updated_at DESC
+        LIMIT 1
+    `).bind(sourceKey).first();
+    if (!row) return null;
+    const object = await env.imgBucket.get(row.document_json_key);
+    return {
+        row,
+        document: object ? await object.json() : null
+    };
+}
+
+async function saveImageEditorOutput(env, { sourceKey, outputKey, documentId, document, blob, operationsSummary = [], overwrite = false } = {}) {
+    sourceKey = normalizeR2Key(sourceKey);
+    outputKey = normalizeR2Key(outputKey || sourceKey);
+    if (!isSafeR2Key(sourceKey) || !isEditableImageKey(sourceKey)) throw new Error('Invalid source key');
+    if (!isSafeR2Key(outputKey) || !outputKey.toLowerCase().endsWith('.webp')) throw new Error('Invalid output key');
+
+    const sourceObject = await env.imgBucket.get(sourceKey);
+    if (!sourceObject) throw new Error('Source image not found');
+
+    const revisionId = makeEditorRevisionId(documentId);
+    const backupBase = `__editor_backups/${documentId || 'unknown'}/${revisionId}`;
+    const originalBackupKey = `${backupBase}/original`;
+    const metadataBackupKey = `${backupBase}/metadata.json`;
+    const sourceDbMetadata = await readFileMetadata(env, sourceKey);
+    const metadataSnapshot = {
+        sourceKey,
+        outputKey,
+        documentId,
+        revisionId,
+        createdAt: nowIso(),
+        originalContentType: sourceObject.httpMetadata?.contentType || '',
+        originalCustomMetadata: sourceObject.customMetadata || {},
+        fileMetadata: sourceDbMetadata
+    };
+
+    await env.imgBucket.put(originalBackupKey, sourceObject.body, {
+        httpMetadata: sourceObject.httpMetadata,
+        customMetadata: sourceObject.customMetadata
+    });
+    await env.imgBucket.put(metadataBackupKey, JSON.stringify(metadataSnapshot), {
+        httpMetadata: { contentType: 'application/json; charset=UTF-8' }
+    });
+
+    const mergedCustomMetadata = {
+        ...(sourceObject.customMetadata || {}),
+        ispublic: (sourceObject.customMetadata?.ispublic === 'true') ? 'true' : 'false',
+        edited: 'true',
+        editorDocumentId: documentId || '',
+        derivedFromKey: sourceKey
+    };
+    await env.imgBucket.put(outputKey, blob, {
+        httpMetadata: { contentType: 'image/webp' },
+        customMetadata: mergedCustomMetadata
+    });
+
+    const editedMetadata = buildEditedMetadata(sourceDbMetadata, {
+        sourceKey,
+        outputKey,
+        documentId,
+        operationsSummary
+    });
+    await putFileMetadataForKey(env, outputKey, editedMetadata);
+
+    if (document?.documentId) {
+        document.outputKey = outputKey;
+        await saveEditorDocumentRecord(env, document, 'saved', nowIso());
+        await env.DB.prepare(`
+            INSERT INTO image_editor_revisions (id, document_id, revision_number, document_json_key, created_at, summary_json)
+            VALUES (?, ?, COALESCE((SELECT MAX(revision_number) + 1 FROM image_editor_revisions WHERE document_id = ?), 1), ?, ?, ?)
+        `).bind(
+            revisionId,
+            document.documentId,
+            document.documentId,
+            `__editor_sessions/${document.documentId}/document.json`,
+            nowIso(),
+            JSON.stringify({ sourceKey, outputKey, operationsSummary, backupKey: originalBackupKey })
+        ).run();
+    }
+
+    return { outputKey, backupKey: originalBackupKey, metadataBackupKey, revisionId };
+}
+
 // Pages Functions의 Entry Point (모든 Method 요청을 처리하는 Catch-all 핸들러)
 /**
  * 역할: Cloudflare Pages catch-all 요청을 라우팅하고 인증, API, 정적/R2 파일 응답을 처리한다.
@@ -1942,6 +2179,91 @@ export async function onRequest(context) {
                 ]);
             }
             return jsonResponse({ success: true });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/image-editor/document" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const documentId = url.searchParams.get('documentId') || '';
+            const sourceKey = normalizeR2Key(url.searchParams.get('sourceKey') || '');
+            if (!documentId && !sourceKey) return jsonResponse({ error: 'documentId or sourceKey is required' }, { status: 400 });
+            const result = documentId
+                ? await getEditorDocumentById(env, documentId)
+                : await getLatestEditorDocumentForSource(env, sourceKey);
+            if (!result?.document) return jsonResponse({ data: null }, { status: 404 });
+            return jsonResponse({ document: result.document, row: result.row });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/image-editor/document" && method === "PUT") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            const document = body?.document || {};
+            if (!document.documentId || !document.sourceKey) return jsonResponse({ error: 'documentId and sourceKey are required' }, { status: 400 });
+            document.sourceKey = normalizeR2Key(document.sourceKey);
+            document.outputKey = normalizeR2Key(document.outputKey || document.sourceKey);
+            if (!isSafeR2Key(document.sourceKey) || !isEditableImageKey(document.sourceKey)) return jsonResponse({ error: 'Invalid source key' }, { status: 400 });
+            const result = await saveEditorDocumentRecord(env, document, 'draft');
+            return jsonResponse({ success: true, ...result });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if ((path === "/api/image-editor/save" || path === "/api/image-editor/save-as") && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const form = await request.formData();
+            const file = form.get('file');
+            if (!file || typeof file.arrayBuffer !== 'function') return jsonResponse({ error: 'file is required' }, { status: 400 });
+            const sourceKey = normalizeR2Key(form.get('sourceKey') || '');
+            const outputKey = normalizeR2Key(form.get('outputKey') || sourceKey);
+            const documentId = String(form.get('documentId') || '').trim();
+            const document = JSON.parse(String(form.get('document') || '{}'));
+            const operationsSummary = JSON.parse(String(form.get('operationsSummary') || '[]'));
+            const blob = await file.arrayBuffer();
+            const result = await saveImageEditorOutput(env, {
+                sourceKey,
+                outputKey: path === "/api/image-editor/save" ? sourceKey : outputKey,
+                documentId,
+                document,
+                blob,
+                operationsSummary,
+                overwrite: path === "/api/image-editor/save"
+            });
+            return jsonResponse({ success: true, ...result });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/image-editor/cleanup" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            await ensureImageEditorSchema(env);
+            const body = await request.json().catch(() => ({}));
+            const olderThanHours = Number(body.olderThanHours || 24 * 30);
+            const cutoff = toKstIso(new Date(Date.now() - olderThanHours * 60 * 60 * 1000));
+            const rows = await env.DB.prepare(`
+                SELECT id, document_json_key FROM image_editor_documents
+                WHERE status = 'draft' AND updated_at < ?
+                LIMIT 100
+            `).bind(cutoff).all();
+            const keys = (rows.results || []).map(row => row.document_json_key).filter(Boolean);
+            if (keys.length) await env.imgBucket.delete(keys);
+            if (rows.results?.length) {
+                const placeholders = rows.results.map(() => '?').join(',');
+                await env.DB.prepare(`DELETE FROM image_editor_documents WHERE id IN (${placeholders})`)
+                    .bind(...rows.results.map(row => row.id))
+                    .run();
+            }
+            return jsonResponse({ success: true, deleted: rows.results?.length || 0 });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
         }
