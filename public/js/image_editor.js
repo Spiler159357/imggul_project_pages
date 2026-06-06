@@ -1,12 +1,15 @@
 import { ImageEditorCore } from './image_editor/core.js';
 import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js';
 import { createAutosave } from './image_editor/autosave.js';
-import { getDocument, listImages } from './image_editor/storage.js';
+import { getDocument } from './image_editor/storage.js';
 
 let editor = null;
 let autosave = null;
 let currentStatus = '이미지 없음';
 let globalListenersBound = false;
+let editorProjectPrefix = '';
+let editorLibraryBasePrefix = '';
+let editorLibraryCurrentPrefix = '';
 
 const TOOL_ITEMS = [
     ['select', 'mouse-pointer-2', '선택'],
@@ -21,12 +24,13 @@ const TOOL_ITEMS = [
 ];
 
 export function renderImageEditor(skipHistory = false, options = {}) {
-    const root = document.getElementById('main-image-editor-content');
+    const root = document.getElementById(options.rootId || 'main-image-editor-content');
     if (!root) return;
     root.innerHTML = `
         <div class="image-editor-shell">
             <div class="image-editor-topbar">
-                <button id="image-editor-back-btn" class="image-editor-icon-btn" title="탐색기로 돌아가기" aria-label="탐색기로 돌아가기"><i data-lucide="arrow-left"></i></button>
+                <button id="image-editor-back-btn" class="image-editor-icon-btn" title="프로젝트로 돌아가기" aria-label="프로젝트로 돌아가기"><i data-lucide="arrow-left"></i></button>
+                <button id="image-editor-open-library-btn" class="image-editor-command-btn"><i data-lucide="folder-open"></i><span>열기</span></button>
                 <div class="image-editor-title">
                     <strong id="image-editor-name">이미지 편집기</strong>
                     <span id="image-editor-dirty">${currentStatus}</span>
@@ -53,17 +57,10 @@ export function renderImageEditor(skipHistory = false, options = {}) {
                     <div id="image-editor-empty" class="image-editor-empty">
                         <i data-lucide="image-plus"></i>
                         <h3>편집할 이미지를 선택하세요</h3>
-                        <div class="image-editor-open-row">
-                            <input id="image-editor-open-key" type="text" placeholder="R2 key 예: project/character/001.webp">
-                            <button id="image-editor-open-btn">열기</button>
-                        </div>
-                        <div class="image-editor-picker">
-                            <div class="image-editor-picker-head">
-                                <input id="image-editor-prefix" type="text" placeholder="prefix" value="${window.currentPrefix || ''}">
-                                <button id="image-editor-list-btn">목록 조회</button>
-                            </div>
-                            <div id="image-editor-image-list" class="image-editor-image-list"></div>
-                        </div>
+                        <button id="image-editor-empty-open-btn" type="button" class="image-editor-primary-btn">
+                            <i data-lucide="folder-open"></i>
+                            <span>이미지 불러오기</span>
+                        </button>
                     </div>
                     <div id="image-editor-stage" class="image-editor-stage bg-checkered">
                         <canvas id="image-editor-canvas"></canvas>
@@ -89,7 +86,7 @@ export function renderImageEditor(skipHistory = false, options = {}) {
         </div>
     `;
     bindImageEditorUi(options);
-    if (!skipHistory) history.pushState({ tab: 'image-editor' }, '', '#image-editor');
+    if (!skipHistory && !options.rootId) history.pushState({ tab: 'image-editor' }, '', '#image-editor');
     window.lucide?.createIcons();
 }
 
@@ -99,12 +96,21 @@ export function openImageEditorForKey(sourceKey = '') {
         return;
     }
     if (window.closeModal) window.closeModal();
-    window.IMAGE_EDITOR_NEXT_OPTIONS = { sourceKey };
-    window.switchTab('image-editor', true);
-    history.pushState({ tab: 'image-editor', sourceKey }, '', '#image-editor');
+    window.PROJECT_IMAGE_EDITOR_NEXT_OPTIONS = { sourceKey };
+    window.switchTab?.('project', true);
+    const openSection = () => window.openProjectSection?.('image-editor');
+    const project = getProjectForImageKey(sourceKey);
+    if (project && window.openProjectDetail) {
+        window.PROJECT_ACTIVE_PROJECT_ID = project.id;
+        window.openProjectDetail(project.id, true).then(openSection);
+    } else {
+        openSection();
+    }
 }
 
 function bindImageEditorUi(options = {}) {
+    editorProjectPrefix = options.projectPrefix || window.currentPrefix || '';
+    editorLibraryBasePrefix = editorProjectPrefix || window.ROOT_PATH || '';
     const canvas = document.getElementById('image-editor-canvas');
     const previewCanvas = document.getElementById('image-editor-preview-canvas');
     const overlay = document.getElementById('image-editor-overlay');
@@ -121,10 +127,12 @@ function bindImageEditorUi(options = {}) {
 
     document.getElementById('image-editor-back-btn')?.addEventListener('click', () => {
         if (editor?.state?.dirty && !confirm('저장하지 않은 편집 내용이 있습니다. 이동할까요?')) return;
-        window.switchTab('explorer');
+        const projectId = window.PROJECT_ACTIVE_PROJECT_ID || '';
+        if (projectId && window.openProjectDetail) window.openProjectDetail(projectId, false);
+        else window.switchTab('project');
     });
-    document.getElementById('image-editor-open-btn')?.addEventListener('click', () => openImageFromInput());
-    document.getElementById('image-editor-list-btn')?.addEventListener('click', () => loadImagePicker());
+    document.getElementById('image-editor-open-library-btn')?.addEventListener('click', () => openImageEditorLibraryModal());
+    document.getElementById('image-editor-empty-open-btn')?.addEventListener('click', () => openImageEditorLibraryModal());
     document.getElementById('image-editor-save-btn')?.addEventListener('click', () => saveImage());
     document.getElementById('image-editor-save-as-btn')?.addEventListener('click', () => saveImageAs());
     document.getElementById('image-editor-recover-btn')?.addEventListener('click', () => recoverDraft());
@@ -147,8 +155,6 @@ function bindImageEditorUi(options = {}) {
 
     if (options.sourceKey) {
         openImage(options.sourceKey, options.documentId || '').catch(err => setStatus(`열기 실패: ${err.message}`));
-    } else {
-        loadImagePicker().catch(() => null);
     }
 }
 
@@ -159,16 +165,9 @@ function handleBeforeUnload(event) {
 }
 
 function handleEditorShortcut(event) {
-    const root = document.getElementById('main-image-editor-content');
-    if (!root || root.classList.contains('hidden')) return;
+    const root = document.querySelector('.image-editor-shell');
+    if (!root || root.closest('.hidden')) return;
     editor?.handleShortcut(event);
-}
-
-async function openImageFromInput() {
-    const key = document.getElementById('image-editor-open-key')?.value.trim();
-    if (!key) return setStatus('R2 key를 입력하세요');
-    if (!isSupportedImageKey(key)) return setStatus('지원하지 않는 이미지 형식입니다');
-    await openImage(key);
 }
 
 async function openImage(sourceKey, documentId = '') {
@@ -182,29 +181,158 @@ async function openImage(sourceKey, documentId = '') {
     refreshEditorUi();
 }
 
-async function loadImagePicker() {
-    const prefix = document.getElementById('image-editor-prefix')?.value || window.currentPrefix || '';
-    const listEl = document.getElementById('image-editor-image-list');
-    if (!listEl) return;
-    listEl.innerHTML = '<div class="image-editor-picker-status">목록 조회 중...</div>';
+export async function openImageEditorLibraryModal() {
+    ensureImageEditorLibraryModal();
+    const modal = document.getElementById('image-editor-library-modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    await loadImageEditorLibraryPath(editorLibraryBasePrefix);
+}
+
+export function closeImageEditorLibraryModal(event) {
+    if (event && event.target !== event.currentTarget && event.target.id !== 'close-image-editor-library-btn') return;
+    const modal = document.getElementById('image-editor-library-modal');
+    if (!modal) return;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+}
+
+async function loadImageEditorLibraryPath(prefix = '') {
+    editorLibraryCurrentPrefix = prefix;
+    const pathDisplay = document.getElementById('image-editor-library-path');
+    const grid = document.getElementById('image-editor-library-grid');
+    const loader = document.getElementById('image-editor-library-loading');
+    const empty = document.getElementById('image-editor-library-empty');
+    if (!grid || !loader || !empty) return;
+
+    if (pathDisplay) pathDisplay.textContent = `/${prefix}`;
+    grid.innerHTML = '';
+    grid.classList.add('hidden');
+    loader.classList.remove('hidden');
+    loader.classList.add('flex');
+    empty.classList.add('hidden');
+    empty.classList.remove('flex');
+
     try {
-        const images = await listImages(prefix);
-        if (!images.length) {
-            listEl.innerHTML = '<div class="image-editor-picker-status">이미지가 없습니다.</div>';
-            return;
+        const [listRes, aliasRes] = await Promise.all([
+            fetch(`/api/list?prefix=${encodeURIComponent(prefix)}&_t=${Date.now()}`, { cache: 'no-store' }),
+            fetch(`/api/aliases?prefix=${encodeURIComponent(prefix)}&_t=${Date.now()}`, { cache: 'no-store' }).catch(() => null)
+        ]);
+        if (!listRes.ok) throw new Error('이미지 목록을 불러오지 못했습니다.');
+        const data = await listRes.json();
+        if (aliasRes?.ok) {
+            const aliases = await aliasRes.json().catch(() => null);
+            if (aliases) {
+                window.GLOBAL_ALIASES = aliases.global || window.GLOBAL_ALIASES || {};
+                window.PROJECT_ALIASES = aliases.project || window.PROJECT_ALIASES || {};
+            }
         }
-        listEl.innerHTML = images.map(file => `
-            <button type="button" data-key="${escapeHtml(file.key)}" title="${escapeHtml(file.key)}">
-                <img src="/${file.key.split('/').map(encodeURIComponent).join('/')}">
-                <span>${escapeHtml(file.key.split('/').pop())}</span>
-            </button>
-        `).join('');
-        listEl.querySelectorAll('button[data-key]').forEach(btn => {
-            btn.addEventListener('click', () => openImage(btn.dataset.key));
+
+        const folders = data.folders || [];
+        const files = (data.files || []).filter(file => isSupportedImageKey(file.key || ''));
+        if (prefix !== editorLibraryBasePrefix) {
+            const parts = prefix.split('/').filter(Boolean);
+            parts.pop();
+            const parentPrefix = parts.length ? `${parts.join('/')}/` : editorLibraryBasePrefix;
+            grid.appendChild(createLibraryFolderCard({
+                label: '상위 폴더',
+                icon: 'corner-left-up',
+                kind: 'parent',
+                onClick: () => loadImageEditorLibraryPath(parentPrefix)
+            }));
+        }
+        folders.forEach(folderPrefix => {
+            const folderName = folderPrefix.split('/').filter(Boolean).pop() || folderPrefix;
+            const alias = window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) : '';
+            grid.appendChild(createLibraryFolderCard({
+                label: alias || folderName,
+                subLabel: alias ? folderName : '',
+                icon: 'folder',
+                kind: 'folder',
+                onClick: () => loadImageEditorLibraryPath(folderPrefix)
+            }));
         });
+        files.forEach(file => grid.appendChild(createLibraryImageCard(file)));
+        loader.classList.add('hidden');
+        loader.classList.remove('flex');
+        if (!grid.children.length) {
+            empty.classList.remove('hidden');
+            empty.classList.add('flex');
+        } else {
+            grid.classList.remove('hidden');
+        }
+        window.lucide?.createIcons();
     } catch (err) {
-        listEl.innerHTML = `<div class="image-editor-picker-status">${escapeHtml(err.message)}</div>`;
+        loader.classList.add('hidden');
+        loader.classList.remove('flex');
+        empty.textContent = err.message || '이미지 목록을 불러오지 못했습니다.';
+        empty.classList.remove('hidden');
+        empty.classList.add('flex');
     }
+}
+
+function createLibraryFolderCard({ label, subLabel = '', icon = 'folder', kind = 'folder', onClick }) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = kind === 'folder'
+        ? 'image-editor-library-folder-card'
+        : 'image-editor-library-parent-card';
+    button.onclick = onClick;
+    button.innerHTML = `
+        <i data-lucide="${icon}"></i>
+        <span>${escapeHtml(label)}</span>
+        ${subLabel ? `<small>${escapeHtml(subLabel)}</small>` : ''}
+    `;
+    return button;
+}
+
+function createLibraryImageCard(file) {
+    const fileName = file.key.split('/').pop() || file.key;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'image-editor-library-image-card';
+    button.title = file.key;
+    button.innerHTML = `
+        <img src="/${file.key.split('/').map(encodeURIComponent).join('/')}" alt="">
+        <span>${escapeHtml(fileName)}</span>
+    `;
+    button.onclick = async () => {
+        closeImageEditorLibraryModal();
+        await openImage(file.key);
+    };
+    return button;
+}
+
+function ensureImageEditorLibraryModal() {
+    if (document.getElementById('image-editor-library-modal')) return;
+    const modal = document.createElement('div');
+    modal.id = 'image-editor-library-modal';
+    modal.className = 'fixed inset-0 bg-black/70 z-[70] hidden items-center justify-center p-3 sm:p-6';
+    modal.onclick = event => closeImageEditorLibraryModal(event);
+    modal.innerHTML = `
+        <div class="bg-white dark:bg-gray-900 w-full max-w-5xl max-h-[88vh] rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                <div class="min-w-0">
+                    <h3 class="text-sm font-bold text-gray-900 dark:text-white">편집할 이미지 선택</h3>
+                    <p id="image-editor-library-path" class="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[70vw]">/</p>
+                </div>
+                <button id="close-image-editor-library-btn" type="button" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" aria-label="닫기">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
+            </div>
+            <div class="flex-1 min-h-0 overflow-auto p-4">
+                <div id="image-editor-library-loading" class="hidden items-center justify-center py-12 text-gray-500 text-sm">
+                    <i data-lucide="loader" class="w-5 h-5 mr-2 animate-spin"></i> 이미지를 불러오는 중...
+                </div>
+                <div id="image-editor-library-empty" class="hidden items-center justify-center py-12 text-gray-500 text-sm">선택할 수 있는 이미지가 없습니다.</div>
+                <div id="image-editor-library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+            </div>
+        </div>
+    `;
+    document.body.appendChild(modal);
+    document.getElementById('close-image-editor-library-btn')?.addEventListener('click', () => closeImageEditorLibraryModal());
+    window.lucide?.createIcons();
 }
 
 async function recoverDraft() {
@@ -409,4 +537,11 @@ function setAutosaveStatus(message) {
 
 function escapeHtml(value = '') {
     return String(value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+}
+
+function getProjectForImageKey(sourceKey = '') {
+    const projects = Array.isArray(window.PROJECTS) ? window.PROJECTS : [];
+    return projects
+        .filter(project => project?.prefix && sourceKey.startsWith(project.prefix))
+        .sort((a, b) => b.prefix.length - a.prefix.length)[0] || null;
 }

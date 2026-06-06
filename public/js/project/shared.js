@@ -29,6 +29,12 @@ export const PROJECT_SECTIONS = [
         title: '플래너',
         icon: 'calendar-check',
         emptyText: '생성된 플랜이 없습니다.'
+    },
+    {
+        key: 'image-editor',
+        title: '편집기',
+        icon: 'scissors',
+        emptyText: '편집할 이미지를 선택하세요.'
     }
 ];
 

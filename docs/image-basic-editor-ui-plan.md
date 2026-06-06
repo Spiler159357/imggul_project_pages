@@ -4,7 +4,7 @@
 
 이 문서는 기초 이미지 편집 기능의 UI 계획을 정리한다.
 
-1차 접근 위치는 프로젝트 탭이나 플래너와 같은 수준의 독립 화면으로 둔다. 이미지 편집기는 별도 화면을 배정받고, 프로젝트/플래너/갤러리 등 다른 기능은 편집 대상 이미지와 context를 전달하는 진입점 역할만 한다.
+1차 접근 위치는 프로젝트 탭 내부의 프로젝트 상세 화면으로 둔다. 이미지 편집기는 캐릭터/상황이 상하로 배치되는 것과 같은 방식으로, 프로젝트 상세 화면에서 플래너 하단에 위치하는 섹션 카드로 제공한다. 플래너/갤러리/이미지 모달 등 다른 기능은 편집 대상 이미지와 context를 전달하는 진입점 역할을 한다.
 
 편집 워크스페이스는 독립 기능으로 설계하되, 이후 필요하면 이미지 모달, 갤러리, 캐릭터 상세, 상황 상세에서도 같은 editor core를 호출할 수 있어야 한다.
 
@@ -42,7 +42,7 @@
 | `save-dialog` | 저장/다른 이름 저장 다이얼로그 | `docs/assets/image-editor/save-dialog.png` |
 | `layer-panel` | 레이어 패널 상세 | `docs/assets/image-editor/layer-panel.png` |
 | `tool-options` | 도구별 옵션 패널 | `docs/assets/image-editor/tool-options.png` |
-| `editor-entry` | 독립 이미지 편집기 화면 진입 구조 | `docs/assets/image-editor/editor-entry.png` |
+| `editor-entry` | 프로젝트 상세 화면의 편집기 섹션 진입 구조 | `docs/assets/image-editor/editor-entry.png` |
 
 ### 3.2 Wireframe Policy
 
@@ -60,17 +60,17 @@
 
 ## 4. Workspace Layout
 
-### 4.1 Independent Screen Entry
+### 4.1 Project Section Entry
 
-이미지 편집기는 프로젝트 탭이나 플래너와 같은 수준의 독립 화면으로 접근하는 것을 1차 기준으로 한다. 다른 화면은 편집 대상 이미지의 `sourceKey`와 선택 context를 넘기고, 실제 편집 작업은 이미지 편집기 화면에서 수행한다.
+이미지 편집기는 프로젝트 탭 내부의 프로젝트 상세 화면에서 접근하는 것을 1차 기준으로 한다. 프로젝트 상세 화면의 오른쪽 영역은 플래너와 편집기를 상하로 배치하며, 편집기는 플래너 하단에 위치한다. 다른 화면은 편집 대상 이미지의 `sourceKey`와 선택 context를 넘기고, 실제 편집 작업은 프로젝트의 이미지 편집기 섹션에서 수행한다.
 
 개념 구조:
 
 ```text
 +--------------------------------------------------------------------------------+
-| App Nav: Projects | Planner | Image Editor | Gallery | Settings                |
+| App Nav: Explorer | Craft | Project                                      |
 +--------------------------------------------------------------------------------+
-| Image Editor Header: recent drafts | open R2 image | recover draft             |
+| Project Detail: Prompt | Character/Situation | Planner / Image Editor       |
 +--------------------------------------------------------------------------------+
 |                                                                                |
 |                         Editor Workspace                                       |
@@ -80,22 +80,22 @@
 
 의도:
 
-- 이미지 편집 기능을 독립된 작업 화면으로 분리해 충분한 캔버스 공간을 확보한다.
+- 이미지 편집 기능을 프로젝트 context 안에 두면서도 섹션 진입 후에는 충분한 캔버스 공간을 확보한다.
 - 플래너, 프로젝트, 갤러리에서 생성하거나 확인한 이미지를 곧바로 편집 대상으로 넘길 수 있게 한다.
-- 필요하면 project id, character id, situation id 같은 context를 함께 전달하되, UI 배치는 특정 프로젝트 화면에 종속하지 않는다.
+- project id, character id, situation id 같은 context를 함께 전달하고, 편집 기본 목록은 현재 프로젝트 prefix를 우선한다.
 
 초기 진입 방식:
 
-- 앱 내 navigation에 `Image Editor` 화면을 제공한다.
-- 플래너 이미지 카드, 프로젝트 이미지 카드, 갤러리 이미지 카드에는 `편집` 액션을 제공하고 독립 이미지 편집기 화면으로 이동한다.
-- 이미지 편집기 화면에는 최근 편집 draft, 최근 편집 이미지, 선택된 이미지의 편집 시작 버튼을 표시한다.
-- 복구 가능한 draft가 있으면 이미지 편집기 화면 상단에 표시한다.
+- 프로젝트 상세 화면에 `편집기` 카드를 제공하며, 이 카드는 플래너 카드 하단에 위치한다.
+- 플래너 이미지 카드, 프로젝트 이미지 카드, 갤러리 이미지 카드에는 `편집` 액션을 제공하고 프로젝트의 이미지 편집기 섹션으로 이동한다.
+- 이미지 편집기 섹션에는 최근 편집 draft, 최근 편집 이미지, 선택된 이미지의 편집 시작 버튼을 표시한다.
+- 복구 가능한 draft가 있으면 이미지 편집기 섹션 상단에 표시한다.
 - 이미지가 선택되지 않은 상태에서는 프로젝트/R2 이미지 선택 액션을 제공한다.
 
 화면 배치 정책:
 
-- 데스크톱에서는 독립 화면의 대부분을 editor workspace로 사용한다.
-- 플래너나 프로젝트 화면 안에 편집기 패널을 상하 배치하지 않는다.
+- 데스크톱에서는 프로젝트 편집기 섹션의 대부분을 editor workspace로 사용한다.
+- 프로젝트 상세 대시보드에서는 플래너 하단에 편집기 카드를 배치한다.
 - 이미지 편집기 화면 내부 레이아웃은 `4.2 Desktop Layout`을 따른다.
 
 상태 규칙:
@@ -606,7 +606,7 @@ Mobile:
 
 ### Phase 1: Static Workspace Shell
 
-- 독립 이미지 편집기 화면 진입점
+- 프로젝트 상세 화면의 플래너 하단 편집기 섹션 진입점
 - top bar, tool bar, canvas stage, inspector panel skeleton
 - desktop layout CSS
 - mobile bottom tool strip 구조
@@ -614,7 +614,7 @@ Mobile:
 
 완료 기준:
 
-- 앱 navigation에서 독립 이미지 편집기 화면을 확인할 수 있다.
+- 프로젝트 상세 화면에서 플래너 하단의 편집기 카드를 확인할 수 있다.
 - 이미지 없이도 편집 workspace layout을 볼 수 있다.
 - 각 영역이 고정된 크기와 responsive 제약을 가진다.
 
@@ -679,7 +679,7 @@ Mobile:
 
 확정된 UI 정책:
 
-- 이미지 편집기는 프로젝트 탭 하위 영역이 아니라 독립 화면으로 제공한다.
+- 이미지 편집기는 상단 앱 navigation의 독립 탭이 아니라 프로젝트 탭 내부의 프로젝트 상세 화면에서 플래너 하단 섹션으로 제공한다.
 - Save 버튼의 기본 동작은 원본 덮어쓰기다.
 - 원본 덮어쓰기 전 자동 백업 생성 상태를 저장 확인 UI에 표시한다.
 
@@ -689,8 +689,8 @@ Mobile:
 
 | UI Area | Related Implementation Area | Required Join Point |
 | --- | --- | --- |
-| `4. Workspace Layout` | Implementation `4. Recommended Architecture` | workspace shell은 editor core, layer renderer, autosave module을 분리해서 끼울 수 있어야 한다. |
-| `4.1 Independent Screen Entry` | Implementation `5. Image Loading And Saving`, `5.4 Temporary Save` | 다른 화면에서 editor를 열 때 source key와 draft document id를 전달해야 한다. |
+| `4. Workspace Layout` | Implementation `4. Recommended Architecture` | workspace shell은 프로젝트 섹션 내부에 붙더라도 editor core, layer renderer, autosave module을 분리해서 끼울 수 있어야 한다. |
+| `4.1 Project Section Entry` | Implementation `5. Image Loading And Saving`, `5.4 Temporary Save` | 다른 화면에서 editor를 열 때 project context, source key, draft document id를 전달해야 한다. |
 | `5. Top Bar` | Implementation `5.2 Save`, `7. History, Undo, Redo` | dirty state, autosave state, undo/redo availability, save action이 editor runtime state와 직접 연결되어야 한다. |
 | `6. Tool Bar` | Implementation `6. Editing Tools` | tool id와 UI button id를 같은 기준으로 유지해 tool registry에 연결한다. |
 | `7. Canvas Stage` | Implementation `4.3 Layer Document Model`, `6. Editing Tools` | canvas hit testing, preview canvas, selection handle은 layer document model을 기준으로 동작해야 한다. |

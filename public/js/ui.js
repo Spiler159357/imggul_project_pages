@@ -236,7 +236,7 @@ const NAV_BUTTON_INACTIVE_CLASSES = ['text-gray-500', 'hover:text-gray-700', 'da
  * 반환값: 명시 반환 없음.
  */
 export function switchTab(tabName, skipHistory = false) {
-    const tabs = ['explorer', 'craft', 'project', 'image-editor'];
+    const tabs = ['explorer', 'craft', 'project'];
     
     // [버그 해결] 크기와 레이아웃을 고정해둔 HTML 클래스를 파괴하지 않고 색상(텍스트, 배경, 그림자) 클래스만 섬세하게 토글합니다.
     tabs.forEach(tab => {
@@ -318,11 +318,6 @@ export function switchTab(tabName, skipHistory = false) {
 
             history.pushState(projectState, '', projectHash);
         }
-    } else if (tabName === 'image-editor') {
-        const editorOptions = window.IMAGE_EDITOR_NEXT_OPTIONS || {};
-        window.IMAGE_EDITOR_NEXT_OPTIONS = null;
-        if (window.renderImageEditor) window.renderImageEditor(true, editorOptions);
-        if (!skipHistory) history.pushState({ tab: 'image-editor' }, '', '#image-editor');
     }
 
     if (window.lucide) window.lucide.createIcons();

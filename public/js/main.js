@@ -347,11 +347,6 @@ window.addEventListener('popstate', (e) => {
         if (window.restoreProjectState) window.restoreProjectState(e.state);
         return;
     }
-    else if (e.state && e.state.tab === 'image-editor') {
-        window.IMAGE_EDITOR_NEXT_OPTIONS = e.state;
-        window.switchTab('image-editor', true);
-        return;
-    }
     else if (e.state && e.state.tab === 'explorer') {
         window.switchTab('explorer', true);
         if (e.state.path !== undefined && e.state.path !== window.currentPrefix) window.loadPath(e.state.path, true);

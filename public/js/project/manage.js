@@ -2,6 +2,7 @@ import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootP
 import { renderCharacterSection } from './character.js';
 import { loadPlannerMeta, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js';
 import { renderSituationSection } from './situation.js';
+import { renderImageEditor } from '../image_editor.js';
 
 export async function renderProjectManage(skipHistory = true) {
     window.PROJECT_VIEW = 'manage';
@@ -212,7 +213,10 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
                     ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0')}
                     ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0')}
                 </div>
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0')}
+                <div class="min-h-0 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 sm:gap-6">
+                    ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0')}
+                    ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'image-editor'), 'min-h-0')}
+                </div>
             </section>
         </div>
     `);
@@ -340,6 +344,16 @@ export function renderProjectPanelItems(project, section) {
         `;
     }
 
+    if (section.key === 'image-editor') {
+        return `
+            <span class="h-full flex flex-col items-center justify-center text-center text-xs text-gray-500 dark:text-gray-400">
+                <i data-lucide="scissors" class="w-8 h-8 mb-2 text-indigo-500"></i>
+                <span class="font-bold text-gray-700 dark:text-gray-200">${escapeHtml(section.emptyText)}</span>
+                <span class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">프로젝트 이미지의 간단한 보정과 저장을 관리합니다.</span>
+            </span>
+        `;
+    }
+
     const items = getProjectItems(project, section.itemKey);
     if (!items.length) {
         return `
@@ -386,7 +400,7 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         });
         if (window.PROJECT_ACTIVE_SECTION === 'situation') renderSituationSection(section);
     }
-    else {
+    else if (section.key === 'planner') {
         const project = getActiveProject();
         renderPlannerSection(section, { loading: !!project && (!project.situationsLoaded || !project.charactersLoaded) });
         await Promise.all([
@@ -406,6 +420,19 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
             character ? loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
         ]);
         if (window.PROJECT_ACTIVE_SECTION === 'planner') renderPlannerSection(section);
+    }
+    else if (section.key === 'image-editor') {
+        const project = getActiveProject();
+        renderProjectShell(`
+            ${renderSectionHeader(section.title)}
+            <div id="project-image-editor-content" class="flex-1 min-h-0 bg-gray-100 dark:bg-gray-900"></div>
+        `);
+        renderImageEditor(true, {
+            rootId: 'project-image-editor-content',
+            projectPrefix: project?.prefix || '',
+            ...(window.PROJECT_IMAGE_EDITOR_NEXT_OPTIONS || {})
+        });
+        window.PROJECT_IMAGE_EDITOR_NEXT_OPTIONS = null;
     }
 
     const routeState = { projectView: 'section', projectId: window.PROJECT_ACTIVE_PROJECT_ID, projectSection: section.key };
