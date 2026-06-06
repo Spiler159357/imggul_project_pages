@@ -205,14 +205,14 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
             </div>
         </div>
 
-        <div class="flex-1 overflow-y-auto lg:overflow-hidden p-4 sm:p-6 lg:flex lg:items-center">
-            <section class="mx-auto grid w-full grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 lg:aspect-video lg:min-h-0" style="max-width: min(100%, calc((100dvh - 10rem) * 16 / 9));">
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'prompt'), 'min-h-[220px] lg:min-h-0')}
-                <div class="grid grid-rows-2 gap-4 sm:gap-6 min-h-[440px] lg:min-h-0">
+        <div class="flex-1 min-h-0 overflow-hidden p-4 sm:p-6 flex items-stretch lg:items-center">
+            <section class="mx-auto grid h-full min-h-0 w-full grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] lg:grid-cols-3 lg:grid-rows-none gap-4 sm:gap-6 lg:aspect-video" style="max-width: min(100%, calc((100dvh - 10rem) * 16 / 9));">
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'prompt'), 'min-h-0')}
+                <div class="min-h-0 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 sm:gap-6">
                     ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0')}
                     ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0')}
                 </div>
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-[220px] lg:min-h-0')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0')}
             </section>
         </div>
     `);
