@@ -11,6 +11,7 @@ let editorLibraryCurrentPrefix = '';
 let editorLibraryMode = 'image';
 let workDirty = false;
 let savedWorkRevision = 0;
+const editorSessionCache = new Map();
 
 const TOOL_ITEMS = [
     ['select', 'mouse-pointer-2', '선택'],
@@ -27,6 +28,7 @@ const TOOL_ITEMS = [
 export function renderImageEditor(skipHistory = false, options = {}) {
     const root = document.getElementById(options.rootId || 'main-image-editor-content');
     if (!root) return;
+    rememberCurrentEditorSession();
     root.innerHTML = `
         <div class="image-editor-shell">
             <div class="image-editor-body">
@@ -132,6 +134,8 @@ function bindImageEditorUi(options = {}) {
 
     if (options.sourceKey) {
         openImage(options.sourceKey, options.documentId || '').catch(err => setStatus(`열기 실패: ${err.message}`));
+    } else {
+        restoreCachedEditorSession().catch(err => setStatus(`작업물 복원 실패: ${err.message}`));
     }
 }
 
@@ -150,13 +154,17 @@ function handleEditorShortcut(event) {
 async function openImage(sourceKey, documentId = '') {
     setStatus('이미지 로딩 중...');
     const draft = documentId ? await getDocument(documentId, '') : null;
-    await editor.openSource(sourceKey, draft?.document || null);
+    await openEditorDocument(sourceKey, draft?.document || null, documentId ? '작업물 불러옴' : '수정 가능', documentId ? '작업물 불러옴' : '작업 저장 안 됨');
+}
+
+async function openEditorDocument(sourceKey, document = null, statusMessage = '수정 가능', workStatusMessage = '작업 저장 안 됨') {
+    await editor.openSource(sourceKey, document);
     document.getElementById('image-editor-empty')?.classList.add('hidden');
     document.getElementById('image-editor-stage')?.classList.add('loaded');
     workDirty = false;
     savedWorkRevision = editor.workRevision || 0;
-    setStatus(documentId ? '작업물 불러옴' : '수정 가능');
-    setWorkStatus(documentId ? '작업물 불러옴' : '작업 저장 안 됨');
+    setStatus(statusMessage);
+    setWorkStatus(workStatusMessage);
     refreshEditorUi();
 }
 
@@ -423,7 +431,7 @@ async function openWorkDocument(documentId = '') {
     setStatus('작업물 로딩 중...');
     const result = await getDocument(documentId, '');
     if (!result?.document?.sourceKey) throw new Error('작업물을 불러오지 못했습니다.');
-    await openImage(result.document.sourceKey, documentId);
+    await openEditorDocument(result.document.sourceKey, result.document, '작업물 불러옴', '작업물 불러옴');
 }
 
 async function saveWorkDocument() {
@@ -435,6 +443,7 @@ async function saveWorkDocument() {
         savedWorkRevision = editor.workRevision || 0;
         setWorkStatus('작업 저장됨');
         setStatus(`작업물 저장됨: ${result.documentId}`);
+        rememberCurrentEditorSession();
         refreshEditorUi();
     } catch (err) {
         setWorkStatus(`작업 저장 실패: ${err.message}`);
@@ -450,10 +459,54 @@ async function deleteWorkDocument(row) {
     try {
         await deleteEditorDocument(row.id);
         setStatus('작업물 삭제됨');
+        removeCachedEditorSession(row.id);
         await loadImageEditorWorkList();
     } catch (err) {
         setStatus(`작업물 삭제 실패: ${err.message}`);
         alert(err.message || '작업물 삭제 실패');
+    }
+}
+
+function getEditorSessionCacheKey(prefix = editorProjectPrefix) {
+    return prefix || 'global';
+}
+
+function rememberCurrentEditorSession() {
+    if (!editor?.sourceImage || !editor.state?.sourceKey) return;
+    try {
+        editorSessionCache.set(getEditorSessionCacheKey(), {
+            document: editor.serializeDocument(),
+            status: currentStatus,
+            workRevision: editor.workRevision || 0,
+            savedWorkRevision,
+            workDirty
+        });
+    } catch (err) {
+        console.warn('image editor session cache failed', err);
+    }
+}
+
+async function restoreCachedEditorSession() {
+    const cached = editorSessionCache.get(getEditorSessionCacheKey());
+    if (!cached?.document?.sourceKey) return;
+    await openEditorDocument(
+        cached.document.sourceKey,
+        cached.document,
+        cached.status || '작업물 복원됨',
+        cached.workDirty ? '작업 저장 필요' : '작업물 복원됨'
+    );
+    editor.workRevision = cached.workRevision || 0;
+    savedWorkRevision = cached.savedWorkRevision || 0;
+    workDirty = !!cached.workDirty && editor.workRevision > savedWorkRevision;
+    setWorkStatus(workDirty ? '작업 저장 필요' : '작업물 복원됨');
+    refreshEditorUi();
+}
+
+function removeCachedEditorSession(documentId = '') {
+    const cached = editorSessionCache.get(getEditorSessionCacheKey());
+    if (!cached?.document) return;
+    if (!documentId || cached.document.documentId === documentId) {
+        editorSessionCache.delete(getEditorSessionCacheKey());
     }
 }
 
