@@ -2200,6 +2200,33 @@ export async function onRequest(context) {
         }
     }
 
+    if (path === "/api/image-editor/documents" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            await ensureImageEditorSchema(env);
+            const prefix = normalizeR2Key(url.searchParams.get('prefix') || '');
+            const limit = Math.min(Math.max(Number(url.searchParams.get('limit') || 100), 1), 200);
+            const result = prefix
+                ? await env.DB.prepare(`
+                    SELECT id, source_key, output_key, status, preview_key, created_at, updated_at, saved_at
+                    FROM image_editor_documents
+                    WHERE source_key LIKE ? AND status IN ('draft', 'saved')
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                `).bind(`${prefix}%`, limit).all()
+                : await env.DB.prepare(`
+                    SELECT id, source_key, output_key, status, preview_key, created_at, updated_at, saved_at
+                    FROM image_editor_documents
+                    WHERE status IN ('draft', 'saved')
+                    ORDER BY updated_at DESC
+                    LIMIT ?
+                `).bind(limit).all();
+            return jsonResponse({ documents: result.results || [] });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
     if (path === "/api/image-editor/document" && method === "PUT") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
@@ -2209,7 +2236,7 @@ export async function onRequest(context) {
             document.sourceKey = normalizeR2Key(document.sourceKey);
             document.outputKey = normalizeR2Key(document.outputKey || document.sourceKey);
             if (!isSafeR2Key(document.sourceKey) || !isEditableImageKey(document.sourceKey)) return jsonResponse({ error: 'Invalid source key' }, { status: 400 });
-            const result = await saveEditorDocumentRecord(env, document, 'draft');
+            const result = await saveEditorDocumentRecord(env, document, 'saved', nowIso());
             return jsonResponse({ success: true, ...result });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });

@@ -27,8 +27,18 @@ export async function createOrUpdateDocument(document) {
         body: JSON.stringify({ document }),
         cache: 'no-store'
     });
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '작업문서 저장 실패');
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '작업물 저장 실패');
     return res.json();
+}
+
+export async function listEditorDocuments(prefix = '') {
+    const url = new URL('/api/image-editor/documents', window.location.origin);
+    if (prefix) url.searchParams.set('prefix', prefix);
+    url.searchParams.set('_t', Date.now());
+    const res = await fetch(url, { cache: 'no-store' });
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '작업물 목록 조회 실패');
+    const data = await res.json();
+    return data.documents || [];
 }
 
 export async function getDocument(documentId = '', sourceKey = '') {
@@ -38,7 +48,7 @@ export async function getDocument(documentId = '', sourceKey = '') {
     url.searchParams.set('_t', Date.now());
     const res = await fetch(url, { cache: 'no-store' });
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '작업문서 조회 실패');
+    if (!res.ok) throw new Error((await res.json().catch(() => ({}))).error || '작업물 조회 실패');
     return res.json();
 }
 

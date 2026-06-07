@@ -15,6 +15,7 @@ export class ImageEditorCore {
         this.sourceImage = null;
         this.state = createEditorDocument();
         this.history = createHistory();
+        this.workRevision = 0;
         this.drag = null;
         this.textInput = null;
         this.imageInput = null;
@@ -37,6 +38,7 @@ export class ImageEditorCore {
         this.state = existingDocument
             ? normalizeEditorDocument({ ...existingDocument, imageWidth: width, imageHeight: height })
             : createEditorDocument({ sourceKey, outputKey: sourceKey, width, height });
+        this.workRevision = 0;
         this.hydrateSerializedLayers();
         this.history = createHistory();
         this.resizeCanvases(width, height);
@@ -164,7 +166,7 @@ export class ImageEditorCore {
     setOption(tool, key, value) {
         if (!this.state.toolOptions[tool]) this.state.toolOptions[tool] = {};
         this.state.toolOptions[tool][key] = value;
-        this.state.dirty = true;
+        this.markDirty();
         this.emitChange();
     }
 
@@ -208,7 +210,7 @@ export class ImageEditorCore {
         if (drag.kind === 'mosaic') this.commitBitmapCommand('Mosaic stroke', drag.layer, drag.before, 'maskCanvas');
         if (drag.kind === 'move') this.commitMoveCommand(drag.layer, drag.before);
         if (['brush', 'mosaic', 'shape', 'move'].includes(drag.kind)) {
-            this.state.dirty = true;
+            this.markDirty();
             this.emitChange();
         }
         this.render();
@@ -388,6 +390,7 @@ export class ImageEditorCore {
     }
 
     pushLayerCommand(label, layer) {
+        this.markDirty();
         pushCommand(this.history, {
             label,
             targetLayerId: layer.id,
@@ -407,6 +410,7 @@ export class ImageEditorCore {
         if (!layer || layer.type === 'sourceImage' || layer.locked) return;
         const snapshot = cloneLayer(layer);
         if (deleteLayer(this.state, layerId)) {
+            this.markDirty();
             pushCommand(this.history, {
                 label: 'Delete layer',
                 targetLayerId: layerId,
@@ -430,7 +434,7 @@ export class ImageEditorCore {
             apply: editor => Object.assign(editor.state.layers.find(item => item.id === layerId) || {}, after),
             revert: editor => Object.assign(editor.state.layers.find(item => item.id === layerId) || {}, before)
         });
-        this.state.dirty = true;
+        this.markDirty();
         this.render();
         this.emitChange();
     }
@@ -465,6 +469,7 @@ export class ImageEditorCore {
         if (event.ctrlKey && event.key.toLowerCase() === 'z') {
             event.preventDefault();
             undo(this.history, this);
+            this.markDirty();
             this.render();
             this.emitChange();
             return true;
@@ -472,6 +477,7 @@ export class ImageEditorCore {
         if (event.ctrlKey && ['y', 'r'].includes(event.key.toLowerCase())) {
             event.preventDefault();
             redo(this.history, this);
+            this.markDirty();
             this.render();
             this.emitChange();
             return true;
@@ -500,5 +506,10 @@ export class ImageEditorCore {
 
     emitChange() {
         this.onChange?.(this);
+    }
+
+    markDirty() {
+        this.state.dirty = true;
+        this.workRevision += 1;
     }
 }

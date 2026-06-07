@@ -1,15 +1,16 @@
 import { ImageEditorCore } from './image_editor/core.js';
 import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js';
-import { createAutosave } from './image_editor/autosave.js';
-import { getDocument } from './image_editor/storage.js';
+import { createOrUpdateDocument, getDocument, listEditorDocuments } from './image_editor/storage.js';
 
 let editor = null;
-let autosave = null;
 let currentStatus = '이미지 없음';
 let globalListenersBound = false;
 let editorProjectPrefix = '';
 let editorLibraryBasePrefix = '';
 let editorLibraryCurrentPrefix = '';
+let editorLibraryMode = 'image';
+let workDirty = false;
+let savedWorkRevision = 0;
 
 const TOOL_ITEMS = [
     ['select', 'mouse-pointer-2', '선택'],
@@ -60,7 +61,7 @@ export function renderImageEditor(skipHistory = false, options = {}) {
             <div class="image-editor-statusbar">
                 <span id="image-editor-zoom">zoom -</span>
                 <span id="image-editor-size">size -</span>
-                <span id="image-editor-autosave">임시 저장 대기</span>
+                <span id="image-editor-autosave">작업 저장 안 됨</span>
                 <span id="image-editor-output">output -</span>
             </div>
         </div>
@@ -91,6 +92,8 @@ export function openImageEditorForKey(sourceKey = '') {
 function bindImageEditorUi(options = {}) {
     editorProjectPrefix = options.projectPrefix || window.currentPrefix || '';
     editorLibraryBasePrefix = editorProjectPrefix || window.ROOT_PATH || '';
+    workDirty = false;
+    savedWorkRevision = 0;
     const canvas = document.getElementById('image-editor-canvas');
     const previewCanvas = document.getElementById('image-editor-preview-canvas');
     const overlay = document.getElementById('image-editor-overlay');
@@ -99,23 +102,24 @@ function bindImageEditorUi(options = {}) {
         previewCanvas,
         overlay,
         onChange: () => {
-            autosave?.schedule();
+            workDirty = !!editor?.sourceImage && editor.workRevision > savedWorkRevision;
+            setWorkStatus(workDirty ? '작업 저장 필요' : '작업 저장 안 됨');
             refreshEditorUi();
         }
     });
-    autosave = createAutosave(editor, setAutosaveStatus);
 
-    document.getElementById('image-editor-back-btn')?.addEventListener('click', () => {
-        if (editor?.state?.dirty && !confirm('저장하지 않은 편집 내용이 있습니다. 이동할까요?')) return;
+    document.getElementById('image-editor-back-btn')?.addEventListener('click', async () => {
+        if (!await confirmUnsavedWorkBeforeLeave()) return;
         const projectId = window.PROJECT_ACTIVE_PROJECT_ID || '';
         if (projectId && window.openProjectDetail) window.openProjectDetail(projectId, false);
         else window.switchTab('project');
     });
     document.getElementById('image-editor-open-library-btn')?.addEventListener('click', () => openImageEditorLibraryModal());
     document.getElementById('image-editor-empty-open-btn')?.addEventListener('click', () => openImageEditorLibraryModal());
+    document.getElementById('image-editor-save-work-btn')?.addEventListener('click', () => saveWorkDocument());
     document.getElementById('image-editor-save-btn')?.addEventListener('click', () => saveImage());
     document.getElementById('image-editor-save-as-btn')?.addEventListener('click', () => saveImageAs());
-    document.getElementById('image-editor-recover-btn')?.addEventListener('click', () => recoverDraft());
+    document.getElementById('image-editor-recover-btn')?.addEventListener('click', () => openImageEditorLibraryModal('work'));
     document.getElementById('image-editor-zoom-in-btn')?.addEventListener('click', () => editor.zoomBy(0.1));
     document.getElementById('image-editor-zoom-out-btn')?.addEventListener('click', () => editor.zoomBy(-0.1));
     document.querySelectorAll('.image-editor-tool-btn[data-tool]').forEach(btn => {
@@ -133,7 +137,7 @@ function bindImageEditorUi(options = {}) {
 }
 
 function handleBeforeUnload(event) {
-    if (!editor?.state?.dirty) return;
+    if (!hasUnsavedWork()) return;
     event.preventDefault();
     event.returnValue = '';
 }
@@ -150,18 +154,22 @@ async function openImage(sourceKey, documentId = '') {
     await editor.openSource(sourceKey, draft?.document || null);
     document.getElementById('image-editor-empty')?.classList.add('hidden');
     document.getElementById('image-editor-stage')?.classList.add('loaded');
-    setStatus('수정 가능');
-    await autosave.flush();
+    workDirty = false;
+    savedWorkRevision = editor.workRevision || 0;
+    setStatus(documentId ? '작업물 불러옴' : '수정 가능');
+    setWorkStatus(documentId ? '작업물 불러옴' : '작업 저장 안 됨');
     refreshEditorUi();
 }
 
-export async function openImageEditorLibraryModal() {
+export async function openImageEditorLibraryModal(mode = 'image') {
     ensureImageEditorLibraryModal();
     const modal = document.getElementById('image-editor-library-modal');
     if (!modal) return;
+    setImageEditorLibraryMode(mode);
     modal.classList.remove('hidden');
     modal.classList.add('flex');
-    await loadImageEditorLibraryPath(editorLibraryBasePrefix);
+    if (editorLibraryMode === 'work') await loadImageEditorWorkList();
+    else await loadImageEditorLibraryPath(editorLibraryBasePrefix);
 }
 
 export function closeImageEditorLibraryModal(event) {
@@ -173,6 +181,7 @@ export function closeImageEditorLibraryModal(event) {
 }
 
 async function loadImageEditorLibraryPath(prefix = '') {
+    setImageEditorLibraryMode('image');
     editorLibraryCurrentPrefix = prefix;
     const pathDisplay = document.getElementById('image-editor-library-path');
     const grid = document.getElementById('image-editor-library-grid');
@@ -246,6 +255,44 @@ async function loadImageEditorLibraryPath(prefix = '') {
     }
 }
 
+async function loadImageEditorWorkList() {
+    setImageEditorLibraryMode('work');
+    const pathDisplay = document.getElementById('image-editor-library-path');
+    const grid = document.getElementById('image-editor-library-grid');
+    const loader = document.getElementById('image-editor-library-loading');
+    const empty = document.getElementById('image-editor-library-empty');
+    if (!grid || !loader || !empty) return;
+
+    if (pathDisplay) pathDisplay.textContent = editorLibraryBasePrefix ? `/${editorLibraryBasePrefix}` : '/';
+    grid.innerHTML = '';
+    grid.classList.add('hidden');
+    loader.classList.remove('hidden');
+    loader.classList.add('flex');
+    empty.classList.add('hidden');
+    empty.classList.remove('flex');
+
+    try {
+        const documents = await listEditorDocuments(editorLibraryBasePrefix);
+        documents.forEach(row => grid.appendChild(createLibraryWorkCard(row)));
+        loader.classList.add('hidden');
+        loader.classList.remove('flex');
+        if (!grid.children.length) {
+            empty.textContent = '저장된 작업물이 없습니다.';
+            empty.classList.remove('hidden');
+            empty.classList.add('flex');
+        } else {
+            grid.classList.remove('hidden');
+        }
+        window.lucide?.createIcons();
+    } catch (err) {
+        loader.classList.add('hidden');
+        loader.classList.remove('flex');
+        empty.textContent = err.message || '작업물 목록을 불러오지 못했습니다.';
+        empty.classList.remove('hidden');
+        empty.classList.add('flex');
+    }
+}
+
 function createLibraryFolderCard({ label, subLabel = '', icon = 'folder', kind = 'folder', onClick }) {
     const button = document.createElement('button');
     button.type = 'button';
@@ -272,8 +319,29 @@ function createLibraryImageCard(file) {
         <span>${escapeHtml(fileName)}</span>
     `;
     button.onclick = async () => {
+        if (!await confirmUnsavedWorkBeforeReplace()) return;
         closeImageEditorLibraryModal();
         await openImage(file.key);
+    };
+    return button;
+}
+
+function createLibraryWorkCard(row) {
+    const sourceName = String(row.source_key || '').split('/').pop() || row.id || '작업물';
+    const updatedAt = row.updated_at ? new Date(row.updated_at).toLocaleString() : '';
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'image-editor-library-work-card';
+    button.title = row.source_key || row.id || '';
+    button.innerHTML = `
+        <i data-lucide="file-stack"></i>
+        <span>${escapeHtml(sourceName)}</span>
+        <small>${escapeHtml(updatedAt)}</small>
+    `;
+    button.onclick = async () => {
+        if (!await confirmUnsavedWorkBeforeReplace()) return;
+        closeImageEditorLibraryModal();
+        await openWorkDocument(row.id);
     };
     return button;
 }
@@ -295,6 +363,16 @@ function ensureImageEditorLibraryModal() {
                     <i data-lucide="x" class="w-5 h-5"></i>
                 </button>
             </div>
+            <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/70">
+                <div class="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-1">
+                    <button id="image-editor-library-image-mode" type="button" class="image-editor-library-mode-btn active">
+                        <i data-lucide="image"></i><span>이미지 불러오기</span>
+                    </button>
+                    <button id="image-editor-library-work-mode" type="button" class="image-editor-library-mode-btn">
+                        <i data-lucide="file-stack"></i><span>작업 불러오기</span>
+                    </button>
+                </div>
+            </div>
             <div class="flex-1 min-h-0 overflow-auto p-4">
                 <div id="image-editor-library-loading" class="hidden items-center justify-center py-12 text-gray-500 text-sm">
                     <i data-lucide="loader" class="w-5 h-5 mr-2 animate-spin"></i> 이미지를 불러오는 중...
@@ -306,15 +384,48 @@ function ensureImageEditorLibraryModal() {
     `;
     document.body.appendChild(modal);
     document.getElementById('close-image-editor-library-btn')?.addEventListener('click', () => closeImageEditorLibraryModal());
+    document.getElementById('image-editor-library-image-mode')?.addEventListener('click', () => loadImageEditorLibraryPath(editorLibraryCurrentPrefix || editorLibraryBasePrefix));
+    document.getElementById('image-editor-library-work-mode')?.addEventListener('click', () => loadImageEditorWorkList());
     window.lucide?.createIcons();
 }
 
-async function recoverDraft() {
-    if (!editor?.state?.sourceKey) return setStatus('먼저 원본 이미지를 여세요');
-    const result = await getDocument('', editor.state.sourceKey);
-    if (!result?.document) return setStatus('복구 가능한 작업이 없습니다');
-    if (!confirm('가장 최근 임시 저장 작업을 복구할까요?')) return;
-    await openImage(editor.state.sourceKey, result.document.documentId);
+function setImageEditorLibraryMode(mode = 'image') {
+    editorLibraryMode = mode === 'work' ? 'work' : 'image';
+    const title = document.querySelector('#image-editor-library-modal h3');
+    const loader = document.getElementById('image-editor-library-loading');
+    const empty = document.getElementById('image-editor-library-empty');
+    if (title) title.textContent = editorLibraryMode === 'work' ? '작업 불러오기' : '이미지 불러오기';
+    if (loader) loader.innerHTML = editorLibraryMode === 'work'
+        ? '<i data-lucide="loader" class="w-5 h-5 mr-2 animate-spin"></i> 작업물을 불러오는 중...'
+        : '<i data-lucide="loader" class="w-5 h-5 mr-2 animate-spin"></i> 이미지를 불러오는 중...';
+    if (empty) empty.textContent = editorLibraryMode === 'work' ? '저장된 작업물이 없습니다.' : '선택할 수 있는 이미지가 없습니다.';
+    document.getElementById('image-editor-library-image-mode')?.classList.toggle('active', editorLibraryMode === 'image');
+    document.getElementById('image-editor-library-work-mode')?.classList.toggle('active', editorLibraryMode === 'work');
+    window.lucide?.createIcons();
+}
+
+async function openWorkDocument(documentId = '') {
+    if (!documentId) return;
+    setStatus('작업물 로딩 중...');
+    const result = await getDocument(documentId, '');
+    if (!result?.document?.sourceKey) throw new Error('작업물을 불러오지 못했습니다.');
+    await openImage(result.document.sourceKey, documentId);
+}
+
+async function saveWorkDocument() {
+    if (!editor?.sourceImage) return setStatus('먼저 이미지를 여세요');
+    setWorkStatus('작업 저장 중...');
+    try {
+        const result = await createOrUpdateDocument(editor.serializeDocument());
+        workDirty = false;
+        savedWorkRevision = editor.workRevision || 0;
+        setWorkStatus('작업 저장됨');
+        setStatus(`작업물 저장됨: ${result.documentId}`);
+        refreshEditorUi();
+    } catch (err) {
+        setWorkStatus(`작업 저장 실패: ${err.message}`);
+        setStatus(`작업 저장 실패: ${err.message}`);
+    }
 }
 
 async function saveImage() {
@@ -336,7 +447,6 @@ async function runSave(mode, outputKey = '') {
     try {
         const result = await editor.save(mode, outputKey);
         setStatus(`저장됨: ${result.outputKey}`);
-        await autosave.flush();
         if (window.refreshGallery) window.refreshGallery();
     } catch (err) {
         setStatus(`저장 실패: ${err.message}`);
@@ -358,6 +468,8 @@ function refreshEditorUi() {
     const saveAsBtn = document.getElementById('image-editor-save-as-btn');
     if (saveBtn) saveBtn.disabled = !editor.sourceImage || !state.dirty;
     if (saveAsBtn) saveAsBtn.disabled = !editor.sourceImage;
+    const saveWorkBtn = document.getElementById('image-editor-save-work-btn');
+    if (saveWorkBtn) saveWorkBtn.disabled = !editor.sourceImage;
     const status = editor.getStatus();
     const undoBtn = document.getElementById('image-editor-undo-btn');
     const redoBtn = document.getElementById('image-editor-redo-btn');
@@ -529,9 +641,31 @@ function setStatus(message) {
     refreshEditorUi();
 }
 
-function setAutosaveStatus(message) {
+function setWorkStatus(message) {
     const el = document.getElementById('image-editor-autosave');
     if (el) el.textContent = message;
+}
+
+function hasUnsavedWork() {
+    return !!editor?.sourceImage && workDirty;
+}
+
+async function confirmUnsavedWorkBeforeLeave() {
+    if (!hasUnsavedWork()) return true;
+    if (confirm('저장하지 않은 작업물이 있습니다. 작업물을 저장한 뒤 이동할까요?')) {
+        await saveWorkDocument();
+        return true;
+    }
+    return confirm('작업물을 저장하지 않고 이동할까요?');
+}
+
+async function confirmUnsavedWorkBeforeReplace() {
+    if (!hasUnsavedWork()) return true;
+    if (confirm('현재 작업물을 먼저 저장할까요?')) {
+        await saveWorkDocument();
+        return true;
+    }
+    return confirm('현재 작업물을 저장하지 않고 다른 작업을 불러올까요?');
 }
 
 function escapeHtml(value = '') {
