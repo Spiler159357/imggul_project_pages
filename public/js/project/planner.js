@@ -1066,6 +1066,7 @@ export function renderPlannerSituationPlanOverlay() {
         input.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('situation'));
     });
     if (window.lucide) lucide.createIcons();
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
 }
 
 export function updatePlannerPlanModalDefaults(scope = 'all') {
@@ -1103,6 +1104,7 @@ export function updatePlannerPlanModalDefaults(scope = 'all') {
     const styleInput = document.getElementById('planner-plan-style');
     if (styleInput && !styleInput.value.trim()) styleInput.value = window.PROJECT_PLANNER_PROJECT_STYLE || '';
     setValue('planner-plan-negative', combinePromptParts(characterParts.negative, situationPrompt.negative));
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
 }
 
 export function syncPlannerResultModalSelection(item) {

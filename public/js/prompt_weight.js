@@ -9,7 +9,15 @@ const PROMPT_WEIGHT_SELECTOR = [
     '#situation-composition-input',
     '#situation-expression-input',
     '#situation-action-input',
-    '#situation-negative-input'
+    '#situation-negative-input',
+    '#planner-plan-style',
+    '#planner-plan-composition',
+    '#planner-plan-character',
+    '#planner-plan-clothing',
+    '#planner-plan-expression',
+    '#planner-plan-action',
+    '#planner-plan-background',
+    '#planner-plan-negative'
 ].join(', ');
 
 const EMPHASIS_STEP = 1.05;
