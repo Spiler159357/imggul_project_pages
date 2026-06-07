@@ -1,6 +1,6 @@
-import { ImageEditorCore } from './image_editor/core.js';
-import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js';
-import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js';
+import { ImageEditorCore } from './image_editor/core.js?v=image-editor-work-cache-20260607a';
+import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js?v=image-editor-work-cache-20260607a';
+import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js?v=image-editor-work-cache-20260607a';
 
 let editor = null;
 let currentStatus = '이미지 없음';
