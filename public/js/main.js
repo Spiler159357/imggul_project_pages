@@ -7,7 +7,7 @@ import * as Craft from './craft.js?v=prompt-load-planner-meta-20260528a';
 import * as TempGallery from './temp_gallery.js?v=temp-focus-keys-20260527a';
 import * as Modals from './modals.js';
 import * as Project from './project.js?v=prompt-load-planner-meta-20260528a';
-import * as ImageEditor from './image_editor.js?v=image-editor-brush-20260607a';
+import * as ImageEditor from './image_editor.js?v=image-editor-history-20260607a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=temp-focus-keys-20260527a';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지

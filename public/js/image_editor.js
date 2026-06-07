@@ -1,6 +1,6 @@
-import { ImageEditorCore } from './image_editor/core.js?v=image-editor-brush-20260607a';
-import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js?v=image-editor-brush-20260607a';
-import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js?v=image-editor-brush-20260607a';
+import { ImageEditorCore } from './image_editor/core.js?v=image-editor-history-20260607a';
+import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js?v=image-editor-history-20260607a';
+import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js?v=image-editor-history-20260607a';
 
 let editor = null;
 let currentStatus = '이미지 없음';
@@ -121,6 +121,8 @@ function bindImageEditorUi(options = {}) {
     document.getElementById('image-editor-save-work-btn')?.addEventListener('click', () => saveWorkDocument());
     document.getElementById('image-editor-save-btn')?.addEventListener('click', () => saveImage());
     document.getElementById('image-editor-save-as-btn')?.addEventListener('click', () => saveImageAs());
+    document.getElementById('image-editor-undo-btn')?.addEventListener('click', () => editor.undo());
+    document.getElementById('image-editor-redo-btn')?.addEventListener('click', () => editor.redo());
     document.getElementById('image-editor-zoom-in-btn')?.addEventListener('click', () => editor.zoomBy(0.1));
     document.getElementById('image-editor-zoom-out-btn')?.addEventListener('click', () => editor.zoomBy(-0.1));
     document.querySelectorAll('.image-editor-tool-btn[data-tool]').forEach(btn => {
@@ -679,7 +681,7 @@ function bindLayerOptions(target, selectedLayer) {
 
 function bindToolOptions(target) {
     target.querySelectorAll('[data-option-tool]').forEach(input => {
-        const eventName = input.type === 'checkbox' ? 'change' : 'input';
+        const eventName = input.type === 'text' ? 'input' : 'change';
         input.addEventListener(eventName, () => {
             const value = input.type === 'checkbox'
                 ? input.checked

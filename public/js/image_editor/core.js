@@ -165,7 +165,20 @@ export class ImageEditorCore {
 
     setOption(tool, key, value) {
         if (!this.state.toolOptions[tool]) this.state.toolOptions[tool] = {};
+        const before = this.state.toolOptions[tool][key];
+        if (before === value) return;
         this.state.toolOptions[tool][key] = value;
+        pushCommand(this.history, {
+            label: `Update ${tool} option`,
+            apply: editor => {
+                if (!editor.state.toolOptions[tool]) editor.state.toolOptions[tool] = {};
+                editor.state.toolOptions[tool][key] = value;
+            },
+            revert: editor => {
+                if (!editor.state.toolOptions[tool]) editor.state.toolOptions[tool] = {};
+                editor.state.toolOptions[tool][key] = before;
+            }
+        });
         this.markDirty();
         this.emitChange();
     }
@@ -481,18 +494,12 @@ export class ImageEditorCore {
         if (target?.closest?.('input, textarea, select, [contenteditable="true"]')) return false;
         if (event.ctrlKey && event.key.toLowerCase() === 'z') {
             event.preventDefault();
-            undo(this.history, this);
-            this.markDirty();
-            this.render();
-            this.emitChange();
+            this.undo();
             return true;
         }
         if (event.ctrlKey && ['y', 'r'].includes(event.key.toLowerCase())) {
             event.preventDefault();
-            redo(this.history, this);
-            this.markDirty();
-            this.render();
-            this.emitChange();
+            this.redo();
             return true;
         }
         if (event.key === 'Delete') {
@@ -508,6 +515,22 @@ export class ImageEditorCore {
             return true;
         }
         return false;
+    }
+
+    undo() {
+        if (!undo(this.history, this)) return false;
+        this.markDirty();
+        this.render();
+        this.emitChange();
+        return true;
+    }
+
+    redo() {
+        if (!redo(this.history, this)) return false;
+        this.markDirty();
+        this.render();
+        this.emitChange();
+        return true;
     }
 
     getStatus() {
