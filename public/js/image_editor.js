@@ -157,8 +157,8 @@ async function openImage(sourceKey, documentId = '') {
     await openEditorDocument(sourceKey, draft?.document || null, documentId ? '작업물 불러옴' : '수정 가능', documentId ? '작업물 불러옴' : '작업 저장 안 됨');
 }
 
-async function openEditorDocument(sourceKey, document = null, statusMessage = '수정 가능', workStatusMessage = '작업 저장 안 됨') {
-    await editor.openSource(sourceKey, document);
+async function openEditorDocument(sourceKey, editorDocument = null, statusMessage = '수정 가능', workStatusMessage = '작업 저장 안 됨') {
+    await editor.openSource(sourceKey, editorDocument);
     document.getElementById('image-editor-empty')?.classList.add('hidden');
     document.getElementById('image-editor-stage')?.classList.add('loaded');
     workDirty = false;
