@@ -2243,6 +2243,26 @@ export async function onRequest(context) {
         }
     }
 
+    if (path === "/api/image-editor/document" && method === "DELETE") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            await ensureImageEditorSchema(env);
+            const documentId = String(url.searchParams.get('documentId') || '').trim();
+            if (!documentId) return jsonResponse({ error: 'documentId is required' }, { status: 400 });
+            const row = await env.DB.prepare(
+                'SELECT id, document_json_key, preview_key FROM image_editor_documents WHERE id = ?'
+            ).bind(documentId).first();
+            if (!row) return jsonResponse({ error: 'Document not found' }, { status: 404 });
+            const keys = [row.document_json_key, row.preview_key].filter(Boolean);
+            if (keys.length) await env.imgBucket.delete(keys);
+            await env.DB.prepare('DELETE FROM image_editor_revisions WHERE document_id = ?').bind(documentId).run();
+            await env.DB.prepare('DELETE FROM image_editor_documents WHERE id = ?').bind(documentId).run();
+            return jsonResponse({ success: true, documentId });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
     if ((path === "/api/image-editor/save" || path === "/api/image-editor/save-as") && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {

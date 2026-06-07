@@ -52,6 +52,18 @@ export async function getDocument(documentId = '', sourceKey = '') {
     return res.json();
 }
 
+export async function deleteEditorDocument(documentId = '') {
+    const id = String(documentId || '').trim();
+    if (!id) throw new Error('삭제할 작업물 ID가 없습니다.');
+    const res = await fetch(`/api/image-editor/document?documentId=${encodeURIComponent(id)}&_t=${Date.now()}`, {
+        method: 'DELETE',
+        cache: 'no-store'
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || '작업물 삭제 실패');
+    return data;
+}
+
 export async function saveEditedImage({ blob, sourceKey, outputKey, documentId, document, operationsSummary = [], mode = 'overwrite' }) {
     const endpoint = mode === 'save-as' ? '/api/image-editor/save-as' : '/api/image-editor/save';
     const form = new FormData();

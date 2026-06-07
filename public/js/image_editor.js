@@ -1,6 +1,6 @@
 import { ImageEditorCore } from './image_editor/core.js';
 import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js';
-import { createOrUpdateDocument, getDocument, listEditorDocuments } from './image_editor/storage.js';
+import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js';
 
 let editor = null;
 let currentStatus = '이미지 없음';
@@ -119,7 +119,6 @@ function bindImageEditorUi(options = {}) {
     document.getElementById('image-editor-save-work-btn')?.addEventListener('click', () => saveWorkDocument());
     document.getElementById('image-editor-save-btn')?.addEventListener('click', () => saveImage());
     document.getElementById('image-editor-save-as-btn')?.addEventListener('click', () => saveImageAs());
-    document.getElementById('image-editor-recover-btn')?.addEventListener('click', () => openImageEditorLibraryModal('work'));
     document.getElementById('image-editor-zoom-in-btn')?.addEventListener('click', () => editor.zoomBy(0.1));
     document.getElementById('image-editor-zoom-out-btn')?.addEventListener('click', () => editor.zoomBy(-0.1));
     document.querySelectorAll('.image-editor-tool-btn[data-tool]').forEach(btn => {
@@ -329,21 +328,36 @@ function createLibraryImageCard(file) {
 function createLibraryWorkCard(row) {
     const sourceName = String(row.source_key || '').split('/').pop() || row.id || '작업물';
     const updatedAt = row.updated_at ? new Date(row.updated_at).toLocaleString() : '';
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'image-editor-library-work-card';
-    button.title = row.source_key || row.id || '';
-    button.innerHTML = `
+    const card = document.createElement('div');
+    card.className = 'image-editor-library-work-card';
+    card.role = 'button';
+    card.tabIndex = 0;
+    card.title = row.source_key || row.id || '';
+    card.innerHTML = `
         <i data-lucide="file-stack"></i>
-        <span>${escapeHtml(sourceName)}</span>
+        <span class="image-editor-library-work-name">${escapeHtml(sourceName)}</span>
         <small>${escapeHtml(updatedAt)}</small>
+        <button type="button" class="image-editor-library-work-delete" title="작업물 삭제" aria-label="작업물 삭제">
+            <i data-lucide="trash-2"></i>
+        </button>
     `;
-    button.onclick = async () => {
+    const open = async () => {
         if (!await confirmUnsavedWorkBeforeReplace()) return;
         closeImageEditorLibraryModal();
         await openWorkDocument(row.id);
     };
-    return button;
+    card.addEventListener('click', open);
+    card.addEventListener('keydown', event => {
+        if (!['Enter', ' '].includes(event.key)) return;
+        event.preventDefault();
+        open();
+    });
+    card.querySelector('.image-editor-library-work-delete')?.addEventListener('click', event => {
+        event.preventDefault();
+        event.stopPropagation();
+        deleteWorkDocument(row);
+    });
+    return card;
 }
 
 function ensureImageEditorLibraryModal() {
@@ -425,6 +439,21 @@ async function saveWorkDocument() {
     } catch (err) {
         setWorkStatus(`작업 저장 실패: ${err.message}`);
         setStatus(`작업 저장 실패: ${err.message}`);
+    }
+}
+
+async function deleteWorkDocument(row) {
+    const sourceName = String(row?.source_key || '').split('/').pop() || row?.id || '작업물';
+    if (!row?.id) return;
+    if (!confirm(`'${sourceName}' 작업물을 삭제하시겠습니까?\n삭제한 작업물은 불러올 수 없습니다.`)) return;
+    setStatus('작업물 삭제 중...');
+    try {
+        await deleteEditorDocument(row.id);
+        setStatus('작업물 삭제됨');
+        await loadImageEditorWorkList();
+    } catch (err) {
+        setStatus(`작업물 삭제 실패: ${err.message}`);
+        alert(err.message || '작업물 삭제 실패');
     }
 }
 
