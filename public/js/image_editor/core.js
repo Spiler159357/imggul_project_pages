@@ -229,8 +229,10 @@ export class ImageEditorCore {
         const options = this.state.toolOptions.brush;
         const ctx = layer.data.canvas.getContext('2d');
         ctx.save();
-        ctx.globalAlpha = Number(options.opacity || 1);
-        ctx.strokeStyle = options.color || '#ef4444';
+        const erase = !!options.erase;
+        ctx.globalCompositeOperation = erase ? 'destination-out' : 'source-over';
+        ctx.globalAlpha = erase ? 1 : Number(options.opacity || 1);
+        ctx.strokeStyle = erase ? '#000000' : (options.color || '#ef4444');
         ctx.lineWidth = Number(options.size || 24);
         ctx.lineCap = options.shape === 'square' ? 'butt' : 'round';
         ctx.lineJoin = 'round';
@@ -254,13 +256,24 @@ export class ImageEditorCore {
 
     drawMosaic(point) {
         const options = this.state.toolOptions.mosaic;
-        const ctx = this.drag.layer.data.maskCanvas.getContext('2d');
+        const { layer, last } = this.drag;
+        const ctx = layer.data.maskCanvas.getContext('2d');
+        const size = Number(options.size || 48);
         ctx.save();
         ctx.fillStyle = '#000';
+        ctx.strokeStyle = '#000';
+        ctx.lineWidth = size;
+        ctx.lineCap = 'round';
+        ctx.lineJoin = 'round';
         ctx.beginPath();
-        ctx.arc(point.x, point.y, Number(options.size || 48) / 2, 0, Math.PI * 2);
+        ctx.moveTo(last.x, last.y);
+        ctx.lineTo(point.x, point.y);
+        ctx.stroke();
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, size / 2, 0, Math.PI * 2);
         ctx.fill();
         ctx.restore();
+        this.drag.last = point;
     }
 
     startShape(point, type) {

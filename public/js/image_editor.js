@@ -1,6 +1,6 @@
-import { ImageEditorCore } from './image_editor/core.js?v=image-editor-work-cache-20260607a';
-import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js?v=image-editor-work-cache-20260607a';
-import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js?v=image-editor-work-cache-20260607a';
+import { ImageEditorCore } from './image_editor/core.js?v=image-editor-brush-20260607a';
+import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js?v=image-editor-brush-20260607a';
+import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js?v=image-editor-brush-20260607a';
 
 let editor = null;
 let currentStatus = '이미지 없음';
@@ -591,37 +591,20 @@ function renderPropertiesPanel(target) {
     const tool = editor.state.activeTool;
     const selectedLayer = editor.state.layers.find(layer => layer.id === editor.state.selectedLayerIds[0]);
     if (selectedLayer && selectedLayer.type !== 'sourceImage') {
-        target.innerHTML = `
-            <div class="image-editor-panel-section">
-                <h4>선택 레이어</h4>
-                <label>이름 <input data-layer-field="name" value="${escapeHtml(selectedLayer.name || '')}"></label>
-                <label>Opacity <input data-layer-field="opacity" type="range" min="0" max="1" step="0.05" value="${selectedLayer.opacity ?? 1}"></label>
-                <button id="image-editor-delete-layer" class="image-editor-danger-btn" ${selectedLayer.locked ? 'disabled' : ''}><i data-lucide="trash-2"></i><span>삭제</span></button>
-            </div>
-        `;
-        target.querySelectorAll('[data-layer-field]').forEach(input => {
-            input.addEventListener('change', () => {
-                const value = input.type === 'range' ? Number(input.value) : input.value;
-                editor.setLayerPatch(selectedLayer.id, { [input.dataset.layerField]: value });
-            });
-        });
-        target.querySelector('#image-editor-delete-layer')?.addEventListener('click', () => editor.deleteSelectedLayer());
+        const optionBlock = selectedLayer.type === 'raster'
+            ? brushOptionHtml()
+            : selectedLayer.type === 'mosaic'
+                ? mosaicOptionHtml()
+                : '';
+        target.innerHTML = `${layerOptionHtml(selectedLayer)}${optionBlock}`;
+        bindLayerOptions(target, selectedLayer);
+        bindToolOptions(target);
         return;
     }
     if (tool === 'brush') {
-        const o = editor.state.toolOptions.brush;
-        target.innerHTML = optionHtml('브러시', [
-            ['size', '크기', 'range', 1, 120, 1, o.size],
-            ['color', '색상', 'color', null, null, null, o.color],
-            ['opacity', 'Opacity', 'range', 0, 1, 0.05, o.opacity]
-        ], 'brush');
+        target.innerHTML = brushOptionHtml();
     } else if (tool === 'mosaic') {
-        const o = editor.state.toolOptions.mosaic;
-        target.innerHTML = optionHtml('모자이크', [
-            ['size', '브러시 크기', 'range', 8, 180, 1, o.size],
-            ['blockSize', '블록 크기', 'range', 2, 64, 1, o.blockSize],
-            ['strength', '강도', 'range', 0, 1, 0.05, o.strength]
-        ], 'mosaic');
+        target.innerHTML = mosaicOptionHtml();
     } else if (tool === 'text') {
         const o = editor.state.toolOptions.text;
         target.innerHTML = optionHtml('텍스트', [
@@ -638,12 +621,7 @@ function renderPropertiesPanel(target) {
             ['opacity', 'Opacity', 'range', 0, 1, 0.05, o.opacity]
         ], 'shape');
     }
-    target.querySelectorAll('[data-option-tool]').forEach(input => {
-        input.addEventListener('input', () => {
-            const value = input.type === 'range' || input.type === 'number' ? Number(input.value) : input.value;
-            editor.setOption(input.dataset.optionTool, input.dataset.optionKey, value);
-        });
-    });
+    bindToolOptions(target);
 }
 
 function optionHtml(title, rows, tool) {
@@ -652,11 +630,65 @@ function optionHtml(title, rows, tool) {
             <h4>${title}</h4>
             ${rows.map(([key, label, type, min, max, step, value]) => `
                 <label>${label}
-                    <input data-option-tool="${tool}" data-option-key="${key}" type="${type}" ${min !== null ? `min="${min}"` : ''} ${max !== null ? `max="${max}"` : ''} ${step !== null ? `step="${step}"` : ''} value="${escapeHtml(String(value ?? ''))}">
+                    <input data-option-tool="${tool}" data-option-key="${key}" type="${type}" ${type === 'checkbox' && value ? 'checked' : ''} ${min !== null ? `min="${min}"` : ''} ${max !== null ? `max="${max}"` : ''} ${step !== null ? `step="${step}"` : ''} ${type !== 'checkbox' ? `value="${escapeHtml(String(value ?? ''))}"` : ''}>
                 </label>
             `).join('')}
         </div>
     `;
+}
+
+function layerOptionHtml(layer) {
+    return `
+        <div class="image-editor-panel-section">
+            <h4>선택 레이어</h4>
+            <label>이름 <input data-layer-field="name" value="${escapeHtml(layer.name || '')}"></label>
+            <label>Opacity <input data-layer-field="opacity" type="range" min="0" max="1" step="0.05" value="${layer.opacity ?? 1}"></label>
+            <button id="image-editor-delete-layer" class="image-editor-danger-btn" ${layer.locked ? 'disabled' : ''}><i data-lucide="trash-2"></i><span>삭제</span></button>
+        </div>
+    `;
+}
+
+function brushOptionHtml() {
+    const o = editor.state.toolOptions.brush;
+    return optionHtml('브러시', [
+        ['size', '크기', 'range', 1, 120, 1, o.size],
+        ['color', '색상', 'color', null, null, null, o.color],
+        ['opacity', 'Opacity', 'range', 0, 1, 0.05, o.opacity],
+        ['erase', '지우기', 'checkbox', null, null, null, !!o.erase]
+    ], 'brush');
+}
+
+function mosaicOptionHtml() {
+    const o = editor.state.toolOptions.mosaic;
+    return optionHtml('모자이크', [
+        ['size', '브러시 크기', 'range', 8, 180, 1, o.size],
+        ['blockSize', '블록 크기', 'range', 2, 64, 1, o.blockSize],
+        ['strength', '강도', 'range', 0, 1, 0.05, o.strength]
+    ], 'mosaic');
+}
+
+function bindLayerOptions(target, selectedLayer) {
+    target.querySelectorAll('[data-layer-field]').forEach(input => {
+        input.addEventListener('change', () => {
+            const value = input.type === 'range' ? Number(input.value) : input.value;
+            editor.setLayerPatch(selectedLayer.id, { [input.dataset.layerField]: value });
+        });
+    });
+    target.querySelector('#image-editor-delete-layer')?.addEventListener('click', () => editor.deleteSelectedLayer());
+}
+
+function bindToolOptions(target) {
+    target.querySelectorAll('[data-option-tool]').forEach(input => {
+        const eventName = input.type === 'checkbox' ? 'change' : 'input';
+        input.addEventListener(eventName, () => {
+            const value = input.type === 'checkbox'
+                ? input.checked
+                : input.type === 'range' || input.type === 'number'
+                    ? Number(input.value)
+                    : input.value;
+            editor.setOption(input.dataset.optionTool, input.dataset.optionKey, value);
+        });
+    });
 }
 
 function renderLayersPanel(target) {

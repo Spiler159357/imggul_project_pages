@@ -56,7 +56,7 @@ export function createEditorDocument({ sourceKey, outputKey = sourceKey, width =
         panY: 0,
         activeTool: 'select',
         toolOptions: {
-            brush: { size: 24, color: '#ef4444', opacity: 1, hardness: 1, shape: 'round' },
+            brush: { size: 24, color: '#ef4444', opacity: 1, hardness: 1, shape: 'round', erase: false },
             mosaic: { size: 48, blockSize: 12, strength: 1 },
             text: { fontFamily: 'sans-serif', fontSize: 32, color: '#ffffff', bold: false, italic: false, opacity: 1, align: 'left' },
             shape: { type: 'rect', strokeColor: '#ffffff', fillColor: 'transparent', strokeWidth: 4, opacity: 1 },
