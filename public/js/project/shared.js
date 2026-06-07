@@ -77,6 +77,29 @@ export function getProjectRoot() {
     return document.getElementById('main-project-content');
 }
 
+export function getProjectSectionScrollCache() {
+    if (!window.PROJECT_SECTION_SCROLL_CACHE || typeof window.PROJECT_SECTION_SCROLL_CACHE !== 'object') {
+        window.PROJECT_SECTION_SCROLL_CACHE = {};
+    }
+    return window.PROJECT_SECTION_SCROLL_CACHE;
+}
+
+export function getProjectSectionScrollKey(projectId, sectionKey) {
+    return `${projectId || getDefaultProjectId()}:${sectionKey || ''}`;
+}
+
+export function rememberProjectSectionScroll(projectId, sectionKey, elementId) {
+    const element = document.getElementById(elementId);
+    if (!element) return;
+
+    getProjectSectionScrollCache()[getProjectSectionScrollKey(projectId, sectionKey)] = element.scrollTop || 0;
+}
+
+export function getRememberedProjectSectionScroll(projectId, sectionKey) {
+    const value = getProjectSectionScrollCache()[getProjectSectionScrollKey(projectId, sectionKey)];
+    return Number.isFinite(Number(value)) ? Number(value) : null;
+}
+
 export function rememberProjectRoute(state, hash) {
     window.PROJECT_LAST_STATE = { tab: 'project', ...state };
     window.PROJECT_LAST_HASH = hash || '#project';

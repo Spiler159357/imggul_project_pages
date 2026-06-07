@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js';
 
@@ -319,6 +319,8 @@ export async function uploadCharacterSituationImage(file, projectId = window.PRO
 }
 
 export async function openCharacterDetail(projectId = window.PROJECT_ACTIVE_PROJECT_ID, characterId = '', skipHistory = false) {
+    rememberProjectSectionScroll(projectId, 'character', 'character-list-scroll');
+
     if (!Array.isArray(window.PROJECTS)) {
         await loadProjects().catch(() => []);
     }
@@ -898,7 +900,7 @@ export function renderCharacterSection(section, state = {}) {
 
     renderProjectShell(`
         ${renderSectionHeader(section.title)}
-        <div class="flex-1 overflow-y-auto p-4 sm:p-6">
+        <div id="character-list-scroll" class="flex-1 overflow-y-auto p-4 sm:p-6">
             <section class="max-w-6xl mx-auto">
                 <div class="flex items-center justify-between mb-4">
                     <h3 class="font-bold text-base text-gray-900 dark:text-white">캐릭터 목록</h3>
@@ -930,4 +932,10 @@ export function renderCharacterSection(section, state = {}) {
         </div>
         ${renderProjectItemCreateModal()}
     `);
+
+    const scrollTop = Number.isFinite(Number(state.scrollTop))
+        ? Number(state.scrollTop)
+        : getRememberedProjectSectionScroll(project?.id, 'character');
+    const scrollContainer = document.getElementById('character-list-scroll');
+    if (scrollContainer && scrollTop !== null) scrollContainer.scrollTop = scrollTop;
 }
