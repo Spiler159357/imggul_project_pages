@@ -432,7 +432,7 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
             .bind(objectKey, canonicalObjectKey),
         env.DB.prepare(`
             INSERT INTO v2_planner_runs (
-                id, project_id, character_id, status, mode, default_count, legacy_object_key,
+                id, project_id, character_id, status, mode, default_count, source_object_key,
                 ui_status, stage, stage_label, background_job_id, background_status_json,
                 running_situation_ids_json, created_at, updated_at, completed_at, confirmed_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -442,7 +442,7 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
                 status = excluded.status,
                 mode = excluded.mode,
                 default_count = excluded.default_count,
-                legacy_object_key = excluded.legacy_object_key,
+                source_object_key = excluded.source_object_key,
                 ui_status = excluded.ui_status,
                 stage = excluded.stage,
                 stage_label = excluded.stage_label,
@@ -486,7 +486,7 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
                 planner_run_id = excluded.planner_run_id,
                 source_type = excluded.source_type,
                 updated_at = excluded.updated_at
-        `).bind(objectKey, runId, objectKey === canonicalObjectKey ? 'canonical' : 'legacy_alias', timestamp, timestamp)
+        `).bind(objectKey, runId, objectKey === canonicalObjectKey ? 'canonical' : 'alias', timestamp, timestamp)
     ];
     if (currentPlannerItemIds.length) {
         const itemPlaceholders = currentPlannerItemIds.map(() => '?').join(',');
@@ -706,7 +706,7 @@ async function getV2PlannerMetaDocument(env, objectKey) {
         LEFT JOIN v2_projects p ON p.id = r.project_id
         LEFT JOIN v2_characters c ON c.id = r.character_id
         LEFT JOIN v2_planner_sources src ON src.planner_run_id = r.id
-        WHERE r.legacy_object_key = ? OR src.source_key = ?
+        WHERE r.source_object_key = ? OR src.source_key = ?
         LIMIT 1
     `).bind(objectKey, objectKey).first();
     if (!run) return null;
@@ -821,11 +821,37 @@ async function deleteV2PlannerMetaDocument(env, objectKey) {
         SELECT r.id
         FROM v2_planner_runs r
         LEFT JOIN v2_planner_sources src ON src.planner_run_id = r.id
-        WHERE r.legacy_object_key = ? OR src.source_key = ?
+        WHERE r.source_object_key = ? OR src.source_key = ?
         LIMIT 1
     `).bind(objectKey, objectKey).first();
     if (!run?.id) return;
+    const timestamp = nowIso();
     await env.DB.batch([
+        env.DB.prepare(`
+            DELETE FROM v2_generation_queue
+            WHERE generation_job_item_id IN (
+                SELECT gji.id
+                FROM v2_generation_job_items gji
+                LEFT JOIN v2_generation_jobs gj ON gj.id = gji.generation_job_id
+                WHERE gj.planner_run_id = ?
+                   OR gji.planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)
+            )
+        `).bind(run.id, run.id),
+        env.DB.prepare(`
+            DELETE FROM v2_generation_job_items
+            WHERE generation_job_id IN (SELECT id FROM v2_generation_jobs WHERE planner_run_id = ?)
+               OR planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)
+        `).bind(run.id, run.id),
+        env.DB.prepare('DELETE FROM v2_generation_jobs WHERE planner_run_id = ?').bind(run.id),
+        env.DB.prepare(`
+            UPDATE v2_assets
+            SET status = 'deleted',
+                deleted_at = COALESCE(deleted_at, ?),
+                updated_at = ?
+            WHERE owner_type = ?
+              AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)
+              AND status <> 'deleted'
+        `).bind(timestamp, timestamp, 'planner_item', run.id),
         env.DB.prepare('DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))')
             .bind('planner_item', run.id),
         env.DB.prepare('DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))')
@@ -886,10 +912,14 @@ async function migrateR2JsonStateToDb(env, limit = 500, cursor = undefined) {
     for (const object of listed.objects || []) {
         const key = object.key || '';
         let docType = '';
+        if (key.endsWith('_planner_meta.json')) {
+            skipped.push({ key, reason: 'planner_meta_import_disabled' });
+            continue;
+        }
         if (key.endsWith('_character_meta.json')) docType = 'character_meta';
         else if (key.endsWith('_situations_meta.json')) docType = 'situations_meta';
         else if (key.endsWith('_planner_settings.json')) docType = 'planner_settings';
-        else if (key.endsWith('_meta.json') && !key.endsWith('_planner_meta.json')) docType = 'file_metadata';
+        else if (key.endsWith('_meta.json')) docType = 'file_metadata';
         else if (key === '.imggul_aliases.json') docType = 'aliases_global';
         else if (key.endsWith('/.aliases.json')) docType = 'aliases_project';
         else {
@@ -940,99 +970,50 @@ async function migrateR2JsonStateToDb(env, limit = 500, cursor = undefined) {
     };
 }
 
-async function backfillLegacyPlannerToV2(env, limit = 100) {
-    if (!env.DB) throw new Error('DB binding is not configured');
-    await ensurePlannerMetaSchema(env);
-    const safeLimit = Math.min(500, Math.max(1, Number.parseInt(limit, 10) || 100));
-    const rows = (await env.DB.prepare(`
-        SELECT object_key
-        FROM planner_metas
-        ORDER BY updated_at DESC
-        LIMIT ?
-    `).bind(safeLimit).all()).results || [];
-    const imported = [];
-    for (const row of rows) {
-        const meta = await getLegacyPlannerMetaDocument(env, row.object_key);
-        if (meta) {
-            await putV2PlannerMetaDocument(env, row.object_key, meta);
-            imported.push(row.object_key);
-        }
-    }
-    return { importedCount: imported.length, imported };
-}
-
-async function backfillLegacyBackgroundToV2(env, limit = 100) {
-    if (!env.DB) throw new Error('DB binding is not configured');
-    const exists = await plannerBackgroundTablesExist(env);
-    if (!exists) return { importedCount: 0, imported: [] };
-    const safeLimit = Math.min(500, Math.max(1, Number.parseInt(limit, 10) || 100));
-    const jobs = (await env.DB.prepare(`
-        SELECT *
-        FROM planner_background_jobs
-        ORDER BY updated_at DESC
-        LIMIT ?
-    `).bind(safeLimit).all()).results || [];
-    const imported = [];
-    for (const job of jobs) {
-        const metaKey = `${job.project_prefix}_planner_temp_image/plans/${String(job.character_id || '').trim().replace(/[\\/]+/g, '_')}_planner_meta.json`;
-        const baseMeta = parseJsonField(job.planner_meta_json, null);
-        const activeMeta = await getActivePlannerBackgroundMeta(env, metaKey, baseMeta);
-        if (activeMeta) await putPlannerMetaDocument(env, metaKey, activeMeta);
-        const timestamp = nowIso();
-        const projectId = job.project_prefix || job.project_id;
-        const plannerRunId = makeStableDbId('run', metaKey);
-        const generationJobId = makeStableDbId('genjob', job.id);
-        await env.DB.prepare(`
-            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
-        `).bind(projectId, job.project_prefix || projectId, job.project_prefix || projectId, timestamp, timestamp).run();
-        await env.DB.prepare(`
-            INSERT INTO v2_generation_jobs (
-                id, planner_run_id, project_id, character_id, status, mode, total_count,
-                completed_count, failed_count, legacy_background_job_id, started_at, completed_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'background', ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                status = excluded.status,
-                total_count = excluded.total_count,
-                completed_count = excluded.completed_count,
-                failed_count = excluded.failed_count,
-                updated_at = excluded.updated_at
-        `).bind(
-            generationJobId,
-            plannerRunId,
-            projectId,
-            null,
-            normalizeV2PlannerRunStatus(job.status) === 'failed' ? 'failed' : (job.status === 'partial_failed' ? 'partial_failed' : (job.status === 'completed' ? 'completed' : 'queued')),
-            job.total_count || 0,
-            job.completed_count || 0,
-            job.failed_count || 0,
-            job.id,
-            job.started_at || null,
-            job.completed_at || null,
-            job.created_at || timestamp,
-            job.updated_at || timestamp
-        ).run();
-        imported.push(job.id);
-    }
-    return { importedCount: imported.length, imported };
-}
-
-async function cleanupLegacyPlannerState(env, limit = 500, cursor = undefined) {
+async function cleanupLegacyPlannerState(env, limit = 500, cursor = undefined, options = {}) {
     if (!env.DB) throw new Error('DB binding is not configured');
     if (!env.imgBucket) throw new Error('imgBucket binding is not configured');
     await ensureJsonDbSchema(env);
     await ensurePlannerMetaSchema(env);
+    const cleanupBackground = options.cleanupBackground !== false;
+    const forceBackground = options.forceBackground === true;
+    const timestamp = nowIso();
     const legacyMetaRows = (await env.DB.prepare('SELECT COUNT(*) AS count FROM planner_metas').first()) || {};
+    const legacyPlannerJsonRows = (await env.DB.prepare("SELECT COUNT(*) AS count FROM json_documents WHERE doc_type = 'planner_meta'").first()) || {};
     const legacyV2Runs = (await env.DB.prepare(`
         SELECT id
         FROM v2_planner_runs
-        WHERE legacy_object_key LIKE '%_planner_temp_image/_planner_meta.json'
+        WHERE source_object_key LIKE '%_planner_temp_image/_planner_meta.json'
     `).all()).results || [];
     const legacyV2RunIds = legacyV2Runs.map(row => row.id).filter(Boolean);
     if (legacyV2RunIds.length) {
         const placeholders = legacyV2RunIds.map(() => '?').join(',');
         await env.DB.batch([
+            env.DB.prepare(`
+                DELETE FROM v2_generation_queue
+                WHERE generation_job_item_id IN (
+                    SELECT gji.id
+                    FROM v2_generation_job_items gji
+                    LEFT JOIN v2_generation_jobs gj ON gj.id = gji.generation_job_id
+                    WHERE gj.planner_run_id IN (${placeholders})
+                       OR gji.planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders}))
+                )
+            `).bind(...legacyV2RunIds, ...legacyV2RunIds),
+            env.DB.prepare(`
+                DELETE FROM v2_generation_job_items
+                WHERE generation_job_id IN (SELECT id FROM v2_generation_jobs WHERE planner_run_id IN (${placeholders}))
+                   OR planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders}))
+            `).bind(...legacyV2RunIds, ...legacyV2RunIds),
+            env.DB.prepare(`DELETE FROM v2_generation_jobs WHERE planner_run_id IN (${placeholders})`).bind(...legacyV2RunIds),
+            env.DB.prepare(`
+                UPDATE v2_assets
+                SET status = 'deleted',
+                    deleted_at = COALESCE(deleted_at, ?),
+                    updated_at = ?
+                WHERE owner_type = 'planner_item'
+                  AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders}))
+                  AND status <> 'deleted'
+            `).bind(timestamp, timestamp, ...legacyV2RunIds),
             env.DB.prepare(`DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = 'planner_item' AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders})))`).bind(...legacyV2RunIds),
             env.DB.prepare(`DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = 'planner_item' AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders})))`).bind(...legacyV2RunIds),
             env.DB.prepare(`DELETE FROM v2_prompt_sets WHERE owner_type = 'planner_item' AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id IN (${placeholders}))`).bind(...legacyV2RunIds),
@@ -1041,6 +1022,47 @@ async function cleanupLegacyPlannerState(env, limit = 500, cursor = undefined) {
             env.DB.prepare(`DELETE FROM v2_planner_sources WHERE planner_run_id IN (${placeholders})`).bind(...legacyV2RunIds),
             env.DB.prepare(`DELETE FROM v2_planner_runs WHERE id IN (${placeholders})`).bind(...legacyV2RunIds)
         ]);
+    }
+    const backgroundTables = (await env.DB.prepare(`
+        SELECT name
+        FROM sqlite_master
+        WHERE type = 'table'
+          AND name IN ('planner_background_jobs', 'planner_background_items', 'planner_background_queue', 'planner_background_rate_limits')
+    `).all()).results || [];
+    const backgroundTableNames = new Set(backgroundTables.map(row => row.name));
+    const hasBackgroundJobTables = backgroundTableNames.has('planner_background_jobs')
+        && backgroundTableNames.has('planner_background_items')
+        && backgroundTableNames.has('planner_background_queue');
+    let legacyBackgroundJobCount = 0;
+    let deletedLegacyBackgroundJobCount = 0;
+    let skippedActiveLegacyBackgroundJobCount = 0;
+    if (cleanupBackground && hasBackgroundJobTables) {
+        const terminalStatuses = ['completed', 'partial_failed', 'failed'];
+        const terminalPlaceholders = terminalStatuses.map(() => '?').join(',');
+        const totalBackgroundRows = (await env.DB.prepare('SELECT COUNT(*) AS count FROM planner_background_jobs').first()) || {};
+        legacyBackgroundJobCount = totalBackgroundRows.count || 0;
+        if (forceBackground) {
+            deletedLegacyBackgroundJobCount = legacyBackgroundJobCount;
+            const statements = [
+                env.DB.prepare('DELETE FROM planner_background_queue'),
+                env.DB.prepare('DELETE FROM planner_background_items'),
+                env.DB.prepare('DELETE FROM planner_background_jobs')
+            ];
+            if (backgroundTableNames.has('planner_background_rate_limits')) {
+                statements.push(env.DB.prepare('DELETE FROM planner_background_rate_limits'));
+            }
+            await env.DB.batch(statements);
+        } else {
+            const terminalRows = (await env.DB.prepare(`SELECT COUNT(*) AS count FROM planner_background_jobs WHERE status IN (${terminalPlaceholders})`).bind(...terminalStatuses).first()) || {};
+            const activeRows = (await env.DB.prepare(`SELECT COUNT(*) AS count FROM planner_background_jobs WHERE status NOT IN (${terminalPlaceholders})`).bind(...terminalStatuses).first()) || {};
+            deletedLegacyBackgroundJobCount = terminalRows.count || 0;
+            skippedActiveLegacyBackgroundJobCount = activeRows.count || 0;
+            await env.DB.batch([
+                env.DB.prepare(`DELETE FROM planner_background_queue WHERE job_id IN (SELECT id FROM planner_background_jobs WHERE status IN (${terminalPlaceholders}))`).bind(...terminalStatuses),
+                env.DB.prepare(`DELETE FROM planner_background_items WHERE job_id IN (SELECT id FROM planner_background_jobs WHERE status IN (${terminalPlaceholders}))`).bind(...terminalStatuses),
+                env.DB.prepare(`DELETE FROM planner_background_jobs WHERE status IN (${terminalPlaceholders})`).bind(...terminalStatuses)
+            ]);
+        }
     }
     await env.DB.batch([
         env.DB.prepare("DELETE FROM v2_planner_sources WHERE source_key LIKE '%_planner_temp_image/_planner_meta.json'"),
@@ -1063,7 +1085,13 @@ async function cleanupLegacyPlannerState(env, limit = 500, cursor = undefined) {
     return {
         deletedJsonDocuments: true,
         deletedLegacyPlannerMetaCount: legacyMetaRows.count || 0,
+        deletedLegacyPlannerJsonDocumentCount: legacyPlannerJsonRows.count || 0,
         deletedLegacyV2PlannerRunCount: legacyV2RunIds.length,
+        cleanupBackground,
+        forceBackground,
+        legacyBackgroundJobCount,
+        deletedLegacyBackgroundJobCount,
+        skippedActiveLegacyBackgroundJobCount,
         deletedPlannerJsonCount: deletedPlannerJson.length,
         deletedPlannerJson,
         truncated: !!listed.truncated,
@@ -1989,21 +2017,17 @@ export async function onRequest(context) {
 
     if (path === "/api/migration/v2/backfill-legacy-db" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
-        try {
-            const body = await request.json().catch(() => ({}));
-            const planner = await backfillLegacyPlannerToV2(env, body.limit ?? 100);
-            const background = await backfillLegacyBackgroundToV2(env, body.limit ?? 100);
-            return jsonResponse({ planner, background });
-        } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
-        }
+        return jsonResponse({ error: 'legacy DB backfill is disabled after v2 migration' }, { status: 410 });
     }
 
     if (path === "/api/migration/v2/cleanup-legacy-planner-state" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json().catch(() => ({}));
-            const result = await cleanupLegacyPlannerState(env, body.limit ?? 500, body.cursor || undefined);
+            const result = await cleanupLegacyPlannerState(env, body.limit ?? 500, body.cursor || undefined, {
+                cleanupBackground: body.cleanupBackground !== false,
+                forceBackground: body.forceBackground === true
+            });
             return jsonResponse(result);
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });

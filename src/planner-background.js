@@ -1355,7 +1355,7 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
             .bind(objectKey, canonicalObjectKey),
         env.DB.prepare(`
             INSERT INTO v2_planner_runs (
-                id, project_id, character_id, status, mode, default_count, legacy_object_key,
+                id, project_id, character_id, status, mode, default_count, source_object_key,
                 ui_status, stage, stage_label, background_job_id, background_status_json,
                 running_situation_ids_json, created_at, updated_at, completed_at, confirmed_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -1365,7 +1365,7 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
                 status = excluded.status,
                 mode = excluded.mode,
                 default_count = excluded.default_count,
-                legacy_object_key = excluded.legacy_object_key,
+                source_object_key = excluded.source_object_key,
                 ui_status = excluded.ui_status,
                 stage = excluded.stage,
                 stage_label = excluded.stage_label,
@@ -1409,7 +1409,7 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
                 planner_run_id = excluded.planner_run_id,
                 source_type = excluded.source_type,
                 updated_at = excluded.updated_at
-        `).bind(objectKey, runId, objectKey === canonicalObjectKey ? "canonical" : "legacy_alias", timestamp, timestamp)
+        `).bind(objectKey, runId, objectKey === canonicalObjectKey ? "canonical" : "alias", timestamp, timestamp)
     ];
     if (currentPlannerItemIds.length) {
         const itemPlaceholders = currentPlannerItemIds.map(() => "?").join(",");
@@ -1601,7 +1601,7 @@ async function syncV2GenerationFromBackgroundJob(env, jobId) {
         env.DB.prepare(`
             INSERT INTO v2_generation_jobs (
                 id, planner_run_id, project_id, character_id, status, mode, total_count,
-                completed_count, failed_count, legacy_background_job_id, started_at, completed_at, created_at, updated_at
+                completed_count, failed_count, source_background_job_id, started_at, completed_at, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, 'background', ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 planner_run_id = excluded.planner_run_id,
@@ -1638,7 +1638,7 @@ async function syncV2GenerationFromBackgroundJob(env, jobId) {
         statements.push(env.DB.prepare(`
             INSERT INTO v2_generation_job_items (
                 id, generation_job_id, planner_item_id, status, target_count, completed_count,
-                failed_count, error_message, legacy_background_item_id, created_at, updated_at
+                failed_count, error_message, source_background_item_id, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 generation_job_id = excluded.generation_job_id,
@@ -1669,7 +1669,7 @@ async function syncV2GenerationFromBackgroundJob(env, jobId) {
         statements.push(env.DB.prepare(`
             INSERT INTO v2_generation_queue (
                 id, generation_job_item_id, image_index, status, attempts, scheduled_at,
-                legacy_background_queue_id, created_at, updated_at
+                source_background_queue_id, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(id) DO UPDATE SET
                 generation_job_item_id = excluded.generation_job_item_id,
