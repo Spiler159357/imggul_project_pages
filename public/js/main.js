@@ -1,7 +1,7 @@
 // 8. main.js: 애플리케이션 진입점 및 모듈 통합 관리
 import './state.js?v=planner-demo-20260525a';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
-import * as Ui from './ui.js?v=project-return-20260525a';
+import * as Ui from './ui.js?v=planner-reconnect-20260608a';
 import * as Explorer from './explorer.js';
 import * as Craft from './craft.js?v=prompt-load-planner-meta-20260528a';
 import * as TempGallery from './temp_gallery.js?v=temp-focus-keys-20260527a';

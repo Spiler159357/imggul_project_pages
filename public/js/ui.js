@@ -226,6 +226,49 @@ export function updateThemeIcon() {
     }
 }
 
+/**
+ * 역할: 1회용 플래너 생성 이미지 DB 연결 복구 API를 실행한다.
+ * 매개변수: 없음.
+ * 주요 변수: since, button, result - 복구 기준 시각, 실행 버튼, 서버 응답.
+ * 반환값: 명시 반환 없음.
+ */
+export async function reconnectPlannerGeneratedImages() {
+    const since = '2026-06-08T05:55:08.018+09:00';
+    if (!confirm(`${since} 이후 생성된 플래너 이미지를 DB에 재연결합니다. 실행할까요?`)) return;
+    const button = document.getElementById('planner-reconnect-btn');
+    const previousHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-lucide="loader" class="w-5 h-5 animate-spin text-gray-600 dark:text-gray-400"></i>';
+        if (window.lucide) window.lucide.createIcons();
+    }
+    try {
+        const res = await fetch('/api/planner/reconnect-generated-images?_t=' + Date.now(), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json; charset=utf-8' },
+            body: JSON.stringify({ since, limit: 1000 }),
+            cache: 'no-store'
+        });
+        const result = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(result.error || `복구 실패 (${res.status})`);
+        alert([
+            '플래너 이미지 재연결 완료',
+            `스캔: ${result.scannedAssets || 0}`,
+            `연결: ${result.insertedLinks || 0}`,
+            `완료 처리 item: ${result.completedItems || 0}`,
+            `스킵: ${result.skippedCount || 0}`
+        ].join('\n'));
+    } catch (error) {
+        alert('플래너 이미지 재연결 실패: ' + (error.message || error));
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = previousHtml || '<i data-lucide="database-zap" class="w-5 h-5 text-gray-600 dark:text-gray-400"></i>';
+            if (window.lucide) window.lucide.createIcons();
+        }
+    }
+}
+
 const NAV_BUTTON_ACTIVE_CLASSES = ['shadow-sm', 'bg-white', 'dark:bg-gray-700', 'text-indigo-600', 'dark:text-indigo-400'];
 const NAV_BUTTON_INACTIVE_CLASSES = ['text-gray-500', 'hover:text-gray-700', 'dark:text-gray-400', 'dark:hover:text-gray-200'];
 

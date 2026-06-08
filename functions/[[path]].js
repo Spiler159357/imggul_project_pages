@@ -823,6 +823,228 @@ async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
     };
 }
 
+function getPlannerTempImageNumberFromKey(key = '') {
+    const match = String(key || '').match(/_planner_temp_image\/([^/]+)\//);
+    return match?.[1] || '';
+}
+
+function getBackgroundJobIdFromMetadata(metadataJson = '') {
+    const metadata = parseJsonField(metadataJson, {});
+    return metadata?.['Background Job'] || metadata?.backgroundJobId || '';
+}
+
+async function reconnectPlannerGeneratedImages(env, { since = '2026-06-08T05:55:08.018+09:00', limit = 1000, dryRun = false } = {}) {
+    if (!env.DB) throw new Error('DB binding is not configured');
+    await ensureV2PlannerSourceSchema(env);
+    const safeLimit = Math.min(5000, Math.max(1, Number.parseInt(limit, 10) || 1000));
+    const assets = (await env.DB.prepare(`
+        SELECT
+            a.id,
+            a.project_id,
+            a.r2_key,
+            a.created_at,
+            a.updated_at,
+            m.metadata_json
+        FROM v2_assets a
+        LEFT JOIN v2_asset_metadata m ON m.asset_id = a.id
+        LEFT JOIN v2_planner_generated_images pgi ON pgi.asset_id = a.id
+        WHERE a.created_at > ?
+          AND a.status = 'active'
+          AND a.r2_key LIKE '%_planner_temp_image/%'
+          AND pgi.asset_id IS NULL
+        ORDER BY a.created_at ASC
+        LIMIT ?
+    `).bind(since, safeLimit).all()).results || [];
+
+    const matched = [];
+    const skipped = [];
+    const itemIds = new Set();
+
+    for (const asset of assets) {
+        const imageNumber = getPlannerTempImageNumberFromKey(asset.r2_key);
+        if (!imageNumber) {
+            skipped.push({ assetId: asset.id, r2Key: asset.r2_key, reason: 'missing_image_number' });
+            continue;
+        }
+        const backgroundJobId = getBackgroundJobIdFromMetadata(asset.metadata_json);
+        const plannerItem = await env.DB.prepare(`
+            SELECT
+                pi.id,
+                pi.target_count,
+                pi.planner_run_id,
+                pi.image_number,
+                pi.sort_order,
+                r.background_job_id AS run_background_job_id
+            FROM v2_planner_items pi
+            JOIN v2_planner_runs r ON r.id = pi.planner_run_id
+            WHERE r.project_id = ?
+              AND pi.image_number = ?
+              AND (
+                    ? = ''
+                 OR pi.background_job_id = ?
+                 OR r.background_job_id = ?
+              )
+            ORDER BY
+                CASE
+                    WHEN pi.background_job_id = ? THEN 0
+                    WHEN r.background_job_id = ? THEN 1
+                    ELSE 2
+                END,
+                pi.updated_at DESC
+            LIMIT 1
+        `).bind(
+            asset.project_id,
+            imageNumber,
+            backgroundJobId,
+            backgroundJobId,
+            backgroundJobId,
+            backgroundJobId,
+            backgroundJobId
+        ).first();
+        if (!plannerItem?.id) {
+            skipped.push({ assetId: asset.id, r2Key: asset.r2_key, imageNumber, backgroundJobId, reason: 'planner_item_not_found' });
+            continue;
+        }
+        matched.push({ asset, plannerItem, imageNumber });
+        itemIds.add(plannerItem.id);
+    }
+
+    const existingCounts = new Map();
+    if (itemIds.size) {
+        const ids = [...itemIds];
+        const placeholders = ids.map(() => '?').join(',');
+        const rows = (await env.DB.prepare(`
+            SELECT planner_item_id, COUNT(*) AS count
+            FROM v2_planner_generated_images
+            WHERE planner_item_id IN (${placeholders})
+            GROUP BY planner_item_id
+        `).bind(...ids).all()).results || [];
+        rows.forEach(row => existingCounts.set(row.planner_item_id, Number(row.count || 0)));
+        ids.forEach(id => {
+            if (!existingCounts.has(id)) existingCounts.set(id, 0);
+        });
+    }
+
+    const inserted = [];
+    const statements = [];
+    const timestamp = nowIso();
+    const touchedRunIds = new Set();
+    for (const entry of matched) {
+        const currentCount = existingCounts.get(entry.plannerItem.id) || 0;
+        const imageIndex = currentCount;
+        existingCounts.set(entry.plannerItem.id, currentCount + 1);
+        const generatedId = makeStableDbId('pgen', `${entry.plannerItem.id}:${entry.asset.r2_key}`);
+        touchedRunIds.add(entry.plannerItem.planner_run_id);
+        inserted.push({
+            generatedImageId: generatedId,
+            plannerItemId: entry.plannerItem.id,
+            assetId: entry.asset.id,
+            r2Key: entry.asset.r2_key,
+            imageNumber: entry.imageNumber,
+            imageIndex
+        });
+        statements.push(
+            env.DB.prepare(`
+                INSERT INTO v2_planner_generated_images (id, planner_item_id, asset_id, image_index, status, created_at)
+                VALUES (?, ?, ?, ?, 'candidate', ?)
+                ON CONFLICT(asset_id) DO UPDATE SET
+                    id = excluded.id,
+                    planner_item_id = excluded.planner_item_id,
+                    image_index = excluded.image_index,
+                    status = excluded.status,
+                    created_at = excluded.created_at
+            `).bind(generatedId, entry.plannerItem.id, entry.asset.id, imageIndex, timestamp),
+            env.DB.prepare(`
+                UPDATE v2_assets
+                SET owner_type = 'planner_item',
+                    owner_id = ?,
+                    sort_order = ?,
+                    updated_at = ?
+                WHERE id = ?
+            `).bind(entry.plannerItem.id, imageIndex, timestamp, entry.asset.id)
+        );
+    }
+
+    const completedItemIds = [];
+    for (const [itemId, linkedCount] of existingCounts.entries()) {
+        const item = matched.find(entry => entry.plannerItem.id === itemId)?.plannerItem;
+        const targetCount = Number(item?.target_count || 0);
+        if (targetCount > 0 && linkedCount >= targetCount) {
+            completedItemIds.push(itemId);
+            statements.push(env.DB.prepare(`
+                UPDATE v2_planner_items
+                SET status = 'done',
+                    ui_status = 'done',
+                    stage = 'completed',
+                    stage_label = 'Completed',
+                    updated_at = ?
+                WHERE id = ?
+            `).bind(timestamp, itemId));
+        }
+    }
+    for (const runId of touchedRunIds) {
+        statements.push(env.DB.prepare(`
+            UPDATE v2_planner_runs
+            SET status = CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM v2_planner_items
+                        WHERE planner_run_id = ?
+                          AND status NOT IN ('done', 'confirmed')
+                    ) THEN 'completed'
+                    ELSE status
+                END,
+                ui_status = CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM v2_planner_items
+                        WHERE planner_run_id = ?
+                          AND status NOT IN ('done', 'confirmed')
+                    ) THEN 'completed'
+                    ELSE ui_status
+                END,
+                stage = CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM v2_planner_items
+                        WHERE planner_run_id = ?
+                          AND status NOT IN ('done', 'confirmed')
+                    ) THEN 'completed'
+                    ELSE stage
+                END,
+                stage_label = CASE
+                    WHEN NOT EXISTS (
+                        SELECT 1
+                        FROM v2_planner_items
+                        WHERE planner_run_id = ?
+                          AND status NOT IN ('done', 'confirmed')
+                    ) THEN 'Completed'
+                    ELSE stage_label
+                END,
+                updated_at = ?
+            WHERE id = ?
+        `).bind(runId, runId, runId, runId, timestamp, runId));
+    }
+
+    if (!dryRun) {
+        for (let i = 0; i < statements.length; i += 50) {
+            await env.DB.batch(statements.slice(i, i + 50));
+        }
+    }
+
+    return {
+        dryRun: !!dryRun,
+        since,
+        scannedAssets: assets.length,
+        matchedAssets: matched.length,
+        insertedLinks: inserted.length,
+        completedItems: completedItemIds.length,
+        skippedCount: skipped.length,
+        inserted,
+        skipped
+    };
+}
+
 async function migrateR2JsonStateToDb(env, limit = 500, cursor = undefined) {
     if (!env.DB) throw new Error('DB binding is not configured');
     if (!env.imgBucket) throw new Error('imgBucket binding is not configured');
@@ -1918,6 +2140,21 @@ export async function onRequest(context) {
         try {
             const body = await request.json().catch(() => ({}));
             const result = await cleanupDeletedAssets(env, body.olderThanHours ?? 24, body.limit ?? 100);
+            return jsonResponse(result);
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/planner/reconnect-generated-images" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json().catch(() => ({}));
+            const result = await reconnectPlannerGeneratedImages(env, {
+                since: body.since || '2026-06-08T05:55:08.018+09:00',
+                limit: body.limit ?? 1000,
+                dryRun: body.dryRun === true
+            });
             return jsonResponse(result);
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
