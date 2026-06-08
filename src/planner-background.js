@@ -1336,6 +1336,10 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
     const characterId = header.characterId || identity.characterId || makeStableDbId("character", objectKey);
     const characterPrefix = header.characterPrefix || characterId;
     const runId = makeStableDbId("run", canonicalObjectKey);
+    const currentPlannerItemIds = items.map((rawItem, index) => {
+        const situationId = rawItem?.situationId || makeStableDbId("situation", `${objectKey}:${index}`);
+        return makeStableDbId("pitem", `${objectKey}:${situationId}`);
+    });
     const statements = [
         env.DB.prepare(`
             INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
@@ -1347,15 +1351,6 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
             VALUES (?, ?, ?, ?, 0, ?, ?)
             ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, prefix = excluded.prefix, updated_at = excluded.updated_at
         `).bind(characterId, projectId, characterPrefix, characterPrefix, timestamp, timestamp),
-        env.DB.prepare("DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))")
-            .bind("planner_item", runId),
-        env.DB.prepare("DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?))")
-            .bind("planner_item", runId),
-        env.DB.prepare("DELETE FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)")
-            .bind("planner_item", runId),
-        env.DB.prepare("DELETE FROM v2_planner_generated_images WHERE planner_item_id IN (SELECT id FROM v2_planner_items WHERE planner_run_id = ?)")
-            .bind(runId),
-        env.DB.prepare("DELETE FROM v2_planner_items WHERE planner_run_id = ?").bind(runId),
         env.DB.prepare("DELETE FROM v2_planner_sources WHERE source_key IN (?, ?)")
             .bind(objectKey, canonicalObjectKey),
         env.DB.prepare(`
@@ -1416,6 +1411,17 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
                 updated_at = excluded.updated_at
         `).bind(objectKey, runId, objectKey === canonicalObjectKey ? "canonical" : "legacy_alias", timestamp, timestamp)
     ];
+    if (currentPlannerItemIds.length) {
+        const itemPlaceholders = currentPlannerItemIds.map(() => "?").join(",");
+        statements.push(
+            env.DB.prepare(`DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (${itemPlaceholders}))`)
+                .bind("planner_item", ...currentPlannerItemIds),
+            env.DB.prepare(`DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (${itemPlaceholders}))`)
+                .bind("planner_item", ...currentPlannerItemIds),
+            env.DB.prepare(`DELETE FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (${itemPlaceholders})`)
+                .bind("planner_item", ...currentPlannerItemIds)
+        );
+    }
 
     const seenAssetIds = new Set();
 
@@ -1450,6 +1456,38 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
                     stage, stage_label, error_message, background_job_id, background_item_id, extra_json,
                     created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(id) DO UPDATE SET
+                    planner_run_id = excluded.planner_run_id,
+                    situation_id = excluded.situation_id,
+                    image_number = excluded.image_number,
+                    status = CASE
+                        WHEN v2_planner_items.status IN ('done', 'confirmed')
+                         AND excluded.status IN ('pending', 'running')
+                         AND excluded.background_job_id = ''
+                         AND excluded.background_item_id = ''
+                        THEN v2_planner_items.status
+                        ELSE excluded.status
+                    END,
+                    target_count = excluded.target_count,
+                    selected_generated_image_id = COALESCE(excluded.selected_generated_image_id, v2_planner_items.selected_generated_image_id),
+                    confirmed_asset_id = COALESCE(excluded.confirmed_asset_id, v2_planner_items.confirmed_asset_id),
+                    sort_order = excluded.sort_order,
+                    ui_status = CASE
+                        WHEN v2_planner_items.ui_status IN ('done', 'confirmed')
+                         AND excluded.ui_status IN ('pending', 'running')
+                         AND excluded.background_job_id = ''
+                         AND excluded.background_item_id = ''
+                        THEN v2_planner_items.ui_status
+                        ELSE excluded.ui_status
+                    END,
+                    situation_index = excluded.situation_index,
+                    stage = COALESCE(NULLIF(excluded.stage, ''), v2_planner_items.stage),
+                    stage_label = COALESCE(NULLIF(excluded.stage_label, ''), v2_planner_items.stage_label),
+                    error_message = excluded.error_message,
+                    background_job_id = COALESCE(NULLIF(excluded.background_job_id, ''), v2_planner_items.background_job_id),
+                    background_item_id = COALESCE(NULLIF(excluded.background_item_id, ''), v2_planner_items.background_item_id),
+                    extra_json = excluded.extra_json,
+                    updated_at = excluded.updated_at
             `).bind(
                 itemId,
                 runId,
@@ -1513,6 +1551,20 @@ async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
             );
         });
     });
+
+    if (currentPlannerItemIds.length) {
+        const itemPlaceholders = currentPlannerItemIds.map(() => "?").join(",");
+        statements.push(env.DB.prepare(`
+            DELETE FROM v2_planner_items
+            WHERE planner_run_id = ?
+              AND id NOT IN (${itemPlaceholders})
+              AND id NOT IN (
+                  SELECT planner_item_id
+                  FROM v2_planner_generated_images
+                  WHERE planner_item_id IS NOT NULL
+              )
+        `).bind(runId, ...currentPlannerItemIds));
+    }
 
     for (let i = 0; i < statements.length; i += 50) {
         await env.DB.batch(statements.slice(i, i + 50));
