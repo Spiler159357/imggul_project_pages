@@ -18,6 +18,7 @@ const STAGE_LABELS = {
     zip_extract: "Extracting generated image",
     webp_encode: "Encoding WebP",
     r2_put: "Saving image to R2",
+    saving: "Saving image",
     metadata_put: "Saving metadata",
     rollup: "Updating job status",
     completed: "Completed",
@@ -1983,7 +1984,6 @@ async function updateProgressStage(env, jobId, itemId, stage) {
         env.DB.prepare("UPDATE planner_background_items SET stage = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancel_requested', 'paused')")
             .bind(stage, updatedAt, itemId)
     ]);
-    await syncPlannerMetaToR2(env, jobId).catch(() => null);
 }
 
 async function refreshJobRollup(env, jobId) {
@@ -2212,9 +2212,7 @@ export async function processPlannerQueueMessage(env, message) {
         const generation = JSON.parse(item.generation_json || "{}");
         const baseSeed = Number.parseInt(generation.seed, 10);
         const seed = Number.isFinite(baseSeed) ? (baseSeed + imageIndex) % 4294967296 : Math.floor(Math.random() * 4294967296);
-        const generatedAt = nowIso();
         const request = buildNovelAiPayload(generation, seed);
-        await updateProgressStage(env, jobId, itemId, "novelai_request");
         await waitForNovelAiSlot(env);
         await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         if (await isBackgroundJobPaused(env, jobId, itemId)) {
@@ -2231,17 +2229,14 @@ export async function processPlannerQueueMessage(env, message) {
         }
         const zipBuffer = await callNovelAi(env, request.payload);
         await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-        await updateProgressStage(env, jobId, itemId, "novelai_response");
-        await updateProgressStage(env, jobId, itemId, "zip_extract");
+        await updateProgressStage(env, jobId, itemId, "saving");
         const extracted = await extractFirstZipFile(zipBuffer);
         await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-        await updateProgressStage(env, jobId, itemId, "webp_encode");
         const webpBuffer = await encodeWebP(env, extracted.data);
         await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         const fileName = makeResultFileName(imageIndex);
         const key = `${item.output_prefix}${fileName}`;
 
-        await updateProgressStage(env, jobId, itemId, "r2_put");
         await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         await putR2WithRetry(env.imgBucket, key, webpBuffer, {
             httpMetadata: { contentType: "image/webp" },
@@ -2254,33 +2249,7 @@ export async function processPlannerQueueMessage(env, message) {
 
         const resultKeys = parseResultKeys(item.result_keys);
         resultKeys[imageIndex] = key;
-        await updateProgressStage(env, jobId, itemId, "metadata_put");
         await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-        const metadata = {
-            "Negative Prompt": request.negative,
-            Resolution: `${request.width} x ${request.height}`,
-            Seed: seed,
-            Steps: request.steps,
-            Sampler: request.sampler,
-            "CFG Scale": request.scale,
-            Model: request.model,
-            "Background Job": jobId,
-            "Generated At": generatedAt
-        };
-        if (Object.keys(request.splitPrompts || {}).length) {
-            metadata["Split Prompts"] = request.splitPrompts;
-        } else {
-            metadata.Prompt = request.prompt;
-        }
-        await saveMetadata(env, item.output_prefix, fileName, metadata).catch(error => writeBackgroundErrorLog(env, error, {
-            jobId,
-            itemId,
-            imageIndex,
-            attempt,
-            stage: "metadata_put",
-            outputPrefix: item.output_prefix,
-            savedImageKey: key
-        }));
 
         const completedCount = Number(item.completed_count || 0) + 1;
         const failedCount = Number(item.failed_count || 0);
