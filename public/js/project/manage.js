@@ -1,4 +1,4 @@
-import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js';
+import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js';
 import { renderCharacterSection } from './character.js';
 import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js';
 import { renderSituationSection } from './situation.js';
@@ -406,6 +406,7 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         await Promise.all([
             loadProjectSituations(project),
             loadProjectCharacters(project),
+            loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts()),
             loadPlannerSettings(project).catch(() => normalizePlannerSettings())
         ]).catch(err => {
             if (window.PROJECT_ACTIVE_SECTION === 'planner') renderPlannerSection(section, { error: err.message });
@@ -549,6 +550,31 @@ export function renderPromptSection(section) {
                                 <span>그림체 저장</span>
                             </button>
                         </div>
+                        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                            <div class="flex items-center justify-between gap-2 mb-2">
+                                <span class="block text-xs font-bold text-gray-700 dark:text-gray-300">배경 프롬프트</span>
+                                <button type="button" onclick="window.addProjectBackgroundPrompt()" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
+                                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
+                                    신규 배경
+                                </button>
+                            </div>
+                            <select id="project-background-prompt-select" onchange="window.selectProjectBackgroundPrompt(this.value)" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100">
+                                <option value="">배경을 불러오는 중입니다.</option>
+                            </select>
+                            <input id="project-background-prompt-name" class="mt-2 w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100" placeholder="배경 이름">
+                            <textarea id="project-background-prompt-input" class="mt-2 w-full min-h-[100px] resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="플래너의 배경 항목으로 가져올 프롬프트"></textarea>
+                            <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
+                                <p id="project-background-prompt-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                                <button id="project-background-prompt-delete-btn" type="button" onclick="window.deleteProjectBackgroundPrompt()" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20 transition">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                    <span>삭제</span>
+                                </button>
+                                <button id="project-background-prompt-save-btn" type="button" onclick="window.saveProjectBackgroundPrompt()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400 transition">
+                                    <i data-lucide="save" class="w-4 h-4"></i>
+                                    <span>배경 저장</span>
+                                </button>
+                            </div>
+                        </div>
                         <div class="mt-auto pt-4 flex items-center justify-end gap-3">
                             <p id="project-prompt-save-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                             <button id="project-prompt-save-btn" type="button" onclick="window.saveProjectPromptMarkdown()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
@@ -565,6 +591,7 @@ export function renderPromptSection(section) {
     initProjectPromptMarkdownToggle();
     hydrateProjectPromptInput();
     hydrateProjectStylePromptInput();
+    hydrateProjectBackgroundPromptInputs();
 }
 
 export async function saveProjectPromptMarkdown() {
@@ -626,5 +653,171 @@ export async function saveProjectStylePrompt() {
             button.innerHTML = previousButtonHtml;
             refreshProjectIcons();
         }
+    }
+}
+
+export function renderProjectBackgroundPromptInputs(data = {}) {
+    const select = document.getElementById('project-background-prompt-select');
+    const nameInput = document.getElementById('project-background-prompt-name');
+    const promptInput = document.getElementById('project-background-prompt-input');
+    const deleteButton = document.getElementById('project-background-prompt-delete-btn');
+    if (!select || !nameInput || !promptInput) return;
+
+    const normalized = normalizeProjectBackgroundPrompts(data);
+    const activeBackground = normalized.backgrounds.find(background => background.id === normalized.activeBackgroundId)
+        || normalized.backgrounds[0]
+        || null;
+
+    select.innerHTML = normalized.backgrounds.length
+        ? normalized.backgrounds.map(background => `<option value="${escapeHtml(background.id)}" ${background.id === activeBackground?.id ? 'selected' : ''}>${escapeHtml(background.name)}</option>`).join('')
+        : '<option value="">등록된 배경이 없습니다.</option>';
+    select.disabled = !normalized.backgrounds.length;
+    nameInput.value = activeBackground?.name || '';
+    promptInput.value = activeBackground?.prompt || '';
+    nameInput.disabled = !activeBackground;
+    promptInput.disabled = !activeBackground;
+    if (deleteButton) deleteButton.disabled = normalized.backgrounds.length <= 1;
+}
+
+export async function hydrateProjectBackgroundPromptInputs() {
+    const project = getActiveProject();
+    const status = document.getElementById('project-background-prompt-status');
+    if (!project) return;
+    if (status) status.textContent = '배경 프롬프트를 불러오는 중입니다.';
+
+    try {
+        const data = await loadProjectBackgroundPrompts(project);
+        renderProjectBackgroundPromptInputs(data);
+        if (status) status.textContent = data.backgrounds.length ? '배경 프롬프트를 불러왔습니다.' : '';
+    } catch (err) {
+        if (status) status.textContent = err.message || '배경 프롬프트를 불러오지 못했습니다.';
+    }
+}
+
+export function readProjectBackgroundPromptInputs() {
+    const project = getActiveProject();
+    const data = getProjectBackgroundPromptData(project);
+    const selectedId = document.getElementById('project-background-prompt-select')?.value || data.activeBackgroundId;
+    const name = document.getElementById('project-background-prompt-name')?.value.trim() || '';
+    const prompt = document.getElementById('project-background-prompt-input')?.value.trim() || '';
+
+    return normalizeProjectBackgroundPrompts({
+        backgrounds: data.backgrounds.map(background => background.id === selectedId
+            ? {
+                ...background,
+                name: name || background.name,
+                prompt,
+                updatedAt: Date.now()
+            }
+            : background
+        ),
+        activeBackgroundId: selectedId
+    });
+}
+
+export async function selectProjectBackgroundPrompt(backgroundId) {
+    const project = getActiveProject();
+    if (!project) return;
+    const currentData = getProjectBackgroundPromptData(project);
+    const nextData = normalizeProjectBackgroundPrompts({
+        backgrounds: currentData.backgrounds,
+        activeBackgroundId: backgroundId
+    });
+    project.backgroundPrompts = nextData.backgrounds;
+    project.activeBackgroundPromptId = nextData.activeBackgroundId;
+    renderProjectBackgroundPromptInputs(nextData);
+}
+
+export async function addProjectBackgroundPrompt() {
+    const project = getActiveProject();
+    if (!project) return;
+    const status = document.getElementById('project-background-prompt-status');
+    const currentData = readProjectBackgroundPromptInputs();
+    const newBackground = {
+        id: createPromptVariantId('background'),
+        name: `Background ${currentData.backgrounds.length + 1}`,
+        prompt: '',
+        updatedAt: Date.now()
+    };
+    const nextData = normalizeProjectBackgroundPrompts({
+        backgrounds: [...currentData.backgrounds, newBackground],
+        activeBackgroundId: newBackground.id
+    });
+    project.backgroundPrompts = nextData.backgrounds;
+    project.activeBackgroundPromptId = nextData.activeBackgroundId;
+    renderProjectBackgroundPromptInputs(nextData);
+    if (status) status.textContent = '새 배경을 추가했습니다. 내용을 입력한 뒤 저장하세요.';
+    refreshProjectIcons();
+}
+
+export async function saveProjectBackgroundPrompt() {
+    const project = getActiveProject();
+    const button = document.getElementById('project-background-prompt-save-btn');
+    const status = document.getElementById('project-background-prompt-status');
+    if (!project) return;
+
+    const data = readProjectBackgroundPromptInputs();
+    if (!data.backgrounds.length) {
+        if (status) status.textContent = '저장할 배경이 없습니다.';
+        return;
+    }
+
+    const activeBackground = data.backgrounds.find(background => background.id === data.activeBackgroundId);
+    if (activeBackground && !activeBackground.name.trim()) {
+        if (status) status.textContent = '배경 이름을 입력하세요.';
+        return;
+    }
+
+    const previousButtonHtml = button?.innerHTML || '';
+    if (button) {
+        button.disabled = true;
+        button.innerHTML = '<i data-lucide="loader" class="w-4 h-4 animate-spin"></i><span>저장 중</span>';
+        refreshProjectIcons();
+    }
+    if (status) status.textContent = '';
+
+    try {
+        const savedData = await saveProjectBackgroundPrompts(project, data);
+        renderProjectBackgroundPromptInputs(savedData);
+        if (status) status.textContent = '배경 프롬프트를 저장했습니다.';
+    } catch (err) {
+        if (status) status.textContent = err.message || '배경 프롬프트 저장에 실패했습니다.';
+    } finally {
+        if (button) {
+            button.disabled = false;
+            button.innerHTML = previousButtonHtml;
+            refreshProjectIcons();
+        }
+    }
+}
+
+export async function deleteProjectBackgroundPrompt() {
+    const project = getActiveProject();
+    const status = document.getElementById('project-background-prompt-status');
+    if (!project) return;
+
+    const currentData = readProjectBackgroundPromptInputs();
+    if (currentData.backgrounds.length <= 1) {
+        if (status) status.textContent = '배경은 최소 1개 이상 남겨야 합니다.';
+        return;
+    }
+
+    const targetId = currentData.activeBackgroundId;
+    const target = currentData.backgrounds.find(background => background.id === targetId);
+    if (!target) return;
+    if (!confirm(`'${target.name}' 배경을 삭제하시겠습니까?`)) return;
+
+    const nextBackgrounds = currentData.backgrounds.filter(background => background.id !== targetId);
+    const nextData = normalizeProjectBackgroundPrompts({
+        backgrounds: nextBackgrounds,
+        activeBackgroundId: nextBackgrounds[0]?.id || ''
+    });
+
+    try {
+        const savedData = await saveProjectBackgroundPrompts(project, nextData);
+        renderProjectBackgroundPromptInputs(savedData);
+        if (status) status.textContent = '배경을 삭제했습니다.';
+    } catch (err) {
+        if (status) status.textContent = err.message || '배경 삭제에 실패했습니다.';
     }
 }

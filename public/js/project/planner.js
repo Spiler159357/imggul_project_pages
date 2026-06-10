@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js';
 import { renderSectionHeader } from './manage.js';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js';
 import { combinePromptParts, getSituationById } from './situation.js';
@@ -658,6 +658,24 @@ export function getPlannerPromptVariantName(variant) {
     return variant?.name || variant?.label || variant?.id || 'Default';
 }
 
+function getPlannerBackgroundData(project) {
+    const data = getProjectBackgroundPromptData(project);
+    if (data.backgrounds.length) return data;
+    const defaultBackground = createDefaultBackgroundPrompt();
+    return normalizeProjectBackgroundPrompts({
+        backgrounds: [defaultBackground],
+        activeBackgroundId: defaultBackground.id
+    });
+}
+
+function getPlannerBackgroundPromptById(project, backgroundId = '') {
+    const data = getPlannerBackgroundData(project);
+    return data.backgrounds.find(background => background.id === backgroundId)
+        || data.backgrounds.find(background => background.id === data.activeBackgroundId)
+        || data.backgrounds[0]
+        || createDefaultBackgroundPrompt();
+}
+
 export function distributePlannerCount(totalCount, variantCount) {
     const total = Math.max(1, parseInt(totalCount, 10) || 1);
     const count = Math.max(1, parseInt(variantCount, 10) || 1);
@@ -666,7 +684,7 @@ export function distributePlannerCount(totalCount, variantCount) {
     return Array.from({ length: count }, (_, index) => base + (index < remainder ? 1 : 0));
 }
 
-export function buildPlannerGeneration({ currentSettings, plannerSettings, projectStyle, characterVariant, situationVariant, count }) {
+export function buildPlannerGeneration({ currentSettings, plannerSettings, projectStyle, characterVariant, situationVariant, count, backgroundPrompt = '' }) {
     const characterParts = characterVariant?.parts || {};
     const prompt = situationVariant?.prompt || {};
     const generationSource = situationVariant?.generation || {};
@@ -680,7 +698,7 @@ export function buildPlannerGeneration({ currentSettings, plannerSettings, proje
             : (characterParts.clothing || prompt.clothing || currentSettings.prompts?.['prompt-clothing'] || ''),
         expression: prompt.expression || currentSettings.prompts?.['prompt-expression'] || '',
         action: prompt.action || currentSettings.prompts?.['prompt-action'] || '',
-        background: prompt.background || currentSettings.prompts?.['prompt-background'] || 'white background',
+        background: backgroundPrompt || prompt.background || currentSettings.prompts?.['prompt-background'] || '',
         negative: combinePromptParts(characterParts.negative, prompt.negative) || currentSettings.negative || ''
     };
     const generation = applyPlannerSettingsToGeneration({
@@ -1065,6 +1083,7 @@ export function renderPlannerSituationPlanOverlay() {
     document.querySelectorAll('[data-planner-plan-situation-variant]').forEach(input => {
         input.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('situation'));
     });
+    document.getElementById('planner-plan-background-variant')?.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('background'));
     if (window.lucide) lucide.createIcons();
     if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
 }
@@ -1099,7 +1118,10 @@ export function updatePlannerPlanModalDefaults(scope = 'all') {
         if (isNsfw) setValue('planner-plan-clothing', situationPrompt.clothing || '');
         setValue('planner-plan-expression', situationPrompt.expression || '');
         setValue('planner-plan-action', situationPrompt.action || '');
-        setValue('planner-plan-background', situationPrompt.background || 'white background');
+    }
+    if (scope === 'all' || scope === 'situation' || scope === 'background') {
+        const selectedBackgroundId = document.getElementById('planner-plan-background-variant')?.value || '';
+        setValue('planner-plan-background', getPlannerBackgroundPromptById(project, selectedBackgroundId).prompt || situationPrompt.background || '');
     }
     const styleInput = document.getElementById('planner-plan-style');
     if (styleInput && !styleInput.value.trim()) styleInput.value = window.PROJECT_PLANNER_PROJECT_STYLE || '';
@@ -1344,6 +1366,8 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
     const characterParts = selectedCharacterVariant?.parts || {};
     const projectStyle = window.PROJECT_PLANNER_PROJECT_STYLE || '';
     const isNsfw = getSituationRating(situation) === 'nsfw';
+    const backgroundData = getPlannerBackgroundData(project);
+    const activeBackground = getPlannerBackgroundPromptById(project, existingItem?.backgroundPromptId || backgroundData.activeBackgroundId);
     const defaultFields = {
         style: projectStyle,
         composition: situationPrompt.composition || '',
@@ -1351,7 +1375,7 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
         clothing: isNsfw ? (situationPrompt.clothing || '') : (characterParts.clothing || situationPrompt.clothing || ''),
         expression: situationPrompt.expression || '',
         action: situationPrompt.action || '',
-        background: situationPrompt.background || 'white background',
+        background: activeBackground.prompt || situationPrompt.background || '',
         negative: combinePromptParts(characterParts.negative, situationPrompt.negative)
     };
     const fields = {
@@ -1359,8 +1383,11 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
         ...(existingItem?.generation?.fields || {})
     };
     if (!fields.style) fields.style = projectStyle;
-    if (!fields.background) fields.background = 'white background';
+    if (!fields.background) fields.background = defaultFields.background;
     if (!fields.negative) fields.negative = defaultFields.negative;
+    const selectedBackgroundId = backgroundData.backgrounds.some(background => background.id === existingItem?.backgroundPromptId)
+        ? existingItem.backgroundPromptId
+        : activeBackground.id;
     const count = existingItem?.count === undefined
         ? PLANNER_DEFAULT_IMAGE_COUNT
         : clampPlannerImageCount(existingItem.count);
@@ -1401,7 +1428,13 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
                         <label class="block"><span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">의상</span><textarea id="planner-plan-clothing" rows="3" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.clothing || '')}</textarea></label>
                         <label class="block"><span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">표정</span><textarea id="planner-plan-expression" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.expression || '')}</textarea></label>
                         <label class="block"><span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">행위</span><textarea id="planner-plan-action" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.action || '')}</textarea></label>
-                        <label class="block"><span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">배경</span><textarea id="planner-plan-background" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.background || '')}</textarea></label>
+                        <div class="block">
+                            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">배경</span>
+                            <select id="planner-plan-background-variant" class="mb-2 w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
+                                ${backgroundData.backgrounds.map(background => `<option value="${escapeHtml(background.id)}" ${background.id === selectedBackgroundId ? 'selected' : ''}>${escapeHtml(background.name)}</option>`).join('')}
+                            </select>
+                            <textarea id="planner-plan-background" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.background || '')}</textarea>
+                        </div>
                         <label class="block"><span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">부정 프롬프트</span><textarea id="planner-plan-negative" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-red-300 dark:border-red-800 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.negative || '')}</textarea></label>
                     </div>
                     <p id="planner-plan-modal-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
@@ -1604,6 +1637,7 @@ export async function refreshPlannerPanel() {
         loadPlannerMeta(project, characterId, { force: true }).catch(() => null),
         loadPlannerSettings(project, true).catch(() => normalizePlannerSettings()),
         loadProjectStylePrompt(project).catch(() => ''),
+        loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts()),
         character ? loadCharacterFiles(character).catch(() => []) : Promise.resolve([]),
         character ? loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
     ]);
@@ -1655,7 +1689,8 @@ export async function loadPlannerForSelectedCharacter() {
     }
     const [meta, projectStyle] = await Promise.all([
         loadPlannerMeta(project, characterId, { force: true }).catch(() => null),
-        loadProjectStylePrompt(project).catch(() => '')
+        loadProjectStylePrompt(project).catch(() => ''),
+        loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts())
     ]);
     window.PROJECT_PLANNER_META = meta;
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, undefined, { force: true }).catch(() => meta ? [{ character, meta }] : []);
@@ -1672,6 +1707,7 @@ export async function openPlannerSituationPlanModal(situationId) {
     const character = getCharacterById(project, characterId);
     if (character) await loadCharacterMeta(character).catch(() => ({}));
     window.PROJECT_PLANNER_PROJECT_STYLE = await loadProjectStylePrompt(project).catch(() => '');
+    await loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts());
     window.PLANNER_PLAN_MODAL_SITUATION_ID = situationId;
     renderPlannerSituationPlanOverlay();
 }
@@ -1900,6 +1936,7 @@ export async function savePlannerSituationPlan() {
     const projectStyle = document.getElementById('planner-plan-style')?.value.trim()
         || await loadProjectStylePrompt(project).catch(() => '')
         || '';
+    const backgroundPromptId = document.getElementById('planner-plan-background-variant')?.value || '';
     const overrideFields = {
         composition: document.getElementById('planner-plan-composition')?.value.trim() || '',
         character: document.getElementById('planner-plan-character')?.value.trim() || '',
@@ -1931,6 +1968,7 @@ export async function savePlannerSituationPlan() {
                 currentSettings,
                 plannerSettings,
                 projectStyle,
+                backgroundPrompt: overrideFields.background || getPlannerBackgroundPromptById(project, backgroundPromptId).prompt,
                 characterVariant: {
                     ...characterVariant,
                     parts: {
@@ -1957,6 +1995,8 @@ export async function savePlannerSituationPlan() {
         status: 'pending',
         characterPromptVariantId: characterVariant.id,
         characterPromptVariantName: getPlannerPromptVariantName(characterVariant),
+        backgroundPromptId,
+        backgroundPromptName: getPlannerBackgroundPromptById(project, backgroundPromptId).name,
         situationPromptVariantIds: activeSituationVariants.map(variant => variant.id),
         variantCounts: Object.fromEntries(variantGenerations.map(entry => [entry.situationPromptVariantId, entry.count])),
         variantGenerations,
@@ -2001,6 +2041,9 @@ function buildPlannerPlanItemFromSituation({
     plannerSettings,
     currentSettings,
     projectStyle,
+    backgroundPrompt = '',
+    backgroundPromptId = '',
+    backgroundPromptName = '',
     count,
     selectedCharacterVariantId = '',
     selectedSituationVariantIds = null,
@@ -2040,6 +2083,7 @@ function buildPlannerPlanItemFromSituation({
                 currentSettings,
                 plannerSettings,
                 projectStyle,
+                backgroundPrompt: fieldOverrides.background || backgroundPrompt,
                 characterVariant: {
                     ...characterVariant,
                     parts: {
@@ -2066,6 +2110,8 @@ function buildPlannerPlanItemFromSituation({
         status: 'pending',
         characterPromptVariantId: characterVariant.id,
         characterPromptVariantName: getPlannerPromptVariantName(characterVariant),
+        backgroundPromptId,
+        backgroundPromptName,
         situationPromptVariantIds: activeSituationVariants.map(variant => variant.id),
         variantCounts: Object.fromEntries(variantGenerations.map(entry => [entry.situationPromptVariantId, entry.count])),
         variantGenerations,
@@ -2113,11 +2159,13 @@ export async function createMissingPlannerPlans() {
 
     const [plannerSettings, projectStyle] = await Promise.all([
         loadPlannerSettings(project).catch(() => normalizePlannerSettings()),
-        loadProjectStylePrompt(project).catch(() => '')
+        loadProjectStylePrompt(project).catch(() => ''),
+        loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts())
     ]);
     const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
     const characterMeta = character.meta || {};
     const defaultCount = clampPlannerImageCount(meta?.defaultCount || PLANNER_DEFAULT_IMAGE_COUNT);
+    const defaultBackground = getPlannerBackgroundPromptById(project);
     if (!meta || meta.characterId !== character.id) {
         meta = {
             projectId: project.id,
@@ -2140,6 +2188,9 @@ export async function createMissingPlannerPlans() {
             plannerSettings,
             currentSettings,
             projectStyle,
+            backgroundPrompt: defaultBackground.prompt,
+            backgroundPromptId: defaultBackground.id,
+            backgroundPromptName: defaultBackground.name,
             count: defaultCount
         }))
         .filter(Boolean);

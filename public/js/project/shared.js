@@ -290,6 +290,10 @@ export function getPlannerSettingsKey(project) {
     return `${getPlannerPrefix(project)}_planner_settings.json`;
 }
 
+export function getProjectBackgroundPromptsKey(project) {
+    return `${project.prefix}_background_prompts.json`;
+}
+
 export const DEFAULT_PLANNER_RESOLUTION = '832x1216';
 export const PLANNER_CHARACTER_CACHE_KEY = 'imggul_planner_selected_characters';
 export const SITUATION_RATING_CACHE_KEY = 'imggul_situation_selected_ratings';
@@ -368,6 +372,57 @@ export function normalizePlannerV4PromptRows(rows = []) {
 
 export function createPromptVariantId(prefix = 'variant') {
     return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+export function createDefaultBackgroundPrompt() {
+    return {
+        id: 'default',
+        name: 'White background',
+        prompt: 'white background',
+        updatedAt: Date.now()
+    };
+}
+
+export function normalizeProjectBackgroundPrompts(data = {}) {
+    const source = Array.isArray(data?.backgrounds) ? data.backgrounds : [];
+    const backgrounds = source.map((background, index) => ({
+        id: String(background?.id || createPromptVariantId('background')),
+        name: String(background?.name || background?.label || `Background ${index + 1}`).trim() || `Background ${index + 1}`,
+        prompt: String(background?.prompt || '').trim(),
+        updatedAt: background?.updatedAt || Date.now()
+    })).filter(background => background.name || background.prompt);
+
+    const activeBackgroundId = backgrounds.some(background => background.id === data?.activeBackgroundId)
+        ? data.activeBackgroundId
+        : backgrounds[0]?.id || '';
+
+    return {
+        backgrounds,
+        activeBackgroundId
+    };
+}
+
+export function getProjectBackgroundPrompts(project) {
+    return Array.isArray(project?.backgroundPrompts) ? project.backgroundPrompts : [];
+}
+
+export function getProjectBackgroundPromptData(project) {
+    return normalizeProjectBackgroundPrompts({
+        backgrounds: getProjectBackgroundPrompts(project),
+        activeBackgroundId: project?.activeBackgroundPromptId || ''
+    });
+}
+
+export function getActiveProjectBackgroundPrompt(data = {}) {
+    const normalized = normalizeProjectBackgroundPrompts(data);
+    return normalized.backgrounds.find(background => background.id === normalized.activeBackgroundId)
+        || normalized.backgrounds[0]
+        || null;
+}
+
+export function getDefaultPlannerBackgroundPrompt(project) {
+    const data = getProjectBackgroundPromptData(project);
+    return getActiveProjectBackgroundPrompt(data)?.prompt || createDefaultBackgroundPrompt().prompt;
 }
 
 export function normalizeCharacterPromptParts(parts = {}, fallbackPrompt = '') {
@@ -772,6 +827,61 @@ export async function saveProjectSituations(project) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || '상황 저장 실패');
     }
+}
+
+export async function loadProjectBackgroundPrompts(project, force = false) {
+    if (!project?.prefix) return normalizeProjectBackgroundPrompts();
+    if (!force && project.backgroundPromptsLoaded) return getProjectBackgroundPromptData(project);
+
+    const key = getProjectBackgroundPromptsKey(project);
+    const res = await fetch(`/api/db/json-document?type=background_prompts&key=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
+
+    if (res.status === 404) {
+        const data = normalizeProjectBackgroundPrompts();
+        project.backgroundPrompts = data.backgrounds;
+        project.activeBackgroundPromptId = data.activeBackgroundId;
+        project.backgroundPromptsLoaded = true;
+        return data;
+    }
+
+    if (!res.ok) throw new Error('배경 프롬프트 목록을 불러오지 못했습니다.');
+
+    const payload = await res.json();
+    const data = normalizeProjectBackgroundPrompts(payload.data || {});
+    project.backgroundPrompts = data.backgrounds;
+    project.activeBackgroundPromptId = data.activeBackgroundId;
+    project.backgroundPromptsLoaded = true;
+
+    return data;
+}
+
+export async function saveProjectBackgroundPrompts(project, data = {}) {
+    if (!project?.prefix) throw new Error('프로젝트 경로를 찾을 수 없습니다.');
+
+    const normalized = normalizeProjectBackgroundPrompts(data);
+    const key = getProjectBackgroundPromptsKey(project);
+    const res = await fetch('/api/db/json-document?_t=' + Date.now(), {
+        method: 'PUT',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8'
+        },
+        body: JSON.stringify({
+            type: 'background_prompts',
+            key,
+            data: normalized
+        }),
+        cache: 'no-store'
+    });
+
+    if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        throw new Error(payload.error || '배경 프롬프트 저장에 실패했습니다.');
+    }
+
+    project.backgroundPrompts = normalized.backgrounds;
+    project.activeBackgroundPromptId = normalized.activeBackgroundId;
+    project.backgroundPromptsLoaded = true;
+    return normalized;
 }
 
 export function renderEmptyState(message) {
