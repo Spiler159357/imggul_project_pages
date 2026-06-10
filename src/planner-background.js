@@ -1,5 +1,6 @@
 const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
+const DEFAULT_NEGATIVE_PROMPT = "";
 const QUEUE_SEND_BATCH_SIZE = 100;
 const MAX_ATTEMPTS = 5;
 const NAI_MIN_REQUEST_INTERVAL_MS = 15000;
@@ -299,6 +300,21 @@ function getPromptParts(generation = {}) {
     return ids.map(id => String(prompts[id] || "").trim()).filter(Boolean);
 }
 
+function combinePromptSegments(...parts) {
+    return parts
+        .map(part => String(part || "").trim())
+        .filter(Boolean)
+        .join(", ");
+}
+
+function getGenerationQualityTags(generation = {}) {
+    return generation.qualityTags === undefined ? QUALITY_TAGS : String(generation.qualityTags || "").trim();
+}
+
+function getGenerationDefaultNegativePrompt(generation = {}) {
+    return generation.defaultNegativePrompt === undefined ? DEFAULT_NEGATIVE_PROMPT : String(generation.defaultNegativePrompt || "").trim();
+}
+
 function getSplitPrompts(generation = {}) {
     const fields = generation.fields || {};
     const prompts = generation.prompts || {};
@@ -319,8 +335,8 @@ function getSplitPrompts(generation = {}) {
 
 function buildNovelAiPayload(generation = {}, seed) {
     const promptParts = getPromptParts(generation);
-    const prompt = promptParts.length ? `${promptParts.join(", ")}, ${QUALITY_TAGS}` : QUALITY_TAGS;
-    const negative = String(generation.negative || "").trim();
+    const prompt = combinePromptSegments(promptParts.join(", "), getGenerationQualityTags(generation));
+    const negative = combinePromptSegments(getGenerationDefaultNegativePrompt(generation), generation.negative);
     const { width, height } = parseResolution(generation.res);
     const model = generation.model || "nai-diffusion-4-5-full";
     const steps = parsePositiveInt(generation.steps, 28);

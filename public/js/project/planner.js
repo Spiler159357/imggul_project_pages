@@ -571,6 +571,7 @@ function restorePlannerScrollState(state) {
 
 export function readPlannerEditsFromDom(meta) {
     if (!meta?.items) return meta;
+    const craftSettings = window.readCraftSettings ? window.readCraftSettings() : {};
     meta.items.forEach(item => {
         item.generation = item.generation || {};
         item.generation.fields = item.generation.fields || {};
@@ -591,6 +592,8 @@ export function readPlannerEditsFromDom(meta) {
         item.generation.v4_prompt = item.generation.v4PromptCharacters;
         item.generation.batchCount = String(item.count);
         item.generation.negative = fields.negative;
+        if (craftSettings.qualityTags !== undefined) item.generation.qualityTags = craftSettings.qualityTags;
+        if (craftSettings.defaultNegativePrompt !== undefined) item.generation.defaultNegativePrompt = craftSettings.defaultNegativePrompt;
         item.generation.prompts = {
             ...item.generation.prompts,
             'prompt-style': fields.style,
