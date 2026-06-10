@@ -180,11 +180,17 @@ export function renderCharacterDetailShell(project, character, state = {}) {
                                     </button>
                                 </div>
                             </div>
-                            <div class="mb-3">
-                                <label for="character-prompt-variant-select" class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">의상 / 헤어스타일</label>
-                                <select id="character-prompt-variant-select" onchange="window.selectCharacterPromptVariant(this.value)" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                            <div class="mb-3 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(180px,0.7fr)] gap-2">
+                                <label class="block min-w-0">
+                                    <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">의상 / 헤어스타일</span>
+                                    <select id="character-prompt-variant-select" onchange="window.selectCharacterPromptVariant(this.value)" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                                     ${promptVariants.map(variant => `<option value="${escapeHtml(variant.id)}" ${variant.id === activePromptVariant.id ? 'selected' : ''}>${escapeHtml(variant.name)}</option>`).join('')}
-                                </select>
+                                    </select>
+                                </label>
+                                <label class="block min-w-0">
+                                    <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">표시 이름</span>
+                                    <input id="character-prompt-variant-name-input" value="${escapeHtml(activePromptVariant.name)}" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="의상 이름">
+                                </label>
                             </div>
                             <div class="flex-1 grid grid-cols-1 gap-3">
                                 <label class="block">
@@ -375,6 +381,7 @@ export async function saveCharacterPrompt(event) {
     const project = getActiveProject();
     const character = getCharacterById(project, window.PROJECT_ACTIVE_CHARACTER_ID);
     const variantSelect = document.getElementById('character-prompt-variant-select');
+    const variantNameInput = document.getElementById('character-prompt-variant-name-input');
     const characterInput = document.getElementById('character-prompt-character-input');
     const clothingInput = document.getElementById('character-prompt-clothing-input');
     const negativeInput = document.getElementById('character-prompt-negative-input');
@@ -394,6 +401,8 @@ export async function saveCharacterPrompt(event) {
         const meta = await loadCharacterMeta(character).catch(() => ({}));
         const variants = normalizeCharacterPromptVariants(meta);
         const activeVariantId = variantSelect?.value || meta.activePromptVariantId || variants[0]?.id || 'default';
+        const activeVariant = variants.find(variant => variant.id === activeVariantId) || variants[0];
+        const variantName = variantNameInput?.value.trim() || activeVariant?.name || 'Outfit';
         const remainingParts = { ...(meta.parts || {}) };
         delete remainingParts.expression;
         const parts = {
@@ -403,7 +412,7 @@ export async function saveCharacterPrompt(event) {
             negative: negativeInput.value.trim()
         };
         const nextVariants = variants.map(variant => variant.id === activeVariantId
-            ? { ...variant, prompt: parts.character, parts, updatedAt: Date.now() }
+            ? { ...variant, name: variantName, prompt: parts.character, parts, updatedAt: Date.now() }
             : variant
         );
         await saveCharacterMeta(character, {

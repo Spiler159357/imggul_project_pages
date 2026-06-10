@@ -279,26 +279,30 @@ export function renderSituationDetailShell(project, situation, state = {}) {
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
             <section class="max-w-7xl mx-auto min-h-full">
                 <form id="situation-prompt-form" onsubmit="window.saveActiveSituationPrompt(event)" class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4">
-                    <div class="mb-4 flex flex-col md:flex-row md:items-end gap-3">
-                        <div class="flex-1 min-w-0">
-                            <label for="situation-prompt-variant-select" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구도</label>
+                    <div class="mb-4 grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(180px,0.75fr)_14rem_10rem] md:items-end gap-3">
+                        <label class="block min-w-0">
+                            <span class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구도</span>
                             <select id="situation-prompt-variant-select" onchange="window.selectSituationPromptVariant(this.value)" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                                 ${promptVariants.map(variant => `<option value="${escapeHtml(variant.id)}" ${variant.id === activePromptVariant.id ? 'selected' : ''}>${escapeHtml(variant.name)}</option>`).join('')}
                             </select>
-                        </div>
-                        <div class="w-full md:w-56">
-                        <label for="situation-resolution-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">해상도</label>
-                        <select id="situation-resolution-input" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
-                            ${PLANNER_RESOLUTION_OPTIONS.map(([value, label]) => `<option value="${escapeHtml(value)}" ${resolution === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}
-                        </select>
-                        </div>
-                        <div class="w-full md:w-40">
-                            <label for="situation-rating-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구분</label>
+                        </label>
+                        <label class="block min-w-0">
+                            <span class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">표시 이름</span>
+                            <input id="situation-prompt-variant-name-input" value="${escapeHtml(activePromptVariant.name)}" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="구도 이름">
+                        </label>
+                        <label class="block min-w-0">
+                            <span class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">해상도</span>
+                            <select id="situation-resolution-input" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
+                                ${PLANNER_RESOLUTION_OPTIONS.map(([value, label]) => `<option value="${escapeHtml(value)}" ${resolution === value ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}
+                            </select>
+                        </label>
+                        <label class="block min-w-0">
+                            <span class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5">구분</span>
                             <select id="situation-rating-input" onchange="window.previewActiveSituationRating?.(this.value)" class="w-full p-2.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">
                                 <option value="sfw" ${rating === 'sfw' ? 'selected' : ''}>SFW</option>
                                 <option value="nsfw" ${rating === 'nsfw' ? 'selected' : ''}>NSFW</option>
                             </select>
-                        </div>
+                        </label>
                     </div>
                     <div class="grid grid-cols-1 lg:grid-cols-2 gap-3">
                         <div>
@@ -526,6 +530,7 @@ export async function saveActiveSituationPrompt(event) {
     const project = getActiveProject();
     const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
     const variantSelect = document.getElementById('situation-prompt-variant-select');
+    const variantNameInput = document.getElementById('situation-prompt-variant-name-input');
     const resolutionInput = document.getElementById('situation-resolution-input');
     const ratingInput = document.getElementById('situation-rating-input');
     const compositionInput = document.getElementById('situation-composition-input');
@@ -565,8 +570,10 @@ export async function saveActiveSituationPrompt(event) {
         };
         const variants = normalizeSituationPromptVariants(situation);
         const activeVariantId = variantSelect?.value || situation.activePromptVariantId || variants[0]?.id || 'default';
+        const activeVariant = variants.find(variant => variant.id === activeVariantId) || variants[0];
+        const variantName = variantNameInput?.value.trim() || activeVariant?.name || 'Composition';
         const nextVariants = variants.map(variant => variant.id === activeVariantId
-            ? { ...variant, prompt, generation, updatedAt: Date.now() }
+            ? { ...variant, name: variantName, prompt, generation, updatedAt: Date.now() }
             : variant
         );
         situation.prompt = prompt;
