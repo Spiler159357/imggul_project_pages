@@ -355,7 +355,6 @@ function isPlannerTerminalStatus(status) {
 
 function isPlannerConfirmBlocked(meta = {}, item = null) {
     if (!item) return false;
-    if (window.PROJECT_PLANNER_CONFIRMING) return true;
     const itemActive = ['running', 'cancel_requested'].includes(item.status);
     const backgroundJobId = meta.backgroundJobId || meta.backgroundStatus?.jobId || item.backgroundJobId;
     if (isPlannerTerminalStatus(meta.status) || isPlannerTerminalStatus(meta.backgroundStatus?.status)) {
@@ -990,7 +989,7 @@ export function renderPlannerResultModal(meta) {
     if (!item) return '';
 
     const images = Array.isArray(item.images) ? item.images : [];
-    const confirmBlocked = isPlannerConfirmBlocked(meta, item);
+    const confirmBlocked = window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(meta, item);
     return `
         <div id="planner-result-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
             <div class="w-full max-w-5xl max-h-[88vh] rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden flex flex-col">
@@ -1164,7 +1163,7 @@ export function syncPlannerResultModalSelection(item) {
     const label = document.getElementById('planner-result-selected-label');
     if (label) label.textContent = item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.';
     const confirmButton = document.getElementById('planner-result-confirm-button');
-    if (confirmButton) confirmButton.disabled = !item.selectedImage || isPlannerConfirmBlocked(window.PROJECT_PLANNER_META || {}, item);
+    if (confirmButton) confirmButton.disabled = !item.selectedImage || window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(window.PROJECT_PLANNER_META || {}, item);
 }
 
 export function renderPlannerProgressPanel(meta) {
