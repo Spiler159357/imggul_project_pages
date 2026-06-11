@@ -71,3 +71,13 @@ WHERE asset_id IN (
 );
 
 DELETE FROM v2_assets WHERE owner_type = 'planner_item';
+
+-- Planner V3 pre-0016 normalized snapshot tables are no longer used after
+-- migrations/0016_planner_v3_simplify_generation_snapshots.sql.
+-- Run 0016 before this cleanup so existing generation_settings rows are
+-- backfilled into planner_v3_generation_snapshots first.
+DROP TABLE IF EXISTS planner_v3_asset_metadata;
+DROP TABLE IF EXISTS planner_v3_prompt_parts;
+DROP TABLE IF EXISTS planner_v3_v4_rows;
+DROP TABLE IF EXISTS planner_v3_generation_settings;
+DROP TABLE IF EXISTS planner_v3_assets_legacy_0016;
