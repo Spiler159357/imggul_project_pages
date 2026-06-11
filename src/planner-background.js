@@ -801,9 +801,6 @@ export async function putPlannerV3Settings(env, input = {}) {
 async function deletePlannerV3SnapshotsForRun(env, runId) {
     await env.DB.batch([
         env.DB.prepare("DELETE FROM planner_v3_generation_snapshots WHERE run_id = ?").bind(runId),
-        env.DB.prepare("DELETE FROM planner_v3_prompt_parts WHERE run_id = ?").bind(runId),
-        env.DB.prepare("DELETE FROM planner_v3_v4_rows WHERE run_id = ?").bind(runId),
-        env.DB.prepare("DELETE FROM planner_v3_generation_settings WHERE run_id = ?").bind(runId),
         env.DB.prepare("DELETE FROM planner_v3_item_variants WHERE item_id IN (SELECT id FROM planner_v3_items WHERE run_id = ?)").bind(runId)
     ]);
 }
@@ -1063,9 +1060,6 @@ export async function putPlannerV3ItemFromMeta(env, input = {}) {
     const itemId = item.id || existingItem?.id || makePlannerV3Id("pitem");
     await env.DB.batch([
         env.DB.prepare("DELETE FROM planner_v3_generation_snapshots WHERE item_id = ?").bind(itemId),
-        env.DB.prepare("DELETE FROM planner_v3_prompt_parts WHERE item_id = ?").bind(itemId),
-        env.DB.prepare("DELETE FROM planner_v3_v4_rows WHERE item_id = ?").bind(itemId),
-        env.DB.prepare("DELETE FROM planner_v3_generation_settings WHERE item_id = ?").bind(itemId),
         env.DB.prepare("DELETE FROM planner_v3_item_variants WHERE item_id = ?").bind(itemId)
     ]);
 

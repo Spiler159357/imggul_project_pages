@@ -81,3 +81,20 @@ DROP TABLE IF EXISTS planner_v3_prompt_parts;
 DROP TABLE IF EXISTS planner_v3_v4_rows;
 DROP TABLE IF EXISTS planner_v3_generation_settings;
 DROP TABLE IF EXISTS planner_v3_assets_legacy_0016;
+
+-- Dedicated legacy planner tables are not needed after Planner V3 is verified.
+DROP TABLE IF EXISTS planner_background_queue;
+DROP TABLE IF EXISTS planner_background_items;
+DROP TABLE IF EXISTS planner_background_jobs;
+DROP TABLE IF EXISTS planner_background_rate_limits;
+
+DROP TABLE IF EXISTS planner_item_image_snapshots;
+DROP TABLE IF EXISTS planner_item_images;
+DROP TABLE IF EXISTS planner_item_v4_rows;
+DROP TABLE IF EXISTS planner_items;
+DROP TABLE IF EXISTS planner_metas;
+
+DROP TABLE IF EXISTS v2_planner_generated_images;
+DROP TABLE IF EXISTS v2_planner_items;
+DROP TABLE IF EXISTS v2_planner_sources;
+DROP TABLE IF EXISTS v2_planner_runs;
