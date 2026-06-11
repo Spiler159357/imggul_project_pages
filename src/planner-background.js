@@ -582,6 +582,14 @@ function asInt(value, fallback = 0) {
     return Number.isFinite(parsed) ? parsed : fallback;
 }
 
+function plannerV3DbValue(value) {
+    return value === undefined ? null : value;
+}
+
+function bindPlannerV3(statement, ...values) {
+    return statement.bind(...values.map(plannerV3DbValue));
+}
+
 function normalizeRunStatus(status = "draft") {
     const value = String(status || "draft");
     if (value === "done" || value === "completed") return "complete";
@@ -809,7 +817,7 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
     const runId = existing?.id || makePlannerV3Id("prun");
     const defaultCount = Math.max(1, asInt(meta.defaultCount, 20));
 
-    await env.DB.prepare(`
+    await bindPlannerV3(env.DB.prepare(`
         INSERT INTO planner_v3_runs (
             id, project_id, project_prefix, character_id, character_prefix, status, mode,
             default_count, active_job_id, running_situation_ids_json, stage, stage_label,
@@ -826,7 +834,7 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
             stage_label = excluded.stage_label,
             error_message = excluded.error_message,
             updated_at = excluded.updated_at
-    `).bind(
+    `),
         runId,
         projectId,
         projectPrefix,
@@ -868,7 +876,7 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
         const itemId = item.id || existingItemBySituationId.get(situationId) || makePlannerV3Id("pitem");
         currentItemIds.push(itemId);
         const targetCount = Math.max(1, asInt(item.count || item.targetCount || defaultCount, defaultCount));
-        await env.DB.prepare(`
+        await bindPlannerV3(env.DB.prepare(`
             INSERT INTO planner_v3_items (
                 id, run_id, situation_id, situation_name, situation_index, image_number,
                 situation_rating, status, target_count, completed_count, failed_count,
@@ -892,7 +900,7 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
                 updated_at = excluded.updated_at,
                 started_at = COALESCE(planner_v3_items.started_at, excluded.started_at),
                 completed_at = excluded.completed_at
-        `).bind(
+        `),
             itemId,
             runId,
             situationId,
@@ -923,13 +931,13 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
             const variantId = makePlannerV3Id("pvar");
             const variantTargetCount = Math.max(1, asInt(run.count || targetCount, targetCount));
             variantCountSum += variantTargetCount;
-            await env.DB.prepare(`
+            await bindPlannerV3(env.DB.prepare(`
                 INSERT INTO planner_v3_item_variants (
                     id, item_id, character_prompt_variant_id, character_prompt_variant_name,
                     situation_prompt_variant_id, situation_prompt_variant_name, target_count,
                     sort_order, created_at, updated_at
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            `).bind(
+            `),
                 variantId,
                 itemId,
                 run.characterPromptVariantId || item.characterPromptVariantId || "",
@@ -984,14 +992,14 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
 
 async function insertPlannerV3GenerationSnapshot(env, { runId, itemId, variantId, ownerType, ownerId, generation, timestamp }) {
     const settings = generationSettingsFromGeneration(generation);
-    await env.DB.prepare(`
+    await bindPlannerV3(env.DB.prepare(`
         INSERT INTO planner_v3_generation_settings (
             id, owner_type, owner_id, run_id, item_id, variant_id, model, resolution,
             width, height, steps, scale, sampler, seed, sm, sm_dyn, vibe_strength,
             vibe_info, precise_strength, precise_fidelity, precise_type, vibe_asset_key,
             precise_asset_key, inpaint_asset_key, extra_json, created_at, updated_at
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
+    `),
         makePlannerV3Id("pset"),
         ownerType,
         ownerId,
@@ -1023,24 +1031,24 @@ async function insertPlannerV3GenerationSnapshot(env, { runId, itemId, variantId
 
     const parts = splitGeneration(generation);
     for (const [sortOrder, key] of PROMPT_PART_KEYS.entries()) {
-        await env.DB.prepare(`
+        await bindPlannerV3(env.DB.prepare(`
             INSERT INTO planner_v3_prompt_parts (
                 id, owner_type, owner_id, run_id, item_id, variant_id, part_key,
                 value, sort_order, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(makePlannerV3Id("ppart"), ownerType, ownerId, runId, itemId, variantId, key, parts[key] || "", sortOrder, timestamp, timestamp).run();
+        `), makePlannerV3Id("ppart"), ownerType, ownerId, runId, itemId, variantId, key, parts[key] || "", sortOrder, timestamp, timestamp).run();
     }
 
     const rows = Array.isArray(generation.v4PromptCharacters)
         ? generation.v4PromptCharacters
         : (Array.isArray(generation.v4_prompt) ? generation.v4_prompt : []);
     for (const [rowIndex, row] of rows.entries()) {
-        await env.DB.prepare(`
+        await bindPlannerV3(env.DB.prepare(`
             INSERT INTO planner_v3_v4_rows (
                 id, owner_type, owner_id, run_id, item_id, variant_id, row_index,
                 subject, clothing, expression, action, negative, created_at, updated_at
             ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
+        `),
             makePlannerV3Id("pv4"),
             ownerType,
             ownerId,

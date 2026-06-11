@@ -75,12 +75,12 @@ function derivePlannerStoredMetaStatus(meta) {
     return 'draft';
 }
 
-function normalizePlannerStoredMeta(meta = {}) {
+function normalizePlannerStoredMeta(meta = {}, options = {}) {
     const normalized = normalizePlannerMeta(meta || {});
     const hasBackgroundJob = !!normalized.backgroundJobId;
     const staleActiveMeta = isPlannerActiveStatus(normalized.status) && !hasBackgroundJob;
     const staleActiveBackground = isPlannerActiveStatus(normalized.backgroundStatus?.status) && !hasBackgroundJob;
-    if (staleActiveMeta || staleActiveBackground) {
+    if (!options.preserveActiveStatus && (staleActiveMeta || staleActiveBackground)) {
         delete normalized.backgroundStatus;
         delete normalized.runningSituationIds;
         normalized.stage = '';
@@ -177,9 +177,9 @@ export async function loadPlannerQueueMetas(project, characters = getProjectItem
     return metas.filter(Boolean);
 }
 
-export async function savePlannerMeta(project, meta) {
+export async function savePlannerMeta(project, meta, options = {}) {
     const key = getPlannerMetaKey(project, meta?.characterId || getSelectedPlannerCharacterId(project));
-    const normalized = normalizePlannerStoredMeta(meta || {});
+    const normalized = normalizePlannerStoredMeta(meta || {}, options);
     normalized.projectId = normalized.projectId || project?.id || '';
     normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
     const res = await fetch('/api/planner/v3/run?_t=' + Date.now(), {
@@ -2773,7 +2773,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
     meta.runningSituationIds = targetItems.map(item => item.situationId);
     meta.updatedAt = Date.now();
     window.PROJECT_PLANNER_VIEW = 'run';
-    await savePlannerMeta(project, meta);
+    await savePlannerMeta(project, meta, { preserveActiveStatus: true });
     window.PROJECT_PLANNER_META = meta;
     renderPlannerSectionByState();
 
