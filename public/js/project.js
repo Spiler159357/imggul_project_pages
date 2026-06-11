@@ -1,6 +1,6 @@
 export * from './project/shared.js';
 export * from './project/manage.js';
 export * from './project/character.js';
-export * from './project/planner.js';
+export * from './project/planner.js?v=planner-v3-confirm-20260611a';
 export * from './project/situation.js';
 export * from './project/craft_bridge.js';

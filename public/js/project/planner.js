@@ -1022,7 +1022,7 @@ export function renderPlannerResultModal(meta) {
                     <div class="flex items-center gap-2">
                         <button type="button" onclick="window.closePlannerResultModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
                         <button type="button" onclick="window.startPlannerGeneration('${escapeJsString(item.situationId)}', { clearExisting: true })" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">다시 생성</button>
-                        <button id="planner-result-confirm-button" type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}')" ${item.selectedImage && !confirmBlocked ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
+                        <button id="planner-result-confirm-button" type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}', this)" ${item.selectedImage && !confirmBlocked ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
                     </div>
                 </div>
             </div>
@@ -3032,25 +3032,26 @@ export function buildPlannerMetadataFallback(item) {
     return metadata;
 }
 
-export async function confirmPlannerSelection(situationId = null) {
+export async function confirmPlannerSelection(situationId = null, triggerButton = null) {
     if (window.PROJECT_PLANNER_CONFIRMING) return;
     window.PROJECT_PLANNER_CONFIRMING = true;
+    const confirmButton = triggerButton || document.getElementById('planner-result-confirm-button');
+    if (confirmButton) confirmButton.disabled = true;
+    try {
     const project = getActiveProject();
-    let meta = project ? await loadPlannerMeta(project).catch(() => null) : null;
-    if (!meta) meta = window.PROJECT_PLANNER_META || null;
+    let meta = window.PROJECT_PLANNER_META || null;
+    if (!meta && project) meta = await loadPlannerMeta(project).catch(() => null);
     if (!project || !meta?.items?.length) {
-        window.PROJECT_PLANNER_CONFIRMING = false;
+        setPlannerStatus('확정할 플래너 데이터가 없습니다.');
+        if (confirmButton) confirmButton.disabled = false;
         return;
     }
-    const confirmButton = document.getElementById('planner-result-confirm-button');
-    if (confirmButton) confirmButton.disabled = true;
 
     await loadProjectCharacters(project).catch(() => []);
     const character = getCharacterById(project, meta.characterId) || getCharacterById(project, meta.characterPrefix);
     if (!character) {
         setPlannerStatus('플래너 캐릭터를 찾을 수 없습니다.');
         if (confirmButton) confirmButton.disabled = false;
-        window.PROJECT_PLANNER_CONFIRMING = false;
         return;
     }
 
@@ -3060,18 +3061,15 @@ export async function confirmPlannerSelection(situationId = null) {
     if (!selectedItems.length) {
         setPlannerStatus('확정 전에 상황별 이미지를 하나 이상 선택하세요.');
         if (confirmButton) confirmButton.disabled = false;
-        window.PROJECT_PLANNER_CONFIRMING = false;
         return;
     }
     const blockedItems = selectedItems.filter(item => isPlannerConfirmBlocked(meta, item));
     if (blockedItems.length) {
         setPlannerStatus('생성 중에는 플랜을 확정할 수 없습니다. 일시정지 또는 완료 후 확정하세요.');
         if (confirmButton) confirmButton.disabled = false;
-        window.PROJECT_PLANNER_CONFIRMING = false;
         return;
     }
 
-    try {
     for (const item of selectedItems) {
         const newKey = `${character.prefix}${item.imageNumber}.webp`;
         const selectedAsset = (item.generatedImages || []).find(asset => asset.id && (asset.key === item.selectedImage || asset.r2Key === item.selectedImage));

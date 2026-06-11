@@ -6,7 +6,7 @@ import * as Explorer from './explorer.js';
 import * as Craft from './craft.js?v=base-prompt-defaults-20260610a';
 import * as TempGallery from './temp_gallery.js?v=temp-focus-keys-20260527a';
 import * as Modals from './modals.js';
-import * as Project from './project.js?v=prompt-load-planner-meta-20260528a';
+import * as Project from './project.js?v=planner-v3-confirm-20260611a';
 import * as ImageEditor from './image_editor.js?v=image-editor-history-20260607a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=temp-focus-keys-20260527a';
 
