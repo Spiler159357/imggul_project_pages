@@ -10,7 +10,7 @@ This implementation adds the application code for server-side planner generation
    - Add the real `database_id` to the Pages project binding named `DB`.
 
 2. Queue
-   - Queue: `imggul-queue`
+   - Queue: `imggul-queue`  
    - Optional dead letter queue: `imggul-generation-dlq`
    - Add the producer binding named `GENERATION_QUEUE` to the Pages project.
    - Deploy `src/planner-background.js` as the queue consumer Worker.
