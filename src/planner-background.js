@@ -846,10 +846,13 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
         existing?.completed_at || null
     ).run();
 
-    const hasGenerationRows = await env.DB.prepare(
-        "SELECT id FROM planner_v3_jobs WHERE run_id = ? LIMIT 1"
-    ).bind(runId).first();
-    if (hasGenerationRows?.id) {
+    const activeGenerationRow = await env.DB.prepare(`
+        SELECT id FROM planner_v3_jobs
+        WHERE run_id = ?
+          AND status IN ('queued', 'running', 'paused', 'cancel_requested')
+        LIMIT 1
+    `).bind(runId).first();
+    if (activeGenerationRow?.id) {
         return getPlannerV3RunById(env, runId);
     }
 

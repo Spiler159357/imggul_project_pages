@@ -183,7 +183,7 @@ export async function savePlannerMeta(project, meta) {
     normalized.projectId = normalized.projectId || project?.id || '';
     normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
     const res = await fetch('/api/planner/v3/run?_t=' + Date.now(), {
-        method: 'PUT',
+        method: 'POST',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
