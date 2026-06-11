@@ -2595,14 +2595,18 @@ export async function resumePlannerBackgroundGeneration(jobId = null) {
         return;
     }
     if (meta) {
-        meta.status = data.status || 'queued';
-        meta.stage = 'queued';
-        meta.stageLabel = getPlannerStageLabel('queued');
+        meta.status = data.status || 'running';
+        meta.stage = data.stage || 'running';
+        meta.stageLabel = data.stageLabel || getPlannerStageLabel('running');
+        meta.backgroundJobId = data.jobId || targetJobId;
+        meta.runningSituationIds = (meta.items || [])
+            .filter(item => item.status === 'paused' && !isPlannerItemTargetComplete(item, meta))
+            .map(item => item.situationId);
         if (Array.isArray(meta.items)) {
             meta.items = meta.items.map(item => item.status === 'paused'
                 ? (isPlannerItemTargetComplete(item, meta)
                     ? { ...item, status: 'done', stage: 'completed', stageLabel: getPlannerStageLabel('completed') }
-                    : { ...item, status: 'queued', stage: 'queued', stageLabel: getPlannerStageLabel('queued') })
+                    : { ...item, status: 'running', stage: 'running', stageLabel: getPlannerStageLabel('running') })
                 : item
             );
         }

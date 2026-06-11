@@ -1575,11 +1575,11 @@ export async function resumePlannerV3Generation(env, jobId) {
     const job = await env.DB.prepare("SELECT * FROM planner_v3_jobs WHERE id = ?").bind(jobId).first();
     if (!job) throw new Error("Planner job not found");
     await env.DB.batch([
-        env.DB.prepare("UPDATE planner_v3_jobs SET status = 'queued', stage = 'queued', stage_label = 'Queue waiting', updated_at = ? WHERE id = ?").bind(timestamp, jobId),
-        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = 'queued', stage = 'queued', stage_label = 'Queue waiting', updated_at = ? WHERE job_id = ? AND status = 'paused'").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_jobs SET status = 'running', stage = 'running', stage_label = 'Preparing generation', updated_at = ? WHERE id = ?").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = 'running', stage = 'running', stage_label = 'Preparing generation', updated_at = ? WHERE job_id = ? AND status = 'paused'").bind(timestamp, jobId),
         env.DB.prepare("UPDATE planner_v3_queue SET status = 'queued', claimed_by = '', claim_token = '', claimed_at = NULL, lease_expires_at = NULL, updated_at = ? WHERE job_id = ? AND status = 'paused'").bind(timestamp, jobId),
-        env.DB.prepare("UPDATE planner_v3_runs SET status = 'queued', stage = 'queued', stage_label = 'Queue waiting', updated_at = ? WHERE id = ?").bind(timestamp, job.run_id),
-        env.DB.prepare("UPDATE planner_v3_items SET status = 'queued', stage = 'queued', stage_label = 'Queue waiting', updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?) AND status = 'paused'").bind(timestamp, jobId)
+        env.DB.prepare("UPDATE planner_v3_runs SET status = 'running', stage = 'running', stage_label = 'Preparing generation', active_job_id = ?, updated_at = ? WHERE id = ?").bind(jobId, timestamp, job.run_id),
+        env.DB.prepare("UPDATE planner_v3_items SET status = 'running', stage = 'running', stage_label = 'Preparing generation', updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?) AND status = 'paused'").bind(timestamp, jobId)
     ]);
     if (job.mode === "background" && env.GENERATION_QUEUE) {
         const next = await env.DB.prepare(`
