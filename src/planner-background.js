@@ -550,7 +550,6 @@ export async function processPlannerQueueMessage(env, message) {
 // Planner V3 DB-backed planner implementation.
 const PLANNER_V3_ACTIVE_JOB_STATUSES = ["queued", "running", "paused", "cancel_requested"];
 const PLANNER_V3_TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "cancelled"];
-const PROMPT_PART_KEYS = ["style", "composition", "character", "clothing", "expression", "action", "background", "negative", "raw"];
 const CONFIRM_RETENTION_MS = 24 * 60 * 60 * 1000;
 const BROWSER_QUEUE_LEASE_MS = 5 * 60 * 1000;
 
@@ -729,6 +728,12 @@ export async function ensurePlannerV3Schema(env) {
     if (!row?.name) {
         throw new Error("Planner V3 schema is not installed. Run migrations/0014_planner_v3_schema.sql first.");
     }
+    const snapshotRow = await env.DB.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planner_v3_generation_snapshots'"
+    ).first();
+    if (!snapshotRow?.name) {
+        throw new Error("Planner V3 generation snapshot schema is not installed. Run migrations/0016_planner_v3_simplify_generation_snapshots.sql first.");
+    }
 }
 
 export async function getPlannerV3Settings(env, projectId) {
@@ -795,6 +800,7 @@ export async function putPlannerV3Settings(env, input = {}) {
 
 async function deletePlannerV3SnapshotsForRun(env, runId) {
     await env.DB.batch([
+        env.DB.prepare("DELETE FROM planner_v3_generation_snapshots WHERE run_id = ?").bind(runId),
         env.DB.prepare("DELETE FROM planner_v3_prompt_parts WHERE run_id = ?").bind(runId),
         env.DB.prepare("DELETE FROM planner_v3_v4_rows WHERE run_id = ?").bind(runId),
         env.DB.prepare("DELETE FROM planner_v3_generation_settings WHERE run_id = ?").bind(runId),
@@ -990,15 +996,212 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
     return getPlannerV3RunById(env, runId);
 }
 
+export async function putPlannerV3ItemFromMeta(env, input = {}) {
+    await ensurePlannerV3Schema(env);
+    const meta = input.meta || input.data || input;
+    const item = input.item || meta.item;
+    if (!item || typeof item !== "object") throw new Error("item is required");
+    const projectId = String(meta.projectId || "").trim();
+    const projectPrefix = String(meta.projectPrefix || "").trim();
+    const characterId = String(meta.characterId || "").trim();
+    if (!projectId) throw new Error("projectId is required");
+    if (!characterId) throw new Error("characterId is required");
+
+    const timestamp = nowPlannerV3Iso();
+    const existing = await env.DB.prepare(
+        "SELECT * FROM planner_v3_runs WHERE project_id = ? AND character_id = ? LIMIT 1"
+    ).bind(projectId, characterId).first();
+    const runId = existing?.id || makePlannerV3Id("prun");
+    const defaultCount = Math.max(1, asInt(meta.defaultCount || item.count, 20));
+    await bindPlannerV3(env.DB.prepare(`
+        INSERT INTO planner_v3_runs (
+            id, project_id, project_prefix, character_id, character_prefix, status, mode,
+            default_count, active_job_id, running_situation_ids_json, stage, stage_label,
+            error_message, created_at, updated_at, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            project_prefix = excluded.project_prefix,
+            character_prefix = excluded.character_prefix,
+            status = excluded.status,
+            mode = excluded.mode,
+            default_count = excluded.default_count,
+            updated_at = excluded.updated_at
+    `),
+        runId,
+        projectId,
+        projectPrefix,
+        characterId,
+        meta.characterPrefix || "",
+        normalizeRunStatus(meta.status || "draft"),
+        meta.mode === "browser" ? "browser" : "background",
+        defaultCount,
+        existing?.active_job_id || null,
+        JSON.stringify(meta.runningSituationIds || []),
+        meta.stage || "",
+        meta.stageLabel || "",
+        meta.errorMessage || "",
+        existing?.created_at || timestamp,
+        timestamp,
+        existing?.started_at || null,
+        existing?.completed_at || null
+    ).run();
+
+    const activeGenerationRow = await env.DB.prepare(`
+        SELECT id FROM planner_v3_jobs
+        WHERE run_id = ?
+          AND status IN ('queued', 'running', 'paused', 'cancel_requested')
+        LIMIT 1
+    `).bind(runId).first();
+    if (activeGenerationRow?.id) {
+        throw new Error("Cannot update planner item while a generation job is active");
+    }
+
+    const situationId = String(item.situationId || item.situation_id || "").trim() || makePlannerV3Id("sit");
+    const existingItem = await env.DB.prepare(
+        "SELECT id FROM planner_v3_items WHERE run_id = ? AND situation_id = ? LIMIT 1"
+    ).bind(runId, situationId).first();
+    const itemId = item.id || existingItem?.id || makePlannerV3Id("pitem");
+    await env.DB.batch([
+        env.DB.prepare("DELETE FROM planner_v3_generation_snapshots WHERE item_id = ?").bind(itemId),
+        env.DB.prepare("DELETE FROM planner_v3_prompt_parts WHERE item_id = ?").bind(itemId),
+        env.DB.prepare("DELETE FROM planner_v3_v4_rows WHERE item_id = ?").bind(itemId),
+        env.DB.prepare("DELETE FROM planner_v3_generation_settings WHERE item_id = ?").bind(itemId),
+        env.DB.prepare("DELETE FROM planner_v3_item_variants WHERE item_id = ?").bind(itemId)
+    ]);
+
+    const targetCount = Math.max(1, asInt(item.count || item.targetCount || defaultCount, defaultCount));
+    await bindPlannerV3(env.DB.prepare(`
+        INSERT INTO planner_v3_items (
+            id, run_id, situation_id, situation_name, situation_index, image_number,
+            situation_rating, status, target_count, completed_count, failed_count,
+            stage, stage_label, error_message, extra_json, sort_order, created_at, updated_at,
+            started_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            situation_name = excluded.situation_name,
+            situation_index = excluded.situation_index,
+            image_number = excluded.image_number,
+            situation_rating = excluded.situation_rating,
+            status = excluded.status,
+            target_count = excluded.target_count,
+            completed_count = excluded.completed_count,
+            failed_count = excluded.failed_count,
+            stage = excluded.stage,
+            stage_label = excluded.stage_label,
+            error_message = excluded.error_message,
+            extra_json = excluded.extra_json,
+            sort_order = excluded.sort_order,
+            updated_at = excluded.updated_at,
+            started_at = COALESCE(planner_v3_items.started_at, excluded.started_at),
+            completed_at = excluded.completed_at
+    `),
+        itemId,
+        runId,
+        situationId,
+        item.situationName || item.name || "",
+        item.situationIndex ?? 0,
+        String(item.imageNumber || 1),
+        item.rating === "nsfw" || item.situationRating === "nsfw" ? "nsfw" : "sfw",
+        normalizeItemStatus(item.status),
+        targetCount,
+        Math.max(0, asInt(item.completedCount, Array.isArray(item.images) ? item.images.length : 0)),
+        Math.max(0, asInt(item.failedCount, 0)),
+        item.stage || "",
+        item.stageLabel || "",
+        item.errorMessage || "",
+        JSON.stringify(clientExtraForItem(item)),
+        item.situationIndex ?? 0,
+        timestamp,
+        timestamp,
+        item.startedAt || null,
+        item.completedAt || null
+    ).run();
+
+    const runs = Array.isArray(item.variantGenerations) && item.variantGenerations.length
+        ? item.variantGenerations
+        : [{ count: targetCount, generation: generationFromItem(item) }];
+    let variantCountSum = 0;
+    for (const [variantIndex, run] of runs.entries()) {
+        const variantId = makePlannerV3Id("pvar");
+        const variantTargetCount = Math.max(1, asInt(run.count || targetCount, targetCount));
+        variantCountSum += variantTargetCount;
+        await bindPlannerV3(env.DB.prepare(`
+            INSERT INTO planner_v3_item_variants (
+                id, item_id, character_prompt_variant_id, character_prompt_variant_name,
+                situation_prompt_variant_id, situation_prompt_variant_name, target_count,
+                sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `),
+            variantId,
+            itemId,
+            run.characterPromptVariantId || item.characterPromptVariantId || "",
+            run.characterPromptVariantName || item.characterPromptVariantName || "",
+            run.situationPromptVariantId || item.situationPromptVariantId || "",
+            run.situationPromptVariantName || item.situationPromptVariantName || "",
+            variantTargetCount,
+            variantIndex,
+            timestamp,
+            timestamp
+        ).run();
+        await insertPlannerV3GenerationSnapshot(env, {
+            runId,
+            itemId,
+            variantId,
+            ownerType: "variant",
+            ownerId: variantId,
+            generation: run.generation || generationFromItem(item),
+            timestamp
+        });
+    }
+    if (variantCountSum !== targetCount) {
+        await env.DB.prepare("UPDATE planner_v3_items SET target_count = ?, updated_at = ? WHERE id = ?")
+            .bind(variantCountSum || targetCount, timestamp, itemId).run();
+    }
+    await insertPlannerV3GenerationSnapshot(env, {
+        runId,
+        itemId,
+        variantId: null,
+        ownerType: "item",
+        ownerId: itemId,
+        generation: generationFromItem(item),
+        timestamp
+    });
+    return {
+        success: true,
+        runId,
+        itemId
+    };
+}
+
 async function insertPlannerV3GenerationSnapshot(env, { runId, itemId, variantId, ownerType, ownerId, generation, timestamp }) {
     const settings = generationSettingsFromGeneration(generation);
+    const splitPrompts = splitGeneration(generation);
+    const v4Rows = Array.isArray(generation.v4PromptCharacters)
+        ? generation.v4PromptCharacters
+        : (Array.isArray(generation.v4_prompt) ? generation.v4_prompt : []);
+    const reference = {
+        vibeImageKey: generation.vibeImageKey || "",
+        preciseImageKey: generation.preciseImageKey || "",
+        inpaintImageKey: generation.inpaintImageKey || "",
+        vibeStrength: generation.vibeStrength ?? "",
+        vibeInfo: generation.vibeInfo ?? "",
+        preciseStrength: generation.preciseStrength ?? "",
+        preciseFidelity: generation.preciseFidelity ?? "",
+        preciseType: generation.preciseType ?? ""
+    };
+    const options = {
+        sm: !!generation.sm,
+        sm_dyn: !!generation.sm_dyn,
+        fields: generation.fields || {},
+        prompts: generation.prompts || {}
+    };
     await bindPlannerV3(env.DB.prepare(`
-        INSERT INTO planner_v3_generation_settings (
+        INSERT INTO planner_v3_generation_snapshots (
             id, owner_type, owner_id, run_id, item_id, variant_id, model, resolution,
-            width, height, steps, scale, sampler, seed, sm, sm_dyn, vibe_strength,
-            vibe_info, precise_strength, precise_fidelity, precise_type, vibe_asset_key,
-            precise_asset_key, inpaint_asset_key, extra_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            width, height, steps, scale, sampler, seed, sm, sm_dyn, prompt,
+            negative_prompt, split_prompts_json, v4_rows_json, reference_json,
+            options_json, generation_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `),
         makePlannerV3Id("pset"),
         ownerType,
@@ -1016,55 +1219,16 @@ async function insertPlannerV3GenerationSnapshot(env, { runId, itemId, variantId
         settings.seed,
         settings.sm,
         settings.sm_dyn,
-        settings.vibe_strength,
-        settings.vibe_info,
-        settings.precise_strength,
-        settings.precise_fidelity,
-        settings.precise_type,
-        settings.vibe_asset_key,
-        settings.precise_asset_key,
-        settings.inpaint_asset_key,
+        generation.prompt || "",
+        generation.negative || "",
+        JSON.stringify(splitPrompts),
+        JSON.stringify(v4Rows),
+        JSON.stringify(reference),
+        JSON.stringify(options),
         JSON.stringify(generation || {}),
         timestamp,
         timestamp
     ).run();
-
-    const parts = splitGeneration(generation);
-    for (const [sortOrder, key] of PROMPT_PART_KEYS.entries()) {
-        await bindPlannerV3(env.DB.prepare(`
-            INSERT INTO planner_v3_prompt_parts (
-                id, owner_type, owner_id, run_id, item_id, variant_id, part_key,
-                value, sort_order, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `), makePlannerV3Id("ppart"), ownerType, ownerId, runId, itemId, variantId, key, parts[key] || "", sortOrder, timestamp, timestamp).run();
-    }
-
-    const rows = Array.isArray(generation.v4PromptCharacters)
-        ? generation.v4PromptCharacters
-        : (Array.isArray(generation.v4_prompt) ? generation.v4_prompt : []);
-    for (const [rowIndex, row] of rows.entries()) {
-        await bindPlannerV3(env.DB.prepare(`
-            INSERT INTO planner_v3_v4_rows (
-                id, owner_type, owner_id, run_id, item_id, variant_id, row_index,
-                subject, clothing, expression, action, negative, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `),
-            makePlannerV3Id("pv4"),
-            ownerType,
-            ownerId,
-            runId,
-            itemId,
-            variantId,
-            rowIndex,
-            row?.subject || "",
-            row?.clothing || "",
-            row?.expression || "",
-            row?.action || "",
-            row?.negative || "",
-            timestamp,
-            timestamp
-        ).run();
-    }
 }
 
 export async function getPlannerV3Run(env, { projectId, characterId }) {
@@ -1121,11 +1285,11 @@ export async function getPlannerV3RunById(env, runId) {
 
 async function plannerV3ItemToClient(env, row, assets = []) {
     const setting = await env.DB.prepare(`
-        SELECT extra_json FROM planner_v3_generation_settings
+        SELECT generation_json FROM planner_v3_generation_snapshots
         WHERE owner_type = 'item' AND owner_id = ?
         LIMIT 1
     `).bind(row.id).first();
-    const generation = parseJson(setting?.extra_json, {});
+    const generation = parseJson(setting?.generation_json, {});
     const extra = parseJson(row.extra_json, {});
     const fallbackImages = Array.isArray(extra.legacyImages) ? extra.legacyImages : [];
     const fallbackGeneratedImages = Array.isArray(extra.legacyGeneratedImages) ? extra.legacyGeneratedImages : [];
@@ -1164,10 +1328,11 @@ export async function deletePlannerV3Run(env, runId) {
             id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
             status, created_at, updated_at
         )
-        SELECT 'cleanup_' || id, r2_key, id, run_id, item_id, 'deleted_run_cleanup',
+        SELECT 'cleanup_' || a.id, a.r2_key, a.id, i.run_id, a.item_id, 'deleted_run_cleanup',
             'pending', ?, ?
-        FROM planner_v3_assets
-        WHERE run_id = ?
+        FROM planner_v3_assets a
+        JOIN planner_v3_items i ON i.id = a.item_id
+        WHERE i.run_id = ?
     `).bind(timestamp, timestamp, runId).run();
     await env.DB.prepare("DELETE FROM planner_v3_runs WHERE id = ?").bind(runId).run();
     return { success: true };
@@ -1215,10 +1380,11 @@ async function queuePlannerV3ItemAssetsForCleanup(env, itemId, reason, timestamp
             id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
             status, created_at, updated_at
         )
-        SELECT 'cleanup_' || id, r2_key, id, run_id, item_id, ?,
+        SELECT 'cleanup_' || a.id, a.r2_key, a.id, i.run_id, a.item_id, ?,
             'pending', ?, ?
-        FROM planner_v3_assets
-        WHERE item_id = ?
+        FROM planner_v3_assets a
+        JOIN planner_v3_items i ON i.id = a.item_id
+        WHERE a.item_id = ?
     `).bind(reason, timestamp, timestamp, itemId).run();
 }
 
@@ -1338,10 +1504,11 @@ export async function getPlannerV3Status(env, jobId) {
         ORDER BY t.queue_order
     `).bind(jobId).all()).results || [];
     const assets = (await env.DB.prepare(`
-        SELECT item_id, id, r2_key, image_index, created_at
-        FROM planner_v3_assets
-        WHERE job_id = ?
-        ORDER BY item_id, image_index, created_at
+        SELECT a.item_id, a.id, a.r2_key, a.image_index, a.created_at
+        FROM planner_v3_assets a
+        JOIN planner_v3_queue q ON q.id = a.queue_id
+        WHERE q.job_id = ?
+        ORDER BY a.item_id, a.image_index, a.created_at
     `).bind(jobId).all()).results || [];
     const assetsByItem = new Map();
     for (const asset of assets) {
@@ -1465,7 +1632,7 @@ export async function claimNextPlannerV3BrowserQueue(env, jobId) {
         env.DB.prepare("UPDATE planner_v3_items SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?").bind(timestamp, timestamp, row.item_id)
     ]);
     const setting = await env.DB.prepare(`
-        SELECT extra_json FROM planner_v3_generation_settings
+        SELECT generation_json FROM planner_v3_generation_snapshots
         WHERE owner_type = 'variant' AND owner_id = ?
         LIMIT 1
     `).bind(row.variant_id).first();
@@ -1479,7 +1646,7 @@ export async function claimNextPlannerV3BrowserQueue(env, jobId) {
             imageIndex: row.image_index,
             variantImageIndex: row.variant_image_index,
             claimToken: token,
-            generation: parseJson(setting?.extra_json, {})
+            generation: parseJson(setting?.generation_json, {})
         },
         status: await getPlannerV3Status(env, jobId)
     };
@@ -1500,14 +1667,13 @@ export async function completePlannerV3BrowserQueue(env, body = {}) {
     const fileName = r2Key.split("/").pop() || `${assetId}.webp`;
     await env.DB.prepare(`
         INSERT INTO planner_v3_assets (
-            id, run_id, item_id, variant_id, job_id, task_id, queue_id, r2_key,
+            id, item_id, variant_id, queue_id, r2_key,
             file_name, mime_type, byte_size, width, height, image_index, status,
             is_public, created_at, updated_at
         )
-        SELECT ?, j.run_id, q.item_id, q.variant_id, q.job_id, q.task_id, q.id, ?,
+        SELECT ?, q.item_id, q.variant_id, q.id, ?,
             ?, ?, ?, ?, ?, q.image_index, 'candidate', 0, ?, ?
         FROM planner_v3_queue q
-        JOIN planner_v3_jobs j ON j.id = q.job_id
         WHERE q.id = ?
     `).bind(
         assetId,
@@ -1520,31 +1686,6 @@ export async function completePlannerV3BrowserQueue(env, body = {}) {
         timestamp,
         timestamp,
         queueId
-    ).run();
-    await env.DB.prepare(`
-        INSERT INTO planner_v3_asset_metadata (
-            asset_id, prompt, negative_prompt, model, sampler, steps, scale, seed,
-            width, height, split_prompts_json, v4_rows_json, request_json, response_json,
-            metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `).bind(
-        assetId,
-        body.prompt || "",
-        body.negativePrompt || "",
-        body.model || "",
-        body.sampler || "",
-        body.steps || null,
-        body.scale || "",
-        body.seed || "",
-        body.width || null,
-        body.height || null,
-        JSON.stringify(body.splitPrompts || {}),
-        JSON.stringify(body.v4Rows || []),
-        JSON.stringify(body.request || {}),
-        JSON.stringify(body.response || {}),
-        JSON.stringify(body.metadata || {}),
-        timestamp,
-        timestamp
     ).run();
     await env.DB.batch([
         env.DB.prepare("UPDATE planner_v3_queue SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?").bind(timestamp, timestamp, queueId),
@@ -1626,10 +1767,11 @@ export async function confirmPlannerV3Asset(env, body = {}) {
     await env.DB.prepare("UPDATE planner_v3_confirm_operations SET status = 'metadata_saved', updated_at = ? WHERE id = ?")
         .bind(timestamp, operationId).run();
     const itemAssets = (await env.DB.prepare(`
-        SELECT id, run_id, item_id, r2_key
-        FROM planner_v3_assets
-        WHERE item_id = ?
-        ORDER BY image_index, created_at
+        SELECT a.id, i.run_id, a.item_id, a.r2_key
+        FROM planner_v3_assets a
+        JOIN planner_v3_items i ON i.id = a.item_id
+        WHERE a.item_id = ?
+        ORDER BY a.image_index, a.created_at
     `).bind(itemId).all()).results || [];
     const cleanupFailures = [];
     for (const candidate of itemAssets) {
@@ -1742,12 +1884,12 @@ async function getPlannerV3QueueContext(env, queueId) {
             j.status AS job_status,
             t.status AS task_status,
             i.status AS item_status,
-            gs.extra_json AS generation_json
+            gs.generation_json AS generation_json
         FROM planner_v3_queue q
         JOIN planner_v3_jobs j ON j.id = q.job_id
         JOIN planner_v3_job_tasks t ON t.id = q.task_id
         JOIN planner_v3_items i ON i.id = q.item_id
-        LEFT JOIN planner_v3_generation_settings gs
+        LEFT JOIN planner_v3_generation_snapshots gs
           ON gs.owner_type = 'variant'
          AND gs.owner_id = q.variant_id
         WHERE q.id = ?
@@ -1831,17 +1973,14 @@ async function registerPlannerV3GeneratedAsset(env, queue, request, r2Key, fileN
     const assetId = r2Key.split("/").pop().replace(/\.webp$/i, "") || makePlannerV3Id("passet");
     await env.DB.prepare(`
         INSERT INTO planner_v3_assets (
-            id, run_id, item_id, variant_id, job_id, task_id, queue_id, r2_key,
+            id, item_id, variant_id, queue_id, r2_key,
             file_name, mime_type, byte_size, width, height, image_index, status,
             is_public, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'image/webp', ?, ?, ?, ?, 'candidate', 0, ?, ?)
+        ) VALUES (?, ?, ?, ?, ?, ?, 'image/webp', ?, ?, ?, ?, 'candidate', 0, ?, ?)
     `).bind(
         assetId,
-        queue.run_id,
         queue.item_id,
         queue.variant_id,
-        queue.job_id,
-        queue.task_id,
         queue.id,
         r2Key,
         fileName,
@@ -1849,40 +1988,6 @@ async function registerPlannerV3GeneratedAsset(env, queue, request, r2Key, fileN
         request.width || null,
         request.height || null,
         queue.image_index,
-        timestamp,
-        timestamp
-    ).run();
-    await env.DB.prepare(`
-        INSERT INTO planner_v3_asset_metadata (
-            asset_id, prompt, negative_prompt, model, sampler, steps, scale, seed,
-            width, height, split_prompts_json, v4_rows_json, request_json, response_json,
-            metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)
-    `).bind(
-        assetId,
-        request.prompt || "",
-        request.negative || "",
-        request.model || "",
-        request.sampler || "",
-        request.steps || null,
-        request.scale == null ? "" : String(request.scale),
-        request.payload?.parameters?.seed == null ? "" : String(request.payload.parameters.seed),
-        request.width || null,
-        request.height || null,
-        JSON.stringify(request.splitPrompts || {}),
-        JSON.stringify(request.payload?.parameters?.v4_prompt?.caption?.char_captions || []),
-        JSON.stringify(request.payload || {}),
-        JSON.stringify({
-            Prompt: request.prompt || "",
-            "Negative Prompt": request.negative || "",
-            Model: request.model || "",
-            Sampler: request.sampler || "",
-            Steps: request.steps || "",
-            "CFG Scale": request.scale == null ? "" : String(request.scale),
-            Seed: request.payload?.parameters?.seed == null ? "" : String(request.payload.parameters.seed),
-            Width: request.width || "",
-            Height: request.height || ""
-        }),
         timestamp,
         timestamp
     ).run();

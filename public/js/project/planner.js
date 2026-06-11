@@ -197,6 +197,33 @@ export async function savePlannerMeta(project, meta, options = {}) {
     writePlannerMetaCache(key, normalized);
 }
 
+export async function savePlannerItem(project, meta, item) {
+    const key = getPlannerMetaKey(project, meta?.characterId || getSelectedPlannerCharacterId(project));
+    const normalized = normalizePlannerStoredMeta(meta || {});
+    normalized.projectId = normalized.projectId || project?.id || '';
+    normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
+    const res = await fetch('/api/planner/v3/item?_t=' + Date.now(), {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json; charset=utf-8'
+        },
+        body: JSON.stringify({
+            meta: normalized,
+            item
+        }),
+        cache: 'no-store'
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || '플래너 항목 저장에 실패했습니다.');
+    }
+    const payload = await res.json().catch(() => ({}));
+    if (payload?.data?.runId) normalized.id = payload.data.runId;
+    if (payload?.data?.itemId && item) item.id = payload.data.itemId;
+    writePlannerMetaCache(key, normalized);
+    return payload.data || {};
+}
+
 export async function deletePlannerMeta(project, characterId = '') {
     if (!project?.prefix) return;
     const key = getPlannerMetaKey(project, characterId || getSelectedPlannerCharacterId(project));
@@ -2033,7 +2060,7 @@ export async function savePlannerSituationPlan() {
     meta.lastSituationId = situation.id;
     meta.status = 'draft';
     meta.updatedAt = Date.now();
-    await savePlannerMeta(project, meta);
+    await savePlannerItem(project, meta, item);
     window.PROJECT_PLANNER_META = meta;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     renderPlannerSituationPlanOverlay();

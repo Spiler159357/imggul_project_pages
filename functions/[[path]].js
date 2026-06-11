@@ -12,6 +12,7 @@ import {
     getPlannerV3Status,
     jsonResponse,
     pausePlannerV3Generation,
+    putPlannerV3ItemFromMeta,
     putPlannerV3RunFromMeta,
     putPlannerV3Settings,
     resumePlannerV3Generation,
@@ -1927,6 +1928,17 @@ export async function onRequest(context) {
             return jsonResponse({ success: true, data });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
+        }
+    }
+
+    if (path === "/api/planner/v3/item" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            const data = await putPlannerV3ItemFromMeta(env, body || {});
+            return jsonResponse({ success: true, data });
+        } catch (e) {
+            return jsonResponse({ error: e.message }, { status: e.status || 500 });
         }
     }
 
