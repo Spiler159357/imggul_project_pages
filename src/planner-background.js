@@ -191,55 +191,19 @@ export async function writeBackgroundErrorLog(env, error, context = {}) {
     }
 }
 
-function getPlannerPrefix(projectPrefix) {
-    return `${projectPrefix}_planner_temp_image/`;
-}
 
-function getPlannerMetaKey(projectPrefix, characterId = "") {
-    const normalizedCharacterId = String(characterId || "").trim().replace(/[\\/]+/g, "_");
-    return normalizedCharacterId
-        ? `${getPlannerPrefix(projectPrefix)}plans/${normalizedCharacterId}_planner_meta.json`
-        : `${getPlannerPrefix(projectPrefix)}_planner_meta.json`;
-}
 
-function getPlannerImagePrefix(projectPrefix, imageNumber) {
-    return `${getPlannerPrefix(projectPrefix)}${imageNumber}/`;
-}
 
-function getActiveJobKey(projectId, targetSituationId = null) {
-    return `${projectId}:${targetSituationId || "__all__"}`;
-}
 
-function getActiveProjectKey(projectId) {
-    return `${projectId}:__project__`;
-}
 
 function parsePositiveInt(value, fallback = 1) {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-function parseResultKeys(value) {
-    try {
-        const parsed = JSON.parse(value || "[]");
-        return Array.isArray(parsed) ? parsed : [];
-    } catch {
-        return [];
-    }
-}
 
-function compactResultKeys(value) {
-    return parseResultKeys(value).filter(Boolean);
-}
 
-function getExistingPlannerResultKeys(item, count) {
-    const keys = Array.isArray(item?.images) ? item.images.filter(Boolean) : [];
-    return keys.slice(0, count);
-}
 
-function getResultKeyCount(resultKeys) {
-    return Array.isArray(resultKeys) ? resultKeys.filter(Boolean).length : 0;
-}
 
 function chunkArray(items, size) {
     const chunks = [];
@@ -257,31 +221,8 @@ function parseResolution(value) {
     };
 }
 
-function normalizePlannerMeta(meta) {
-    if (!meta || typeof meta !== "object") throw new Error("plannerMeta is required");
-    if (!Array.isArray(meta.items) || meta.items.length === 0) {
-        throw new Error("plannerMeta.items is empty");
-    }
-    return meta;
-}
 
-function collectTargetItems(meta, targetSituationId = null) {
-    const items = targetSituationId
-        ? meta.items.filter(item => item.situationId === targetSituationId)
-        : meta.items;
-    if (!items.length) throw new Error("No planner items matched the background run target");
-    return items;
-}
 
-function assertSupportedBackgroundItem(item) {
-    const generation = item.generation || {};
-    if (generation.vibeImageKey || generation.preciseImageKey) {
-        throw new Error("Background generation does not support planner reference images yet");
-    }
-    if (generation.inpaintPayload || generation.inpaintImageKey) {
-        throw new Error("Background generation does not support inpaint yet");
-    }
-}
 
 function getPromptParts(generation = {}) {
     const prompts = generation.prompts || {};
@@ -397,528 +338,6 @@ async function queryFirst(db, sql, ...params) {
     return params.length ? await statement.bind(...params).first() : await statement.first();
 }
 
-async function ensurePlannerBackgroundSchema(env) {
-    await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS planner_background_rate_limits (
-            key TEXT PRIMARY KEY,
-            available_at INTEGER NOT NULL,
-            updated_at TEXT NOT NULL
-        )
-    `).run();
-    await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS planner_background_queue (
-            id TEXT PRIMARY KEY,
-            job_id TEXT NOT NULL,
-            item_id TEXT NOT NULL,
-            sequence INTEGER NOT NULL,
-            image_index INTEGER NOT NULL,
-            status TEXT NOT NULL DEFAULT 'queued',
-            attempts INTEGER NOT NULL DEFAULT 0,
-            error_message TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            started_at TEXT,
-            completed_at TEXT,
-            UNIQUE(job_id, sequence),
-            UNIQUE(job_id, item_id, image_index)
-        )
-    `).run();
-    await env.DB.prepare(`
-        CREATE INDEX IF NOT EXISTS idx_planner_background_queue_next
-        ON planner_background_queue(job_id, status, sequence)
-    `).run();
-
-    const columns = await queryAll(env.DB, "PRAGMA table_info(planner_background_jobs)");
-    if (!columns.length) return;
-    const hasJobStage = columns.some(column => column.name === "stage");
-    if (!hasJobStage) {
-        await env.DB.prepare("ALTER TABLE planner_background_jobs ADD COLUMN stage TEXT").run();
-    }
-    const hasActiveKey = columns.some(column => column.name === "active_key");
-    if (!hasActiveKey) {
-        await env.DB.prepare("ALTER TABLE planner_background_jobs ADD COLUMN active_key TEXT").run();
-    }
-    const hasActiveProjectKey = columns.some(column => column.name === "active_project_key");
-    if (!hasActiveProjectKey) {
-        await env.DB.prepare("ALTER TABLE planner_background_jobs ADD COLUMN active_project_key TEXT").run();
-    }
-    await env.DB.prepare(`
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_planner_background_jobs_active_key
-        ON planner_background_jobs(active_key)
-        WHERE status IN ('queued', 'running', 'cancel_requested')
-    `).run();
-    await env.DB.prepare(`
-        CREATE UNIQUE INDEX IF NOT EXISTS idx_planner_background_jobs_active_project_key
-        ON planner_background_jobs(active_project_key)
-        WHERE status IN ('queued', 'running', 'cancel_requested')
-    `).run();
-
-    const itemColumns = await queryAll(env.DB, "PRAGMA table_info(planner_background_items)");
-    const hasItemStage = itemColumns.some(column => column.name === "stage");
-    if (itemColumns.length && !hasItemStage) {
-        await env.DB.prepare("ALTER TABLE planner_background_items ADD COLUMN stage TEXT").run();
-    }
-    const hasQueueOrder = itemColumns.some(column => column.name === "queue_order");
-    if (itemColumns.length && !hasQueueOrder) {
-        await env.DB.prepare("ALTER TABLE planner_background_items ADD COLUMN queue_order INTEGER").run();
-    }
-}
-
-async function cleanupFinishedBackgroundJobs(env) {
-    const cutoff = isoBeforeNow(TERMINAL_JOB_RETENTION_MS);
-    const placeholders = TERMINAL_JOB_STATUSES.map(() => "?").join(", ");
-    const oldJobs = await queryAll(
-        env.DB,
-        `SELECT id FROM planner_background_jobs WHERE status IN (${placeholders}) AND updated_at <= ? LIMIT 50`,
-        ...TERMINAL_JOB_STATUSES,
-        cutoff
-    );
-    const jobIds = oldJobs.map(job => job.id).filter(Boolean);
-    if (!jobIds.length) return 0;
-
-    const jobPlaceholders = jobIds.map(() => "?").join(", ");
-    await env.DB.batch([
-        env.DB.prepare(`DELETE FROM planner_background_queue WHERE job_id IN (${jobPlaceholders})`).bind(...jobIds),
-        env.DB.prepare(`DELETE FROM planner_background_items WHERE job_id IN (${jobPlaceholders})`).bind(...jobIds),
-        env.DB.prepare(`DELETE FROM planner_background_jobs WHERE id IN (${jobPlaceholders})`).bind(...jobIds)
-    ]);
-    return jobIds.length;
-}
-
-async function findActiveBackgroundJob(env, projectId) {
-    const activePlaceholders = ACTIVE_JOB_STATUSES.map(() => "?").join(", ");
-    const params = [
-        projectId,
-        ...ACTIVE_JOB_STATUSES
-    ];
-    return await queryFirst(
-        env.DB,
-        `
-            SELECT * FROM planner_background_jobs
-            WHERE project_id = ?
-              AND status IN (${activePlaceholders})
-            ORDER BY created_at DESC
-            LIMIT 1
-        `,
-        ...params
-    );
-}
-
-export async function startPlannerBackgroundJob(env, body) {
-    requireBackgroundBindings(env);
-    await ensurePlannerBackgroundSchema(env);
-    await cleanupFinishedBackgroundJobs(env).catch(() => null);
-    const plannerMeta = normalizePlannerMeta(body?.plannerMeta);
-    const projectId = String(body.projectId || plannerMeta.projectId || "").trim();
-    const projectPrefix = String(body.projectPrefix || "").trim();
-    const characterId = String(plannerMeta.characterId || "").trim();
-    const characterPrefix = String(plannerMeta.characterPrefix || "").trim();
-    const targetSituationId = body.targetSituationId || null;
-
-    if (!projectId) throw new Error("projectId is required");
-    if (!projectPrefix || projectPrefix.startsWith("/") || projectPrefix.includes("..")) {
-        throw new Error("projectPrefix is invalid");
-    }
-
-    const targetItems = collectTargetItems(plannerMeta, targetSituationId);
-    targetItems.forEach(assertSupportedBackgroundItem);
-    const totalCount = targetItems.reduce((sum, item) => sum + parsePositiveInt(item.count || plannerMeta.defaultCount, 1), 0);
-    const initialCompletedCount = targetItems.reduce((sum, item) => {
-        const count = parsePositiveInt(item.count || plannerMeta.defaultCount, 1);
-        return sum + Math.min(count, getExistingPlannerResultKeys(item, count).length);
-    }, 0);
-    const activeKey = getActiveJobKey(projectId, targetSituationId);
-    const activeProjectKey = getActiveProjectKey(projectId);
-    const activeJob = await findActiveBackgroundJob(env, projectId);
-    if (activeJob) {
-        await syncPlannerMetaToR2Safely(env, activeJob.id, { stage: "background_start_existing_job" });
-        return {
-            jobId: activeJob.id,
-            status: activeJob.status,
-            totalCount: activeJob.total_count,
-            existing: true
-        };
-    }
-
-    const jobId = makeId("job");
-    const createdAt = nowIso();
-    const hasPendingGeneration = initialCompletedCount < totalCount;
-    const initialJobStatus = hasPendingGeneration ? "queued" : "completed";
-    const initialJobStage = initialJobStatus;
-
-    const inserts = [
-        env.DB.prepare(`
-            INSERT INTO planner_background_jobs (
-                id, project_id, project_prefix, character_id, character_prefix, status, stage,
-                total_count, completed_count, failed_count, target_situation_id,
-                planner_meta_json, active_key, active_project_key, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
-        `).bind(
-            jobId,
-            projectId,
-            projectPrefix,
-            characterId,
-            characterPrefix,
-            initialJobStatus,
-            initialJobStage,
-            totalCount,
-            initialCompletedCount,
-            targetSituationId,
-            JSON.stringify(plannerMeta),
-            activeKey,
-            activeProjectKey,
-            createdAt,
-            createdAt
-        )
-    ];
-
-    let queueSequence = 0;
-    for (const [queueOrder, item] of targetItems.entries()) {
-        const itemId = makeId("item");
-        const count = parsePositiveInt(item.count || plannerMeta.defaultCount, 1);
-        const resultKeys = getExistingPlannerResultKeys(item, count);
-        const completedCount = Math.min(count, getResultKeyCount(resultKeys));
-        const itemStatus = completedCount >= count ? "completed" : "queued";
-        const outputPrefix = getPlannerImagePrefix(projectPrefix, item.imageNumber);
-        const generationJson = itemStatus === "completed"
-            ? "{}"
-            : JSON.stringify(item.generation || {});
-        inserts.push(env.DB.prepare(`
-            INSERT INTO planner_background_items (
-                id, job_id, situation_id, situation_name, image_number, output_prefix,
-                generation_json, count, completed_count, failed_count, status, stage,
-                result_keys, queue_order, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?)
-        `).bind(
-            itemId,
-            jobId,
-            item.situationId || "",
-            item.situationName || item.situationId || "",
-            String(item.imageNumber),
-            outputPrefix,
-            generationJson,
-            count,
-            completedCount,
-            itemStatus,
-            itemStatus,
-            JSON.stringify(resultKeys),
-            queueOrder,
-            createdAt,
-            createdAt
-        ));
-        for (let imageIndex = 0; imageIndex < count; imageIndex += 1) {
-            if (resultKeys[imageIndex]) continue;
-            inserts.push(env.DB.prepare(`
-                INSERT INTO planner_background_queue (
-                    id, job_id, item_id, sequence, image_index, status, attempts, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-            `).bind(
-                makeId("queue"),
-                jobId,
-                itemId,
-                queueSequence,
-                imageIndex,
-                createdAt,
-                createdAt
-            ));
-            queueSequence += 1;
-        }
-    }
-
-    try {
-        await env.DB.batch(inserts);
-    } catch (error) {
-        const concurrentJob = await findActiveBackgroundJob(env, projectId);
-        if (concurrentJob) {
-            await syncPlannerMetaToR2Safely(env, concurrentJob.id, { stage: "background_start_concurrent_job" });
-            return {
-                jobId: concurrentJob.id,
-                status: concurrentJob.status,
-                totalCount: concurrentJob.total_count,
-                existing: true
-            };
-        }
-        throw error;
-    }
-    await enqueueNextPlannerQueueMessage(env, jobId);
-    await syncPlannerMetaToR2Safely(env, jobId, { stage: "background_start_sync" });
-
-    return { jobId, status: initialJobStatus, totalCount };
-}
-
-export async function getPlannerBackgroundStatus(env, jobId) {
-    if (!env.DB) throw new Error("Missing Cloudflare binding: DB");
-    await ensurePlannerBackgroundSchema(env);
-    await cleanupFinishedBackgroundJobs(env).catch(() => null);
-    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job) {
-        return {
-            jobId,
-            status: "expired",
-            stage: "expired",
-            stageLabel: "Expired",
-            expired: true,
-            items: []
-        };
-    }
-    const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ? ORDER BY image_number", jobId);
-    return {
-        jobId: job.id,
-        status: job.status,
-        stage: job.stage || "",
-        stageLabel: STAGE_LABELS[job.stage] || job.stage || "",
-        projectId: job.project_id,
-        projectPrefix: job.project_prefix,
-        totalCount: job.total_count,
-        completedCount: job.completed_count,
-        failedCount: job.failed_count,
-        errorMessage: job.error_message || "",
-        createdAt: job.created_at,
-        updatedAt: job.updated_at,
-        completedAt: job.completed_at,
-        items: items.map(item => ({
-            id: item.id,
-            situationId: item.situation_id,
-            situationName: item.situation_name,
-            imageNumber: item.image_number,
-            outputPrefix: item.output_prefix,
-            count: item.count,
-            completedCount: item.completed_count,
-            failedCount: item.failed_count,
-            status: item.status,
-            stage: item.stage || "",
-            stageLabel: STAGE_LABELS[item.stage] || item.stage || "",
-            resultKeys: compactResultKeys(item.result_keys),
-            errorMessage: item.error_message || ""
-        }))
-    };
-}
-
-export async function cancelPlannerBackgroundJob(env, jobId) {
-    if (!env.DB) throw new Error("Missing Cloudflare binding: DB");
-    await ensurePlannerBackgroundSchema(env);
-    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job) throw new Error("Background job not found");
-    const terminalStatuses = ["completed", "failed", "partial_failed"];
-    if (terminalStatuses.includes(job.status)) {
-        await syncPlannerMetaToR2(env, jobId).catch(() => null);
-        return { jobId, status: job.status };
-    }
-
-    await resetPlannerMetaAfterBackgroundCancel(env, jobId).catch(() => null);
-    await env.DB.batch([
-        env.DB.prepare("DELETE FROM planner_background_queue WHERE job_id = ?").bind(jobId),
-        env.DB.prepare("DELETE FROM planner_background_items WHERE job_id = ?").bind(jobId),
-        env.DB.prepare("DELETE FROM planner_background_jobs WHERE id = ?").bind(jobId)
-    ]);
-    await cleanupFinishedBackgroundJobs(env).catch(() => null);
-    return { jobId, status: "queued" };
-}
-
-export async function pausePlannerBackgroundJob(env, jobId) {
-    if (!env.DB) throw new Error("Missing Cloudflare binding: DB");
-    await ensurePlannerBackgroundSchema(env);
-    const updatedAt = nowIso();
-    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job) throw new Error("Background job not found");
-    const terminalStatuses = ["completed", "failed", "partial_failed"];
-    if (terminalStatuses.includes(job.status) || job.status === PAUSED_JOB_STATUS) {
-        await syncPlannerMetaToR2(env, jobId).catch(() => null);
-        return { jobId, status: job.status };
-    }
-
-    await env.DB.batch([
-        env.DB.prepare(`
-        UPDATE planner_background_jobs
-        SET status = 'paused',
-            stage = 'paused',
-            updated_at = ?
-            WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed')
-        `).bind(updatedAt, jobId),
-        env.DB.prepare(`
-        UPDATE planner_background_items
-        SET status = 'paused',
-            stage = 'paused',
-            updated_at = ?
-            WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed')
-        `).bind(updatedAt, jobId),
-        env.DB.prepare(`
-        UPDATE planner_background_queue
-        SET status = 'paused',
-            updated_at = ?
-            WHERE job_id = ? AND status IN ('queued', 'running')
-        `).bind(updatedAt, jobId)
-    ]);
-    await syncPlannerMetaToR2(env, jobId).catch(() => null);
-    return { jobId, status: PAUSED_JOB_STATUS };
-}
-
-async function enqueuePlannerBackgroundMessages(env, messages) {
-    if (!messages.length) return;
-    if (env.GENERATION_QUEUE.sendBatch) {
-        for (const batch of chunkArray(messages, QUEUE_SEND_BATCH_SIZE)) {
-            await env.GENERATION_QUEUE.sendBatch(batch);
-        }
-        return;
-    }
-    for (const message of messages) {
-        await env.GENERATION_QUEUE.send(message.body);
-    }
-}
-
-async function ensurePlannerQueueEntriesForJob(env, jobId) {
-    const existing = await queryFirst(env.DB, "SELECT id FROM planner_background_queue WHERE job_id = ? LIMIT 1", jobId);
-    if (existing) return;
-    const items = await queryAll(env.DB, `
-        SELECT id, count, result_keys
-        FROM planner_background_items
-        WHERE job_id = ?
-        ORDER BY
-          CASE WHEN queue_order IS NULL THEN 1 ELSE 0 END,
-          queue_order ASC,
-          CAST(image_number AS INTEGER) ASC,
-          image_number ASC,
-          created_at ASC
-    `, jobId);
-    const now = nowIso();
-    const inserts = [];
-    let sequence = 0;
-    for (const item of items) {
-        const resultKeys = parseResultKeys(item.result_keys);
-        const count = Number(item.count || 0);
-        for (let imageIndex = 0; imageIndex < count; imageIndex += 1) {
-            if (resultKeys[imageIndex]) continue;
-            inserts.push(env.DB.prepare(`
-                INSERT OR IGNORE INTO planner_background_queue (
-                    id, job_id, item_id, sequence, image_index, status, attempts, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, 'queued', 0, ?, ?)
-            `).bind(makeId("queue"), jobId, item.id, sequence, imageIndex, now, now));
-            sequence += 1;
-        }
-    }
-    if (inserts.length) await env.DB.batch(inserts);
-}
-
-async function getNextPlannerQueueMessage(env, jobId) {
-    const job = await queryFirst(env.DB, "SELECT status FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job || !["queued", "running"].includes(job.status)) return null;
-    await ensurePlannerQueueEntriesForJob(env, jobId);
-    const running = await queryFirst(
-        env.DB,
-        "SELECT id FROM planner_background_queue WHERE job_id = ? AND status = 'running' LIMIT 1",
-        jobId
-    );
-    if (running) return null;
-
-    const entry = await queryFirst(env.DB, `
-        SELECT id, item_id, image_index, attempts
-        FROM planner_background_queue
-        WHERE job_id = ? AND status = 'queued'
-        ORDER BY sequence ASC
-        LIMIT 1
-    `, jobId);
-    if (!entry) return null;
-    const now = nowIso();
-    await env.DB.prepare(`
-        UPDATE planner_background_queue
-        SET status = 'running',
-            attempts = attempts + 1,
-            started_at = COALESCE(started_at, ?),
-            updated_at = ?
-        WHERE id = ? AND status = 'queued'
-    `).bind(now, now, entry.id).run();
-    return {
-        body: {
-            jobId,
-            queueId: entry.id,
-            itemId: entry.item_id,
-            imageIndex: Number(entry.image_index || 0),
-            attempt: Number(entry.attempts || 0) + 1
-        }
-    };
-}
-
-async function enqueueNextPlannerQueueMessage(env, jobId) {
-    const message = await getNextPlannerQueueMessage(env, jobId);
-    if (!message) return false;
-    await enqueuePlannerBackgroundMessages(env, [message]);
-    return true;
-}
-
-export async function resumePlannerBackgroundJob(env, jobId) {
-    requireBackgroundBindings(env);
-    await ensurePlannerBackgroundSchema(env);
-    await cleanupFinishedBackgroundJobs(env).catch(() => null);
-    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job) {
-        return { jobId, status: "expired", expired: true };
-    }
-    if (["completed", "failed", "partial_failed"].includes(job.status)) {
-        await syncPlannerMetaToR2(env, jobId).catch(() => null);
-        return { jobId, status: job.status };
-    }
-    if (job.status !== PAUSED_JOB_STATUS) {
-        await syncPlannerMetaToR2(env, jobId).catch(() => null);
-        return { jobId, status: job.status };
-    }
-
-    const activeJob = await findActiveBackgroundJob(env, job.project_id);
-    if (activeJob && activeJob.id !== jobId) {
-        throw new Error("Another planner background job is already active for this project");
-    }
-
-    const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ? ORDER BY image_number", jobId);
-    const updatedAt = nowIso();
-    const runnableItems = items.filter(item => !["completed", "partial_failed", "failed"].includes(item.status));
-    const itemUpdates = [];
-    for (const item of runnableItems) {
-        const resultKeys = parseResultKeys(item.result_keys);
-        const count = Number(item.count || 0);
-        const completedCount = Math.min(count, getResultKeyCount(resultKeys));
-        const complete = completedCount >= count;
-        itemUpdates.push(env.DB.prepare(`
-            UPDATE planner_background_items
-            SET completed_count = ?,
-                status = ?,
-                stage = ?,
-                generation_json = CASE WHEN ? = 1 THEN '{}' ELSE generation_json END,
-                updated_at = ?,
-                completed_at = CASE WHEN ? = 1 THEN COALESCE(completed_at, ?) ELSE completed_at END
-            WHERE id = ?
-        `).bind(completedCount, complete ? "completed" : "queued", complete ? "completed" : "queued", complete ? 1 : 0, updatedAt, complete ? 1 : 0, updatedAt, item.id));
-    }
-
-    await env.DB.batch([
-        env.DB.prepare(`
-            UPDATE planner_background_jobs
-            SET status = 'queued',
-                stage = 'queued',
-                updated_at = ?
-            WHERE id = ?
-        `).bind(updatedAt, jobId),
-        env.DB.prepare(`
-            UPDATE planner_background_items
-            SET status = 'queued',
-                stage = 'queued',
-                updated_at = ?
-            WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed')
-        `).bind(updatedAt, jobId)
-    ]);
-    if (itemUpdates.length) await env.DB.batch(itemUpdates);
-    await ensurePlannerQueueEntriesForJob(env, jobId);
-    await env.DB.prepare(`
-        UPDATE planner_background_queue
-        SET status = 'queued',
-            updated_at = ?
-        WHERE job_id = ? AND status IN ('paused', 'running')
-    `).bind(updatedAt, jobId).run();
-    await refreshJobRollup(env, jobId);
-    await enqueueNextPlannerQueueMessage(env, jobId);
-    await syncPlannerMetaToR2(env, jobId).catch(() => null);
-    const resumedJob = await queryFirst(env.DB, "SELECT status FROM planner_background_jobs WHERE id = ?", jobId);
-    return { jobId, status: resumedJob?.status || "queued", totalCount: job.total_count };
-}
-
 async function callNovelAi(env, payload) {
     const res = await fetch(NAI_ENDPOINT, {
         method: "POST",
@@ -971,7 +390,7 @@ async function setNovelAiCooldown(env, delaySeconds) {
     const delayMs = Math.max(0, Number(delaySeconds || 0) * 1000);
     const availableAt = Date.now() + delayMs;
     await env.DB.prepare(`
-        INSERT INTO planner_background_rate_limits (key, available_at, updated_at)
+        INSERT INTO planner_v3_rate_limits (key, available_at, updated_at)
         VALUES ('novelai', ?, ?)
         ON CONFLICT(key) DO UPDATE SET
             available_at = MAX(available_at, excluded.available_at),
@@ -980,7 +399,7 @@ async function setNovelAiCooldown(env, delaySeconds) {
 }
 
 async function waitForNovelAiSlot(env) {
-    const row = await queryFirst(env.DB, "SELECT available_at FROM planner_background_rate_limits WHERE key = 'novelai'");
+    const row = await queryFirst(env.DB, "SELECT available_at FROM planner_v3_rate_limits WHERE key = 'novelai'");
     const availableAt = Number(row?.available_at || 0);
     const waitMs = Math.max(0, availableAt - Date.now());
     if (waitMs > MAX_INLINE_COOLDOWN_MS) {
@@ -993,7 +412,7 @@ async function waitForNovelAiSlot(env) {
 
     const nextAvailableAt = Date.now() + NAI_MIN_REQUEST_INTERVAL_MS;
     await env.DB.prepare(`
-        INSERT INTO planner_background_rate_limits (key, available_at, updated_at)
+        INSERT INTO planner_v3_rate_limits (key, available_at, updated_at)
         VALUES ('novelai', ?, ?)
         ON CONFLICT(key) DO UPDATE SET
             available_at = excluded.available_at,
@@ -1061,13 +480,6 @@ async function extractFirstZipFile(zipBuffer) {
     throw new Error("Invalid zip: no files found");
 }
 
-function makeResultFileName(imageIndex) {
-    const d = new Date();
-    const pad = value => String(value).padStart(2, "0");
-    const dateString = `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`;
-    return `nai_bg_${dateString}_${String(imageIndex + 1).padStart(2, "0")}_${crypto.randomUUID().slice(0, 8)}.webp`;
-}
-
 async function encodeWebP(env, imageBuffer) {
     const imageStream = new Blob([imageBuffer]).stream();
     const output = await env.IMAGES.input(imageStream)
@@ -1077,844 +489,6 @@ async function encodeWebP(env, imageBuffer) {
         throw new Error(`WebP conversion failed: ${transformed.status}`);
     }
     return await transformed.arrayBuffer();
-}
-
-function parseJsonField(value, fallback) {
-    try {
-        return value ? JSON.parse(value) : fallback;
-    } catch {
-        return fallback;
-    }
-}
-
-async function putJsonDocument(env, docType, objectKey, value) {
-    if (!env?.DB) return;
-    if (docType === "planner_meta") {
-        await putPlannerMetaDocument(env, objectKey, value);
-        return;
-    }
-    const timestamp = nowIso();
-    await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS json_documents (
-            doc_type TEXT NOT NULL,
-            object_key TEXT NOT NULL,
-            data_json TEXT NOT NULL,
-            source TEXT NOT NULL DEFAULT 'db',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (doc_type, object_key)
-        )
-    `).run();
-    await env.DB.prepare(`
-        INSERT INTO json_documents (doc_type, object_key, data_json, source, created_at, updated_at)
-        VALUES (?, ?, ?, 'background_worker', ?, ?)
-        ON CONFLICT(doc_type, object_key) DO UPDATE SET
-            data_json = excluded.data_json,
-            source = excluded.source,
-            updated_at = excluded.updated_at
-    `).bind(docType, objectKey, JSON.stringify(value || {}), timestamp, timestamp).run();
-}
-
-async function ensurePlannerMetaSchema(env) {
-    if (!env?.DB) return;
-    await env.DB.batch([
-        env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS planner_metas (
-                object_key TEXT PRIMARY KEY,
-                project_id TEXT NOT NULL DEFAULT '',
-                project_prefix TEXT NOT NULL,
-                character_id TEXT NOT NULL,
-                character_prefix TEXT NOT NULL DEFAULT '',
-                status TEXT NOT NULL DEFAULT 'draft',
-                stage TEXT NOT NULL DEFAULT '',
-                stage_label TEXT NOT NULL DEFAULT '',
-                default_count INTEGER NOT NULL DEFAULT 20,
-                background_job_id TEXT NOT NULL DEFAULT '',
-                background_status_json TEXT NOT NULL DEFAULT '{}',
-                running_situation_ids_json TEXT NOT NULL DEFAULT '[]',
-                extra_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            )
-        `),
-        env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS planner_items (
-                id TEXT PRIMARY KEY,
-                meta_object_key TEXT NOT NULL,
-                situation_id TEXT NOT NULL,
-                situation_name TEXT NOT NULL DEFAULT '',
-                situation_index INTEGER,
-                image_number TEXT NOT NULL,
-                count INTEGER NOT NULL DEFAULT 20,
-                status TEXT NOT NULL DEFAULT 'pending',
-                stage TEXT NOT NULL DEFAULT '',
-                stage_label TEXT NOT NULL DEFAULT '',
-                selected_image TEXT NOT NULL DEFAULT '',
-                final_image TEXT NOT NULL DEFAULT '',
-                error_message TEXT NOT NULL DEFAULT '',
-                background_job_id TEXT NOT NULL DEFAULT '',
-                background_item_id TEXT NOT NULL DEFAULT '',
-                generation_json TEXT NOT NULL DEFAULT '{}',
-                extra_json TEXT NOT NULL DEFAULT '{}',
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                UNIQUE (meta_object_key, situation_id)
-            )
-        `),
-        env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS planner_item_v4_rows (
-                item_id TEXT NOT NULL,
-                row_index INTEGER NOT NULL,
-                subject TEXT NOT NULL DEFAULT '',
-                clothing TEXT NOT NULL DEFAULT '',
-                expression TEXT NOT NULL DEFAULT '',
-                action TEXT NOT NULL DEFAULT '',
-                negative TEXT NOT NULL DEFAULT '',
-                PRIMARY KEY (item_id, row_index)
-            )
-        `),
-        env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS planner_item_images (
-                item_id TEXT NOT NULL,
-                image_key TEXT NOT NULL,
-                sort_order INTEGER NOT NULL DEFAULT 0,
-                created_at TEXT NOT NULL,
-                PRIMARY KEY (item_id, image_key)
-            )
-        `),
-        env.DB.prepare(`
-            CREATE TABLE IF NOT EXISTS planner_item_image_snapshots (
-                item_id TEXT NOT NULL,
-                image_key TEXT NOT NULL,
-                snapshot_json TEXT NOT NULL DEFAULT '{}',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                PRIMARY KEY (item_id, image_key)
-            )
-        `)
-    ]);
-}
-
-function getPlannerItemDbId(objectKey, item, index) {
-    return `${objectKey}#${item?.situationId || item?.imageNumber || index}`;
-}
-
-function getPlannerIdentityFromKey(objectKey = "") {
-    const key = String(objectKey || "");
-    const marker = "_planner_temp_image/";
-    const markerIndex = key.indexOf(marker);
-    const projectPrefix = markerIndex >= 0 ? key.slice(0, markerIndex) : "";
-    const planMatch = key.match(/\/plans\/([^/]+)_planner_meta\.json$/);
-    return {
-        projectPrefix,
-        characterId: planMatch?.[1] || ""
-    };
-}
-
-function getCanonicalPlannerObjectKey(objectKey = "", header = {}) {
-    const identity = getPlannerIdentityFromKey(objectKey);
-    const projectPrefix = header.projectPrefix || identity.projectPrefix || header.projectId || "";
-    const rawCharacterId = header.characterId || identity.characterId || "";
-    const characterId = String(rawCharacterId || "").trim().replace(/[\\/]+/g, "_");
-    if (!projectPrefix) return String(objectKey || "");
-    return characterId
-        ? `${projectPrefix}_planner_temp_image/plans/${characterId}_planner_meta.json`
-        : `${projectPrefix}_planner_temp_image/_planner_meta.json`;
-}
-
-async function ensureV2PlannerSourceSchema(env) {
-    await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS v2_planner_sources (
-            source_key TEXT PRIMARY KEY,
-            planner_run_id TEXT NOT NULL,
-            source_type TEXT NOT NULL DEFAULT 'planner_meta',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            FOREIGN KEY (planner_run_id) REFERENCES v2_planner_runs(id) ON DELETE CASCADE
-        )
-    `).run();
-    await env.DB.prepare(`
-        CREATE INDEX IF NOT EXISTS idx_v2_planner_sources_run
-        ON v2_planner_sources(planner_run_id)
-    `).run();
-}
-
-function normalizeV2PlannerRunStatus(status = "draft") {
-    if (status === "queued") return "running";
-    if (status === "partial_failed") return "failed";
-    if (status === "cancel_requested") return "draft";
-    return ["draft", "running", "paused", "completed", "confirmed", "failed"].includes(status) ? status : "draft";
-}
-
-function normalizeV2PlannerItemStatus(status = "pending") {
-    if (status === "queued") return "running";
-    if (status === "completed") return "done";
-    if (status === "partial_failed") return "failed";
-    if (status === "cancel_requested") return "pending";
-    return ["pending", "running", "paused", "done", "confirmed", "failed"].includes(status) ? status : "pending";
-}
-
-function splitPlannerMetaForDb(meta = {}) {
-    const {
-        items,
-        projectId,
-        projectPrefix,
-        characterId,
-        characterPrefix,
-        status,
-        stage,
-        stageLabel,
-        defaultCount,
-        backgroundJobId,
-        backgroundStatus,
-        runningSituationIds,
-        createdAt,
-        ...extra
-    } = meta || {};
-    return {
-        header: {
-            projectId: projectId || '',
-            projectPrefix: projectPrefix || '',
-            characterId: characterId || '',
-            characterPrefix: characterPrefix || '',
-            status: status || 'draft',
-            stage: stage || '',
-            stageLabel: stageLabel || '',
-            defaultCount: Number.parseInt(defaultCount || 20, 10) || 20,
-            backgroundJobId: backgroundJobId || '',
-            backgroundStatus: backgroundStatus || {},
-            runningSituationIds: Array.isArray(runningSituationIds) ? runningSituationIds : [],
-            extra,
-            createdAt
-        },
-        items: Array.isArray(items) ? items : []
-    };
-}
-
-function splitPlannerItemForDb(item = {}) {
-    const {
-        generation,
-        images,
-        imagePromptSnapshots,
-        situationId,
-        situationName,
-        situationIndex,
-        imageNumber,
-        count,
-        status,
-        stage,
-        stageLabel,
-        selectedImage,
-        finalImage,
-        errorMessage,
-        backgroundJobId,
-        backgroundItemId,
-        ...extra
-    } = item || {};
-    const generationCopy = { ...(generation || {}) };
-    const v4Rows = Array.isArray(generationCopy.v4PromptCharacters)
-        ? generationCopy.v4PromptCharacters
-        : (Array.isArray(generationCopy.v4_prompt) ? generationCopy.v4_prompt : []);
-    delete generationCopy.v4PromptCharacters;
-    delete generationCopy.v4_prompt;
-    return {
-        item: {
-            situationId: situationId || '',
-            situationName: situationName || situationId || '',
-            situationIndex: Number.isFinite(Number(situationIndex)) ? Number(situationIndex) : null,
-            imageNumber: String(imageNumber || ''),
-            count: Number.parseInt(count || 20, 10) || 20,
-            status: status || 'pending',
-            stage: stage || '',
-            stageLabel: stageLabel || '',
-            selectedImage: selectedImage || '',
-            finalImage: finalImage || '',
-            errorMessage: errorMessage || '',
-            backgroundJobId: backgroundJobId || '',
-            backgroundItemId: backgroundItemId || '',
-            generation: generationCopy,
-            extra
-        },
-        images: Array.isArray(images) ? images.filter(Boolean) : [],
-        snapshots: imagePromptSnapshots && typeof imagePromptSnapshots === 'object' ? imagePromptSnapshots : {},
-        v4Rows: Array.isArray(v4Rows) ? v4Rows : []
-    };
-}
-
-async function putV2PlannerMetaDocument(env, objectKey, meta = {}) {
-    await ensureV2PlannerSourceSchema(env);
-    const timestamp = nowIso();
-    const { header, items } = splitPlannerMetaForDb(meta);
-    const canonicalObjectKey = getCanonicalPlannerObjectKey(objectKey, header);
-    const identity = getPlannerIdentityFromKey(canonicalObjectKey);
-    const projectPrefix = header.projectPrefix || identity.projectPrefix || header.projectId || makeStableDbId("project", objectKey);
-    const projectId = projectPrefix;
-    const characterId = header.characterId || identity.characterId || makeStableDbId("character", objectKey);
-    const characterPrefix = header.characterPrefix || characterId;
-    const runId = makeStableDbId("run", canonicalObjectKey);
-    const currentPlannerItemIds = items.map((rawItem, index) => {
-        const situationId = rawItem?.situationId || makeStableDbId("situation", `${objectKey}:${index}`);
-        return makeStableDbId("pitem", `${objectKey}:${situationId}`);
-    });
-    const statements = [
-        env.DB.prepare(`
-            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
-        `).bind(projectId, projectPrefix, projectPrefix, timestamp, timestamp),
-        env.DB.prepare(`
-            INSERT INTO v2_characters (id, project_id, name, prefix, sort_order, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, prefix = excluded.prefix, updated_at = excluded.updated_at
-        `).bind(characterId, projectId, characterPrefix, characterPrefix, timestamp, timestamp),
-        env.DB.prepare("DELETE FROM v2_planner_sources WHERE source_key IN (?, ?)")
-            .bind(objectKey, canonicalObjectKey),
-        env.DB.prepare(`
-            INSERT INTO v2_planner_runs (
-                id, project_id, character_id, status, mode, default_count, source_object_key,
-                ui_status, stage, stage_label, background_job_id, background_status_json,
-                running_situation_ids_json, created_at, updated_at, completed_at, confirmed_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                project_id = excluded.project_id,
-                character_id = excluded.character_id,
-                status = excluded.status,
-                mode = excluded.mode,
-                default_count = excluded.default_count,
-                source_object_key = excluded.source_object_key,
-                ui_status = excluded.ui_status,
-                stage = excluded.stage,
-                stage_label = excluded.stage_label,
-                background_job_id = excluded.background_job_id,
-                background_status_json = excluded.background_status_json,
-                running_situation_ids_json = excluded.running_situation_ids_json,
-                updated_at = excluded.updated_at,
-                completed_at = excluded.completed_at,
-                confirmed_at = excluded.confirmed_at
-        `).bind(
-            runId,
-            projectId,
-            characterId,
-            normalizeV2PlannerRunStatus(header.status),
-            header.backgroundJobId ? "background" : "browser",
-            header.defaultCount,
-            canonicalObjectKey,
-            header.status || "",
-            header.stage || "",
-            header.stageLabel || "",
-            header.backgroundJobId || "",
-            JSON.stringify(header.backgroundStatus || {}),
-            JSON.stringify(header.runningSituationIds || []),
-            header.createdAt || timestamp,
-            timestamp,
-            ["completed", "confirmed"].includes(normalizeV2PlannerRunStatus(header.status)) ? timestamp : null,
-            normalizeV2PlannerRunStatus(header.status) === "confirmed" ? timestamp : null
-        ),
-        env.DB.prepare(`
-            INSERT INTO v2_planner_sources (source_key, planner_run_id, source_type, created_at, updated_at)
-            VALUES (?, ?, 'canonical', ?, ?)
-            ON CONFLICT(source_key) DO UPDATE SET
-                planner_run_id = excluded.planner_run_id,
-                source_type = excluded.source_type,
-                updated_at = excluded.updated_at
-        `).bind(canonicalObjectKey, runId, timestamp, timestamp),
-        env.DB.prepare(`
-            INSERT INTO v2_planner_sources (source_key, planner_run_id, source_type, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(source_key) DO UPDATE SET
-                planner_run_id = excluded.planner_run_id,
-                source_type = excluded.source_type,
-                updated_at = excluded.updated_at
-        `).bind(objectKey, runId, objectKey === canonicalObjectKey ? "canonical" : "alias", timestamp, timestamp)
-    ];
-    if (currentPlannerItemIds.length) {
-        const itemPlaceholders = currentPlannerItemIds.map(() => "?").join(",");
-        statements.push(
-            env.DB.prepare(`DELETE FROM v2_prompt_v4_rows WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (${itemPlaceholders}))`)
-                .bind("planner_item", ...currentPlannerItemIds),
-            env.DB.prepare(`DELETE FROM v2_prompt_parts WHERE prompt_set_id IN (SELECT id FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (${itemPlaceholders}))`)
-                .bind("planner_item", ...currentPlannerItemIds),
-            env.DB.prepare(`DELETE FROM v2_prompt_sets WHERE owner_type = ? AND owner_id IN (${itemPlaceholders})`)
-                .bind("planner_item", ...currentPlannerItemIds)
-        );
-    }
-
-    const seenAssetIds = new Set();
-
-    items.forEach((rawItem, index) => {
-        const split = splitPlannerItemForDb(rawItem);
-        const situationId = split.item.situationId || makeStableDbId("situation", `${objectKey}:${index}`);
-        const itemId = makeStableDbId("pitem", `${objectKey}:${situationId}`);
-        const promptSetId = makeStableDbId("prompt", itemId);
-        const imageIds = [];
-        split.images.forEach(imageKey => {
-            const assetId = getAssetIdFromKey(imageKey);
-            if (seenAssetIds.has(assetId)) return;
-            seenAssetIds.add(assetId);
-            imageIds.push({
-                key: imageKey,
-                assetId,
-                generatedId: makeStableDbId("pgen", `${itemId}:${imageKey}`)
-            });
-        });
-        const selected = imageIds.find(image => image.key === split.item.selectedImage);
-        const confirmed = imageIds.find(image => image.key === split.item.finalImage);
-        statements.push(
-            env.DB.prepare(`
-                INSERT INTO v2_situations (id, project_id, name, image_number, rating, sort_order, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 'sfw', ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, image_number = excluded.image_number, sort_order = excluded.sort_order, updated_at = excluded.updated_at
-            `).bind(situationId, projectId, split.item.situationName || situationId, split.item.imageNumber || String(index + 1), index, timestamp, timestamp),
-            env.DB.prepare(`
-                INSERT INTO v2_planner_items (
-                    id, planner_run_id, situation_id, image_number, status, target_count,
-                    selected_generated_image_id, confirmed_asset_id, sort_order, ui_status, situation_index,
-                    stage, stage_label, error_message, background_job_id, background_item_id, extra_json,
-                    created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    planner_run_id = excluded.planner_run_id,
-                    situation_id = excluded.situation_id,
-                    image_number = excluded.image_number,
-                    status = CASE
-                        WHEN v2_planner_items.status IN ('done', 'confirmed')
-                         AND excluded.status IN ('pending', 'running')
-                         AND excluded.background_job_id = ''
-                         AND excluded.background_item_id = ''
-                        THEN v2_planner_items.status
-                        ELSE excluded.status
-                    END,
-                    target_count = excluded.target_count,
-                    selected_generated_image_id = COALESCE(excluded.selected_generated_image_id, v2_planner_items.selected_generated_image_id),
-                    confirmed_asset_id = COALESCE(excluded.confirmed_asset_id, v2_planner_items.confirmed_asset_id),
-                    sort_order = excluded.sort_order,
-                    ui_status = CASE
-                        WHEN v2_planner_items.ui_status IN ('done', 'confirmed')
-                         AND excluded.ui_status IN ('pending', 'running')
-                         AND excluded.background_job_id = ''
-                         AND excluded.background_item_id = ''
-                        THEN v2_planner_items.ui_status
-                        ELSE excluded.ui_status
-                    END,
-                    situation_index = excluded.situation_index,
-                    stage = COALESCE(NULLIF(excluded.stage, ''), v2_planner_items.stage),
-                    stage_label = COALESCE(NULLIF(excluded.stage_label, ''), v2_planner_items.stage_label),
-                    error_message = excluded.error_message,
-                    background_job_id = COALESCE(NULLIF(excluded.background_job_id, ''), v2_planner_items.background_job_id),
-                    background_item_id = COALESCE(NULLIF(excluded.background_item_id, ''), v2_planner_items.background_item_id),
-                    extra_json = excluded.extra_json,
-                    updated_at = excluded.updated_at
-            `).bind(
-                itemId,
-                runId,
-                situationId,
-                split.item.imageNumber || String(index + 1),
-                normalizeV2PlannerItemStatus(split.item.status),
-                split.item.count,
-                selected?.generatedId || null,
-                confirmed?.assetId || null,
-                index,
-                split.item.status || "",
-                split.item.situationIndex,
-                split.item.stage || "",
-                split.item.stageLabel || "",
-                split.item.errorMessage || "",
-                split.item.backgroundJobId || "",
-                split.item.backgroundItemId || "",
-                JSON.stringify(split.item.extra || {}),
-                timestamp,
-                timestamp
-            ),
-            env.DB.prepare(`
-                INSERT INTO v2_prompt_sets (id, owner_type, owner_id, kind, name, is_active, sort_order, compiled_prompt_json, created_at, updated_at)
-                VALUES (?, 'planner_item', ?, 'snapshot', '', 1, 0, ?, ?, ?)
-            `).bind(promptSetId, itemId, JSON.stringify(split.item.generation || {}), timestamp, timestamp)
-        );
-        split.v4Rows.forEach((row, rowIndex) => {
-            statements.push(env.DB.prepare(`
-                INSERT INTO v2_prompt_v4_rows (id, prompt_set_id, row_index, subject, clothing, expression, action, negative)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            `).bind(makeStableDbId("v4", `${promptSetId}:${rowIndex}`), promptSetId, rowIndex, row?.subject || "", row?.clothing || "", row?.expression || "", row?.action || "", row?.negative || ""));
-        });
-        imageIds.forEach((image, imageIndex) => {
-            statements.push(
-                env.DB.prepare(`
-                    INSERT INTO v2_assets (
-                        id, project_id, owner_type, owner_id, r2_key, file_name, mime_type,
-                        kind, status, is_public, sort_order, created_at, updated_at
-                    ) VALUES (?, ?, 'planner_item', ?, ?, ?, 'image/webp', 'image', 'active', 0, ?, ?, ?)
-                    ON CONFLICT(id) DO UPDATE SET
-                        project_id = excluded.project_id,
-                        owner_type = excluded.owner_type,
-                        owner_id = excluded.owner_id,
-                        r2_key = excluded.r2_key,
-                        file_name = excluded.file_name,
-                        sort_order = excluded.sort_order,
-                        status = 'active',
-                        deleted_at = NULL,
-                        updated_at = excluded.updated_at
-                `).bind(image.assetId, projectId, itemId, image.key, getFileNameFromKey(image.key), imageIndex, timestamp, timestamp),
-                env.DB.prepare(`
-                    INSERT INTO v2_planner_generated_images (id, planner_item_id, asset_id, image_index, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?)
-                    ON CONFLICT(asset_id) DO UPDATE SET
-                        id = excluded.id,
-                        planner_item_id = excluded.planner_item_id,
-                        image_index = excluded.image_index,
-                        status = excluded.status,
-                        created_at = excluded.created_at
-                `).bind(image.generatedId, itemId, image.assetId, imageIndex, image.key === split.item.finalImage ? "confirmed" : (image.key === split.item.selectedImage ? "selected" : "candidate"), timestamp)
-            );
-        });
-    });
-
-    if (currentPlannerItemIds.length) {
-        const itemPlaceholders = currentPlannerItemIds.map(() => "?").join(",");
-        statements.push(env.DB.prepare(`
-            DELETE FROM v2_planner_items
-            WHERE planner_run_id = ?
-              AND id NOT IN (${itemPlaceholders})
-              AND id NOT IN (
-                  SELECT planner_item_id
-                  FROM v2_planner_generated_images
-                  WHERE planner_item_id IS NOT NULL
-              )
-        `).bind(runId, ...currentPlannerItemIds));
-    }
-
-    for (let i = 0; i < statements.length; i += 50) {
-        await env.DB.batch(statements.slice(i, i + 50));
-    }
-}
-
-function normalizeV2GenerationStatus(status = "queued") {
-    if (status === "cancel_requested") return "queued";
-    return ["queued", "running", "paused", "completed", "partial_failed", "failed"].includes(status) ? status : "queued";
-}
-
-async function syncV2GenerationFromBackgroundJob(env, jobId) {
-    if (!env?.DB) return;
-    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job) return;
-    const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
-    const queueRows = await queryAll(env.DB, "SELECT * FROM planner_background_queue WHERE job_id = ?", jobId);
-    const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
-    const plannerRunId = makeStableDbId("run", metaKey);
-    const projectId = job.project_prefix || job.project_id;
-    const characterId = job.character_id || makeStableDbId("character", metaKey);
-    const timestamp = nowIso();
-    const statements = [
-        env.DB.prepare(`
-            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
-        `).bind(projectId, job.project_prefix || projectId, job.project_prefix || projectId, timestamp, timestamp),
-        env.DB.prepare(`
-            INSERT INTO v2_characters (id, project_id, name, prefix, sort_order, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 0, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, prefix = excluded.prefix, updated_at = excluded.updated_at
-        `).bind(characterId, projectId, job.character_prefix || characterId, job.character_prefix || characterId, timestamp, timestamp),
-        env.DB.prepare(`
-            INSERT INTO v2_generation_jobs (
-                id, planner_run_id, project_id, character_id, status, mode, total_count,
-                completed_count, failed_count, source_background_job_id, started_at, completed_at, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'background', ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                planner_run_id = excluded.planner_run_id,
-                project_id = excluded.project_id,
-                character_id = excluded.character_id,
-                status = excluded.status,
-                total_count = excluded.total_count,
-                completed_count = excluded.completed_count,
-                failed_count = excluded.failed_count,
-                started_at = excluded.started_at,
-                completed_at = excluded.completed_at,
-                updated_at = excluded.updated_at
-        `).bind(
-            makeStableDbId("genjob", job.id),
-            plannerRunId,
-            projectId,
-            characterId,
-            normalizeV2GenerationStatus(job.status),
-            job.total_count || 0,
-            job.completed_count || 0,
-            job.failed_count || 0,
-            job.id,
-            job.started_at || null,
-            job.completed_at || null,
-            job.created_at || timestamp,
-            job.updated_at || timestamp
-        )
-    ];
-    const itemIdByLegacy = new Map();
-    for (const item of items) {
-        const v2ItemId = makeStableDbId("genitem", item.id);
-        itemIdByLegacy.set(item.id, v2ItemId);
-        const plannerItemId = makeStableDbId("pitem", `${metaKey}:${item.situation_id}`);
-        statements.push(env.DB.prepare(`
-            INSERT INTO v2_generation_job_items (
-                id, generation_job_id, planner_item_id, status, target_count, completed_count,
-                failed_count, error_message, source_background_item_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                generation_job_id = excluded.generation_job_id,
-                planner_item_id = excluded.planner_item_id,
-                status = excluded.status,
-                target_count = excluded.target_count,
-                completed_count = excluded.completed_count,
-                failed_count = excluded.failed_count,
-                error_message = excluded.error_message,
-                updated_at = excluded.updated_at
-        `).bind(
-            v2ItemId,
-            makeStableDbId("genjob", job.id),
-            plannerItemId,
-            normalizeV2GenerationStatus(item.status),
-            item.count || 1,
-            item.completed_count || 0,
-            item.failed_count || 0,
-            item.error_message || "",
-            item.id,
-            item.created_at || timestamp,
-            item.updated_at || timestamp
-        ));
-    }
-    for (const queue of queueRows) {
-        const generationJobItemId = itemIdByLegacy.get(queue.item_id);
-        if (!generationJobItemId) continue;
-        statements.push(env.DB.prepare(`
-            INSERT INTO v2_generation_queue (
-                id, generation_job_item_id, image_index, status, attempts, scheduled_at,
-                source_background_queue_id, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
-                generation_job_item_id = excluded.generation_job_item_id,
-                image_index = excluded.image_index,
-                status = excluded.status,
-                attempts = excluded.attempts,
-                scheduled_at = excluded.scheduled_at,
-                updated_at = excluded.updated_at
-        `).bind(
-            makeStableDbId("genqueue", queue.id),
-            generationJobItemId,
-            queue.image_index || 0,
-            normalizeV2GenerationStatus(queue.status),
-            queue.attempts || 0,
-            queue.started_at || null,
-            queue.id,
-            queue.created_at || timestamp,
-            queue.updated_at || timestamp
-        ));
-    }
-    for (let i = 0; i < statements.length; i += 50) {
-        await env.DB.batch(statements.slice(i, i + 50));
-    }
-}
-
-async function putPlannerMetaDocument(env, objectKey, meta = {}) {
-    if (!env?.DB) return;
-    await ensurePlannerMetaSchema(env);
-    await putV2PlannerMetaDocument(env, objectKey, meta);
-    await env.DB.batch([
-        env.DB.prepare('DELETE FROM planner_item_image_snapshots WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
-        env.DB.prepare('DELETE FROM planner_item_images WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
-        env.DB.prepare('DELETE FROM planner_item_v4_rows WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
-        env.DB.prepare('DELETE FROM planner_items WHERE meta_object_key = ?').bind(objectKey),
-        env.DB.prepare('DELETE FROM planner_metas WHERE object_key = ?').bind(objectKey),
-        env.DB.prepare('DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?').bind('planner_meta', objectKey)
-    ]);
-    return;
-    const timestamp = nowIso();
-    const { header, items } = splitPlannerMetaForDb(meta);
-    await env.DB.batch([
-        env.DB.prepare('DELETE FROM planner_item_image_snapshots WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
-        env.DB.prepare('DELETE FROM planner_item_images WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
-        env.DB.prepare('DELETE FROM planner_item_v4_rows WHERE item_id IN (SELECT id FROM planner_items WHERE meta_object_key = ?)').bind(objectKey),
-        env.DB.prepare('DELETE FROM planner_items WHERE meta_object_key = ?').bind(objectKey),
-        env.DB.prepare(`
-            INSERT INTO planner_metas (
-                object_key, project_id, project_prefix, character_id, character_prefix, status, stage, stage_label,
-                default_count, background_job_id, background_status_json, running_situation_ids_json,
-                extra_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(object_key) DO UPDATE SET
-                project_id = excluded.project_id,
-                project_prefix = excluded.project_prefix,
-                character_id = excluded.character_id,
-                character_prefix = excluded.character_prefix,
-                status = excluded.status,
-                stage = excluded.stage,
-                stage_label = excluded.stage_label,
-                default_count = excluded.default_count,
-                background_job_id = excluded.background_job_id,
-                background_status_json = excluded.background_status_json,
-                running_situation_ids_json = excluded.running_situation_ids_json,
-                extra_json = excluded.extra_json,
-                updated_at = excluded.updated_at
-        `).bind(
-            objectKey,
-            header.projectId,
-            header.projectPrefix,
-            header.characterId,
-            header.characterPrefix,
-            header.status,
-            header.stage,
-            header.stageLabel,
-            header.defaultCount,
-            header.backgroundJobId,
-            JSON.stringify(header.backgroundStatus || {}),
-            JSON.stringify(header.runningSituationIds || []),
-            JSON.stringify(header.extra || {}),
-            header.createdAt || timestamp,
-            timestamp
-        )
-    ]);
-    const statements = [];
-    items.forEach((rawItem, index) => {
-        const itemId = getPlannerItemDbId(objectKey, rawItem, index);
-        const split = splitPlannerItemForDb(rawItem);
-        statements.push(env.DB.prepare(`
-            INSERT INTO planner_items (
-                id, meta_object_key, situation_id, situation_name, situation_index, image_number, count,
-                status, stage, stage_label, selected_image, final_image, error_message,
-                background_job_id, background_item_id, generation_json, extra_json, sort_order, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(
-            itemId,
-            objectKey,
-            split.item.situationId,
-            split.item.situationName,
-            split.item.situationIndex,
-            split.item.imageNumber,
-            split.item.count,
-            split.item.status,
-            split.item.stage,
-            split.item.stageLabel,
-            split.item.selectedImage,
-            split.item.finalImage,
-            split.item.errorMessage,
-            split.item.backgroundJobId,
-            split.item.backgroundItemId,
-            JSON.stringify(split.item.generation || {}),
-            JSON.stringify(split.item.extra || {}),
-            index,
-            timestamp,
-            timestamp
-        ));
-        split.v4Rows.forEach((row, rowIndex) => {
-            statements.push(env.DB.prepare(`
-                INSERT INTO planner_item_v4_rows (item_id, row_index, subject, clothing, expression, action, negative)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            `).bind(itemId, rowIndex, row?.subject || '', row?.clothing || '', row?.expression || '', row?.action || '', row?.negative || ''));
-        });
-        split.images.forEach((imageKey, imageIndex) => {
-            statements.push(env.DB.prepare(`
-                INSERT INTO planner_item_images (item_id, image_key, sort_order, created_at)
-                VALUES (?, ?, ?, ?)
-            `).bind(itemId, imageKey, imageIndex, timestamp));
-            if (split.snapshots[imageKey]) {
-                statements.push(env.DB.prepare(`
-                    INSERT INTO planner_item_image_snapshots (item_id, image_key, snapshot_json, created_at, updated_at)
-                    VALUES (?, ?, ?, ?, ?)
-                `).bind(itemId, imageKey, JSON.stringify(split.snapshots[imageKey] || {}), timestamp, timestamp));
-            }
-        });
-    });
-    for (let i = 0; i < statements.length; i += 50) {
-        await env.DB.batch(statements.slice(i, i + 50));
-    }
-    await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS json_documents (
-            doc_type TEXT NOT NULL,
-            object_key TEXT NOT NULL,
-            data_json TEXT NOT NULL,
-            source TEXT NOT NULL DEFAULT 'db',
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (doc_type, object_key)
-        )
-    `).run();
-    await env.DB.prepare(
-        'DELETE FROM json_documents WHERE doc_type = ? AND object_key = ?'
-    ).bind('planner_meta', objectKey).run();
-}
-
-async function saveMetadata(env, outputPrefix, fileName, metadata) {
-    if (!env?.DB) return;
-    const timestamp = nowIso();
-    await env.DB.prepare(`
-        CREATE TABLE IF NOT EXISTS file_metadata (
-            folder_prefix TEXT NOT NULL,
-            file_name TEXT NOT NULL,
-            metadata_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL,
-            PRIMARY KEY (folder_prefix, file_name)
-        )
-    `).run();
-    await env.DB.prepare(`
-        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
-            metadata_json = excluded.metadata_json,
-            updated_at = excluded.updated_at
-    `).bind(outputPrefix, fileName, JSON.stringify(metadata || {}), timestamp, timestamp).run();
-
-    const r2Key = `${outputPrefix}${fileName}`;
-    const projectPrefix = String(outputPrefix || "").split("_planner_temp_image/")[0] || makeStableDbId("project", outputPrefix);
-    await env.DB.prepare(`
-        INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            prefix = excluded.prefix,
-            updated_at = excluded.updated_at
-    `).bind(projectPrefix, projectPrefix, projectPrefix, timestamp, timestamp).run();
-    await env.DB.prepare(`
-        INSERT INTO v2_assets (
-            id, project_id, owner_type, owner_id, r2_key, file_name, mime_type,
-            kind, status, is_public, sort_order, created_at, updated_at
-        ) VALUES (?, ?, 'generation_job', '', ?, ?, 'image/webp', 'image', 'active', 0, 0, ?, ?)
-        ON CONFLICT(id) DO UPDATE SET
-            project_id = excluded.project_id,
-            r2_key = excluded.r2_key,
-            file_name = excluded.file_name,
-            status = 'active',
-            deleted_at = NULL,
-            updated_at = excluded.updated_at
-    `).bind(getAssetIdFromKey(r2Key), projectPrefix, r2Key, fileName, timestamp, timestamp).run();
-    await env.DB.prepare(`
-        INSERT INTO v2_asset_metadata (
-            asset_id, prompt, negative_prompt, model, sampler, steps, scale, seed,
-            width, height, metadata_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT(asset_id) DO UPDATE SET
-            prompt = excluded.prompt,
-            negative_prompt = excluded.negative_prompt,
-            model = excluded.model,
-            sampler = excluded.sampler,
-            steps = excluded.steps,
-            scale = excluded.scale,
-            seed = excluded.seed,
-            width = excluded.width,
-            height = excluded.height,
-            metadata_json = excluded.metadata_json,
-            updated_at = excluded.updated_at
-    `).bind(
-        getAssetIdFromKey(r2Key),
-        metadata?.Prompt || "",
-        metadata?.["Negative Prompt"] || "",
-        metadata?.Model || null,
-        metadata?.Sampler || null,
-        metadata?.Steps || null,
-        metadata?.["CFG Scale"] == null ? null : String(metadata["CFG Scale"]),
-        metadata?.Seed == null ? null : String(metadata.Seed),
-        null,
-        null,
-        JSON.stringify(metadata || {}),
-        timestamp,
-        timestamp
-    ).run();
 }
 
 async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
@@ -1944,437 +518,1466 @@ async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
     return { scanned: rows.length, deletedCount, failedCount };
 }
 
-async function resetPlannerMetaAfterBackgroundCancel(env, jobId) {
-    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job) return;
-    const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
-    const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
-    const storedMeta = parseJsonField(job.planner_meta_json, null);
-    if (!storedMeta || typeof storedMeta !== "object") return;
 
-    const bySituation = new Map(items.map(item => [item.situation_id, item]));
-    const meta = storedMeta;
-    meta.projectId = meta.projectId || job.project_id || "";
-    meta.projectPrefix = meta.projectPrefix || job.project_prefix || "";
-    meta.characterId = meta.characterId || job.character_id || "";
-    meta.characterPrefix = meta.characterPrefix || job.character_prefix || "";
-    meta.status = "draft";
-    meta.stage = "";
-    meta.stageLabel = "";
-    delete meta.backgroundJobId;
-    delete meta.backgroundStatus;
-    delete meta.runningSituationIds;
-    meta.updatedAt = Date.now();
-    meta.items = (meta.items || []).map(item => {
-        const row = bySituation.get(item.situationId);
-        if (!row) return item;
-        const resultKeys = compactResultKeys(row.result_keys);
-        const hasNewResults = resultKeys.length > 0;
-        const complete = Number(row.completed_count || 0) >= Number(row.count || 0);
-        return {
-            ...item,
-            status: complete ? "done" : "pending",
-            stage: "",
-            stageLabel: "",
-            failedCount: row.failed_count || 0,
-            images: hasNewResults ? resultKeys : (item.images || []),
-            selectedImage: hasNewResults
-                ? (resultKeys.includes(item.selectedImage) ? item.selectedImage : null)
-                : (item.selectedImage || null),
-            backgroundJobId: undefined,
-            backgroundItemId: undefined,
-            errorMessage: row.error_message || ""
-        };
-    });
-
-    await env.DB.prepare("UPDATE planner_background_jobs SET planner_meta_json = ?, updated_at = ? WHERE id = ?")
-        .bind(JSON.stringify(meta), nowIso(), jobId).run();
-    await putJsonDocument(env, "planner_meta", metaKey, meta).catch(() => null);
+export async function startPlannerBackgroundJob(env, body) {
+    return await startPlannerV3Generation(env, { ...(body || {}), mode: "background" });
 }
 
-async function updateProgressStage(env, jobId, itemId, stage) {
-    const updatedAt = nowIso();
-    await env.DB.batch([
-        env.DB.prepare("UPDATE planner_background_jobs SET stage = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancel_requested', 'paused')")
-            .bind(stage, updatedAt, jobId),
-        env.DB.prepare("UPDATE planner_background_items SET stage = ?, updated_at = ? WHERE id = ? AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancel_requested', 'paused')")
-            .bind(stage, updatedAt, itemId)
-    ]);
+export async function getPlannerBackgroundStatus(env, jobId) {
+    return await getPlannerV3Status(env, jobId);
 }
 
-async function refreshJobRollup(env, jobId) {
-    const rows = await queryAll(env.DB, "SELECT status, completed_count, failed_count, count FROM planner_background_items WHERE job_id = ?", jobId);
-    const completedCount = rows.reduce((sum, row) => sum + Number(row.completed_count || 0), 0);
-    const failedCount = rows.reduce((sum, row) => sum + Number(row.failed_count || 0), 0);
-    const totalCount = rows.reduce((sum, row) => sum + Number(row.count || 0), 0);
-    const done = rows.every(row => ["completed", "partial_failed", "failed"].includes(row.status));
-    let status = "running";
-    if (done) {
-        if (completedCount === totalCount) status = "completed";
-        else if (completedCount > 0) status = "partial_failed";
-        else status = "failed";
-    }
-    const completedAt = done ? nowIso() : null;
-    await env.DB.prepare(`
-        UPDATE planner_background_jobs
-        SET status = ?, stage = ?, completed_count = ?, failed_count = ?, updated_at = ?, completed_at = COALESCE(completed_at, ?)
-        WHERE id = ?
-    `).bind(status, done ? status : "rollup", completedCount, failedCount, nowIso(), completedAt, jobId).run();
+export async function cancelPlannerBackgroundJob(env, jobId) {
+    return await cancelPlannerV3Generation(env, jobId);
 }
 
-export async function syncPlannerMetaToR2(env, jobId) {
-    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    if (!job) return;
-    await syncV2GenerationFromBackgroundJob(env, jobId).catch(() => null);
-    const items = await queryAll(env.DB, "SELECT * FROM planner_background_items WHERE job_id = ?", jobId);
-    const metaKey = getPlannerMetaKey(job.project_prefix, job.character_id);
-    const storedMeta = parseJsonField(job.planner_meta_json, null);
-    if (!storedMeta || typeof storedMeta !== "object") return;
-    const meta = storedMeta;
-    meta.projectId = meta.projectId || job.project_id || "";
-    meta.projectPrefix = meta.projectPrefix || job.project_prefix || "";
-    meta.characterId = meta.characterId || job.character_id || "";
-    meta.characterPrefix = meta.characterPrefix || job.character_prefix || "";
-    const bySituation = new Map(items.map(item => [item.situation_id, item]));
-    const currentIds = new Set(Array.isArray(meta.items) ? meta.items.map(item => item.situationId) : []);
-    const snapshotTargetIds = new Set(items.map(item => item.situation_id));
-    const hasCurrentTarget = [...snapshotTargetIds].some(id => currentIds.has(id));
-    if (!hasCurrentTarget) return;
-
-    const cancelRequestedJob = job.status === "cancel_requested";
-    meta.status = cancelRequestedJob ? "draft" : job.status;
-    meta.stage = cancelRequestedJob ? "" : (job.stage || "");
-    meta.stageLabel = cancelRequestedJob ? "" : (STAGE_LABELS[job.stage] || job.stage || "");
-    if (cancelRequestedJob) {
-        delete meta.backgroundJobId;
-        delete meta.backgroundStatus;
-    } else {
-        meta.backgroundJobId = job.id;
-    }
-    meta.updatedAt = Date.now();
-    if (["completed", "failed", "partial_failed", "cancel_requested", PAUSED_JOB_STATUS].includes(job.status)) {
-        delete meta.runningSituationIds;
-    } else {
-        meta.runningSituationIds = Array.isArray(meta.runningSituationIds)
-            ? meta.runningSituationIds.filter(id => currentIds.has(id))
-            : [...snapshotTargetIds].filter(id => currentIds.has(id));
-    }
-    meta.items = (meta.items || []).map(item => {
-        const row = bySituation.get(item.situationId);
-        if (!row) return item;
-        const resultKeys = compactResultKeys(row.result_keys);
-        const hasNewResults = resultKeys.length > 0;
-        const nextStatus = (cancelRequestedJob || row.status === "cancel_requested")
-            ? "pending"
-            : (row.status === "completed" ? "done" : row.status);
-        return {
-            ...item,
-            status: nextStatus,
-            stage: cancelRequestedJob ? "" : (row.stage || ""),
-            stageLabel: cancelRequestedJob ? "" : (STAGE_LABELS[row.stage] || row.stage || ""),
-            failedCount: row.failed_count || 0,
-            images: hasNewResults ? resultKeys : (item.images || []),
-            selectedImage: hasNewResults
-                ? (resultKeys.includes(item.selectedImage) ? item.selectedImage : null)
-                : (item.selectedImage || null),
-            backgroundJobId: cancelRequestedJob ? undefined : job.id,
-            backgroundItemId: cancelRequestedJob ? undefined : row.id,
-            errorMessage: row.error_message || ""
-        };
-    });
-
-    await env.DB.prepare("UPDATE planner_background_jobs SET planner_meta_json = ?, updated_at = ? WHERE id = ?")
-        .bind(JSON.stringify(meta), nowIso(), jobId).run();
-    await putJsonDocument(env, "planner_meta", metaKey, meta).catch(() => null);
+export async function pausePlannerBackgroundJob(env, jobId) {
+    return await pausePlannerV3Generation(env, jobId);
 }
 
-async function syncPlannerMetaToR2Safely(env, jobId, context = {}) {
-    try {
-        await syncPlannerMetaToR2(env, jobId);
-    } catch (error) {
-        await writeBackgroundErrorLog(env, error, {
-            jobId,
-            stage: "planner_meta_sync",
-            ...context
-        });
-    }
-}
-
-async function markItemFailure(env, item, errorMessage) {
-    const failedCount = Number(item.failed_count || 0) + 1;
-    const completedCount = Number(item.completed_count || 0);
-    const count = Number(item.count || 0);
-    const status = completedCount + failedCount >= count
-        ? (completedCount > 0 ? "partial_failed" : "failed")
-        : "queued";
-    await env.DB.prepare(`
-        UPDATE planner_background_items
-        SET failed_count = ?,
-            status = ?,
-            stage = 'failed',
-            generation_json = CASE WHEN ? IN ('partial_failed', 'failed') THEN '{}' ELSE generation_json END,
-            error_message = ?,
-            updated_at = ?
-        WHERE id = ?
-    `).bind(failedCount, status, status, errorMessage.slice(0, 1000), nowIso(), item.id).run();
-}
-
-async function enqueueRetry(env, message, attempt, delaySeconds) {
-    if (!env.GENERATION_QUEUE || attempt >= MAX_ATTEMPTS) return false;
-    await env.GENERATION_QUEUE.send({
-        ...message,
-        attempt: attempt + 1
-    }, { delaySeconds });
-    return true;
-}
-
-async function isBackgroundJobCancelRequested(env, jobId, itemId) {
-    const row = await queryFirst(env.DB, `
-        SELECT j.status AS job_status, i.status AS item_status
-        FROM planner_background_jobs j
-        LEFT JOIN planner_background_items i ON i.id = ?
-        WHERE j.id = ?
-    `, itemId, jobId);
-    return !row || row.job_status === "cancel_requested" || row.item_status === "cancel_requested";
-}
-
-async function isBackgroundJobPaused(env, jobId, itemId) {
-    const row = await queryFirst(env.DB, `
-        SELECT j.status AS job_status, i.status AS item_status
-        FROM planner_background_jobs j
-        LEFT JOIN planner_background_items i ON i.id = ?
-        WHERE j.id = ?
-    `, itemId, jobId);
-    return row?.job_status === PAUSED_JOB_STATUS || row?.item_status === PAUSED_JOB_STATUS;
-}
-
-async function abortIfBackgroundJobCancelRequested(env, jobId, itemId) {
-    if (!await isBackgroundJobCancelRequested(env, jobId, itemId)) return;
-    const error = new Error("Background job cancel requested");
-    error.code = "BACKGROUND_JOB_CANCEL_REQUESTED";
-    throw error;
+export async function resumePlannerBackgroundJob(env, jobId) {
+    return await resumePlannerV3Generation(env, jobId);
 }
 
 export async function processPlannerQueueMessage(env, message) {
-    requireWorkerBindings(env);
-    await ensurePlannerBackgroundSchema(env);
-    const jobId = message?.jobId;
-    const queueId = message?.queueId || "";
-    const queueEntry = queueId
-        ? await queryFirst(env.DB, "SELECT * FROM planner_background_queue WHERE id = ?", queueId)
-        : await queryFirst(
-            env.DB,
-            "SELECT * FROM planner_background_queue WHERE job_id = ? AND item_id = ? AND image_index = ?",
-            jobId,
-            message?.itemId || "",
-            Number(message?.imageIndex || 0)
-        );
-    const itemId = queueEntry?.item_id || message?.itemId;
-    const imageIndex = Number(queueEntry?.image_index ?? message?.imageIndex ?? 0);
-    const attempt = Number(message?.attempt || queueEntry?.attempts || 1);
-    if (!jobId || !itemId) throw new Error("Invalid queue message");
-
-    const job = await queryFirst(env.DB, "SELECT * FROM planner_background_jobs WHERE id = ?", jobId);
-    const item = await queryFirst(env.DB, "SELECT * FROM planner_background_items WHERE id = ?", itemId);
-    if (!job || !item) return;
-    if (queueEntry && queueEntry.status !== "running") {
-        await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, queueId: queueEntry.id, stage: "stale_queue_message_skip" });
-        await enqueueNextPlannerQueueMessage(env, jobId).catch(() => null);
+    if (message?.plannerV3) {
+        await processPlannerV3QueueMessage(env, message);
         return;
     }
-    const storedResultKeys = parseResultKeys(item.result_keys);
-    if (storedResultKeys[imageIndex]) {
-        if (queueEntry) {
-            await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
-        }
-        await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, stage: "duplicate_message_skip" });
-        await enqueueNextPlannerQueueMessage(env, jobId).catch(() => null);
-        return;
-    }
+    throw new Error("Legacy planner background queue is disabled. Use Planner V3 queue messages.");
+}
 
-    if (job.status === "cancel_requested" || item.status === "cancel_requested") {
-        await resetPlannerMetaAfterBackgroundCancel(env, jobId).catch(() => null);
-        await env.DB.batch([
-            env.DB.prepare("DELETE FROM planner_background_queue WHERE job_id = ?").bind(jobId),
-            env.DB.prepare("DELETE FROM planner_background_items WHERE job_id = ?").bind(jobId),
-            env.DB.prepare("DELETE FROM planner_background_jobs WHERE id = ?").bind(jobId)
-        ]);
-        await cleanupFinishedBackgroundJobs(env).catch(() => null);
-        return;
-    }
+// Planner V3 DB-backed planner implementation.
+const PLANNER_V3_ACTIVE_JOB_STATUSES = ["queued", "running", "paused", "cancel_requested"];
+const PLANNER_V3_TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "cancelled"];
+const PROMPT_PART_KEYS = ["style", "composition", "character", "clothing", "expression", "action", "background", "negative", "raw"];
+const CONFIRM_RETENTION_MS = 24 * 60 * 60 * 1000;
+const BROWSER_QUEUE_LEASE_MS = 5 * 60 * 1000;
 
-    if (job.status === PAUSED_JOB_STATUS || item.status === PAUSED_JOB_STATUS) {
-        if (queueEntry) {
-            await env.DB.prepare(`
-                UPDATE planner_background_queue
-                SET status = 'paused',
-                    updated_at = ?
-                WHERE id = ?
-            `).bind(nowIso(), queueEntry.id).run();
-        }
-        await syncPlannerMetaToR2Safely(env, jobId, { itemId, stage: "paused_message_skip" });
-        return;
-    }
+function nowPlannerV3Iso() {
+    const date = new Date(Date.now() + 9 * 60 * 60 * 1000);
+    return date.toISOString().replace("Z", "+09:00");
+}
 
-    await env.DB.batch([
-        env.DB.prepare("UPDATE planner_background_jobs SET status = 'running', stage = 'running', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?")
-            .bind(nowIso(), nowIso(), jobId),
-        env.DB.prepare("UPDATE planner_background_items SET status = 'running', stage = 'running', started_at = COALESCE(started_at, ?), attempts = ?, updated_at = ? WHERE id = ?")
-            .bind(nowIso(), attempt, nowIso(), itemId)
-    ]);
-    await syncPlannerMetaToR2Safely(env, jobId, { itemId, stage: "running_sync" });
+function futurePlannerV3Iso(ms) {
+    const date = new Date(Date.now() + ms + 9 * 60 * 60 * 1000);
+    return date.toISOString().replace("Z", "+09:00");
+}
 
+function makePlannerV3Id(prefix) {
+    return `${prefix}_${crypto.randomUUID()}`;
+}
+
+function parseJson(value, fallback) {
+    if (value === undefined || value === null || value === "") return fallback;
     try {
-        const generation = JSON.parse(item.generation_json || "{}");
-        const baseSeed = Number.parseInt(generation.seed, 10);
-        const seed = Number.isFinite(baseSeed) ? (baseSeed + imageIndex) % 4294967296 : Math.floor(Math.random() * 4294967296);
+        return JSON.parse(value);
+    } catch {
+        return fallback;
+    }
+}
+
+function asInt(value, fallback = 0) {
+    const parsed = Number.parseInt(value, 10);
+    return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizeRunStatus(status = "draft") {
+    const value = String(status || "draft");
+    if (value === "done" || value === "completed") return "complete";
+    if (value === "cancel_requested") return "running";
+    return ["draft", "queued", "running", "paused", "complete", "partial_failed", "failed"].includes(value) ? value : "draft";
+}
+
+function normalizeItemStatus(status = "pending") {
+    const value = String(status || "pending");
+    if (value === "done" || value === "completed") return "complete";
+    if (value === "cancel_requested") return "running";
+    return ["pending", "queued", "running", "paused", "complete", "partial_failed", "failed"].includes(value) ? value : "pending";
+}
+
+function normalizeSettings(settings = {}) {
+    return {
+        model: settings.model || "nai-diffusion-4-5-full",
+        steps: String(settings.steps || "28"),
+        scale: String(settings.scale || "5.0"),
+        sampler: settings.sampler || "k_euler_ancestral",
+        resolution: settings.resolution || settings.res || "832x1216",
+        sm: settings.sm ? 1 : 0,
+        sm_dyn: settings.sm_dyn ? 1 : 0,
+        vibe_strength: String(settings.vibeStrength ?? settings.vibe_strength ?? ""),
+        vibe_info: String(settings.vibeInfo ?? settings.vibe_info ?? ""),
+        precise_strength: String(settings.preciseStrength ?? settings.precise_strength ?? ""),
+        precise_fidelity: String(settings.preciseFidelity ?? settings.precise_fidelity ?? ""),
+        precise_type: String(settings.preciseType ?? settings.precise_type ?? ""),
+        vibe_image_key: String(settings.vibeImageKey ?? settings.vibe_image_key ?? ""),
+        precise_image_key: String(settings.preciseImageKey ?? settings.precise_image_key ?? "")
+    };
+}
+
+function settingsRowToClient(row) {
+    if (!row) return null;
+    return {
+        projectId: row.project_id,
+        projectPrefix: row.project_prefix,
+        model: row.model,
+        steps: row.steps,
+        scale: row.scale,
+        sampler: row.sampler,
+        resolution: row.resolution,
+        sm: !!row.sm,
+        sm_dyn: !!row.sm_dyn,
+        vibeStrength: row.vibe_strength || "",
+        vibeInfo: row.vibe_info || "",
+        preciseStrength: row.precise_strength || "",
+        preciseFidelity: row.precise_fidelity || "",
+        preciseType: row.precise_type || "",
+        vibeImageKey: row.vibe_image_key || "",
+        preciseImageKey: row.precise_image_key || ""
+    };
+}
+
+function generationFromItem(item = {}) {
+    return item.generation || {};
+}
+
+function splitGeneration(generation = {}) {
+    const prompts = generation.prompts || {};
+    const fields = generation.fields || {};
+    return {
+        style: fields.style || prompts["prompt-style"] || "",
+        composition: fields.composition || prompts["prompt-composition"] || "",
+        character: fields.character || prompts["prompt-character"] || "",
+        clothing: fields.clothing || prompts["prompt-clothing"] || "",
+        expression: fields.expression || prompts["prompt-expression"] || "",
+        action: fields.action || prompts["prompt-action"] || "",
+        background: fields.background || prompts["prompt-background"] || "",
+        negative: generation.negative || "",
+        raw: generation.simpleMode ? prompts["prompt-raw"] || "" : ""
+    };
+}
+
+function generationSettingsFromGeneration(generation = {}) {
+    const [width, height] = String(generation.res || generation.resolution || "").split("x").map(value => asInt(value, null));
+    return {
+        model: generation.model || "",
+        resolution: generation.res || generation.resolution || "",
+        width,
+        height,
+        steps: generation.steps ? asInt(generation.steps, null) : null,
+        scale: generation.scale || "",
+        sampler: generation.sampler || "",
+        seed: generation.seed || "",
+        sm: generation.sm ? 1 : 0,
+        sm_dyn: generation.sm_dyn ? 1 : 0,
+        vibe_strength: String(generation.vibeStrength ?? ""),
+        vibe_info: String(generation.vibeInfo ?? ""),
+        precise_strength: String(generation.preciseStrength ?? ""),
+        precise_fidelity: String(generation.preciseFidelity ?? ""),
+        precise_type: String(generation.preciseType ?? ""),
+        vibe_asset_key: String(generation.vibeImageKey ?? ""),
+        precise_asset_key: String(generation.preciseImageKey ?? ""),
+        inpaint_asset_key: String(generation.inpaintImageKey ?? "")
+    };
+}
+
+function clientExtraForItem(item = {}) {
+    const {
+        situationId,
+        situationName,
+        situationIndex,
+        imageNumber,
+        rating,
+        status,
+        count,
+        completedCount,
+        failedCount,
+        stage,
+        stageLabel,
+        errorMessage,
+        generation,
+        variantGenerations,
+        images,
+        generatedImages,
+        selectedImage,
+        ...extra
+    } = item;
+    return {
+        ...extra,
+        legacyImages: Array.isArray(images) ? images : [],
+        legacyGeneratedImages: Array.isArray(generatedImages) ? generatedImages : []
+    };
+}
+
+function validatePlannerV3Binding(env) {
+    if (!env.DB) throw new Error("DB binding is not configured");
+}
+
+export async function ensurePlannerV3Schema(env) {
+    validatePlannerV3Binding(env);
+    const row = await env.DB.prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'planner_v3_runs'"
+    ).first();
+    if (!row?.name) {
+        throw new Error("Planner V3 schema is not installed. Run migrations/0014_planner_v3_schema.sql first.");
+    }
+}
+
+export async function getPlannerV3Settings(env, projectId) {
+    await ensurePlannerV3Schema(env);
+    const row = await env.DB.prepare(
+        "SELECT * FROM planner_v3_project_settings WHERE project_id = ?"
+    ).bind(projectId).first();
+    return settingsRowToClient(row);
+}
+
+export async function putPlannerV3Settings(env, input = {}) {
+    await ensurePlannerV3Schema(env);
+    const projectId = String(input.projectId || input.project_id || "").trim();
+    const projectPrefix = String(input.projectPrefix || input.project_prefix || "").trim();
+    if (!projectId) throw new Error("projectId is required");
+    if (!projectPrefix) throw new Error("projectPrefix is required");
+    const settings = normalizeSettings(input);
+    const timestamp = nowPlannerV3Iso();
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_project_settings (
+            project_id, project_prefix, model, steps, scale, sampler, resolution,
+            sm, sm_dyn, vibe_strength, vibe_info, precise_strength, precise_fidelity,
+            precise_type, vibe_image_key, precise_image_key, extra_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)
+        ON CONFLICT(project_id) DO UPDATE SET
+            project_prefix = excluded.project_prefix,
+            model = excluded.model,
+            steps = excluded.steps,
+            scale = excluded.scale,
+            sampler = excluded.sampler,
+            resolution = excluded.resolution,
+            sm = excluded.sm,
+            sm_dyn = excluded.sm_dyn,
+            vibe_strength = excluded.vibe_strength,
+            vibe_info = excluded.vibe_info,
+            precise_strength = excluded.precise_strength,
+            precise_fidelity = excluded.precise_fidelity,
+            precise_type = excluded.precise_type,
+            vibe_image_key = excluded.vibe_image_key,
+            precise_image_key = excluded.precise_image_key,
+            updated_at = excluded.updated_at
+    `).bind(
+        projectId,
+        projectPrefix,
+        settings.model,
+        settings.steps,
+        settings.scale,
+        settings.sampler,
+        settings.resolution,
+        settings.sm,
+        settings.sm_dyn,
+        settings.vibe_strength,
+        settings.vibe_info,
+        settings.precise_strength,
+        settings.precise_fidelity,
+        settings.precise_type,
+        settings.vibe_image_key,
+        settings.precise_image_key,
+        timestamp,
+        timestamp
+    ).run();
+    return getPlannerV3Settings(env, projectId);
+}
+
+async function deletePlannerV3SnapshotsForRun(env, runId) {
+    await env.DB.batch([
+        env.DB.prepare("DELETE FROM planner_v3_prompt_parts WHERE run_id = ?").bind(runId),
+        env.DB.prepare("DELETE FROM planner_v3_v4_rows WHERE run_id = ?").bind(runId),
+        env.DB.prepare("DELETE FROM planner_v3_generation_settings WHERE run_id = ?").bind(runId),
+        env.DB.prepare("DELETE FROM planner_v3_item_variants WHERE item_id IN (SELECT id FROM planner_v3_items WHERE run_id = ?)").bind(runId)
+    ]);
+}
+
+export async function putPlannerV3RunFromMeta(env, meta = {}) {
+    await ensurePlannerV3Schema(env);
+    const projectId = String(meta.projectId || "").trim();
+    const projectPrefix = String(meta.projectPrefix || "").trim();
+    const characterId = String(meta.characterId || "").trim();
+    if (!projectId) throw new Error("projectId is required");
+    if (!characterId) throw new Error("characterId is required");
+
+    const timestamp = nowPlannerV3Iso();
+    const existing = await env.DB.prepare(
+        "SELECT * FROM planner_v3_runs WHERE project_id = ? AND character_id = ? LIMIT 1"
+    ).bind(projectId, characterId).first();
+    const runId = existing?.id || makePlannerV3Id("prun");
+    const defaultCount = Math.max(1, asInt(meta.defaultCount, 20));
+
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_runs (
+            id, project_id, project_prefix, character_id, character_prefix, status, mode,
+            default_count, active_job_id, running_situation_ids_json, stage, stage_label,
+            error_message, created_at, updated_at, started_at, completed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+            project_prefix = excluded.project_prefix,
+            character_prefix = excluded.character_prefix,
+            status = excluded.status,
+            mode = excluded.mode,
+            default_count = excluded.default_count,
+            running_situation_ids_json = excluded.running_situation_ids_json,
+            stage = excluded.stage,
+            stage_label = excluded.stage_label,
+            error_message = excluded.error_message,
+            updated_at = excluded.updated_at
+    `).bind(
+        runId,
+        projectId,
+        projectPrefix,
+        characterId,
+        meta.characterPrefix || "",
+        normalizeRunStatus(meta.status),
+        meta.mode === "browser" ? "browser" : "background",
+        defaultCount,
+        meta.backgroundJobId || existing?.active_job_id || null,
+        JSON.stringify(meta.runningSituationIds || []),
+        meta.stage || "",
+        meta.stageLabel || "",
+        meta.errorMessage || "",
+        existing?.created_at || timestamp,
+        timestamp,
+        existing?.started_at || null,
+        existing?.completed_at || null
+    ).run();
+
+    const hasGenerationRows = await env.DB.prepare(
+        "SELECT id FROM planner_v3_jobs WHERE run_id = ? LIMIT 1"
+    ).bind(runId).first();
+    if (hasGenerationRows?.id) {
+        return getPlannerV3RunById(env, runId);
+    }
+
+    await deletePlannerV3SnapshotsForRun(env, runId);
+
+    const existingItems = (await env.DB.prepare(
+        "SELECT id, situation_id FROM planner_v3_items WHERE run_id = ?"
+    ).bind(runId).all()).results || [];
+    const existingItemBySituationId = new Map(existingItems.map(item => [item.situation_id, item.id]));
+    const currentItemIds = [];
+    for (const [index, item] of (meta.items || []).entries()) {
+        const situationId = String(item.situationId || item.situation_id || "").trim() || makePlannerV3Id("sit");
+        const itemId = item.id || existingItemBySituationId.get(situationId) || makePlannerV3Id("pitem");
+        currentItemIds.push(itemId);
+        const targetCount = Math.max(1, asInt(item.count || item.targetCount || defaultCount, defaultCount));
+        await env.DB.prepare(`
+            INSERT INTO planner_v3_items (
+                id, run_id, situation_id, situation_name, situation_index, image_number,
+                situation_rating, status, target_count, completed_count, failed_count,
+                stage, stage_label, error_message, extra_json, sort_order, created_at, updated_at,
+                started_at, completed_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                situation_name = excluded.situation_name,
+                situation_index = excluded.situation_index,
+                image_number = excluded.image_number,
+                situation_rating = excluded.situation_rating,
+                status = excluded.status,
+                target_count = excluded.target_count,
+                completed_count = excluded.completed_count,
+                failed_count = excluded.failed_count,
+                stage = excluded.stage,
+                stage_label = excluded.stage_label,
+                error_message = excluded.error_message,
+                extra_json = excluded.extra_json,
+                sort_order = excluded.sort_order,
+                updated_at = excluded.updated_at,
+                started_at = COALESCE(planner_v3_items.started_at, excluded.started_at),
+                completed_at = excluded.completed_at
+        `).bind(
+            itemId,
+            runId,
+            situationId,
+            item.situationName || item.name || "",
+            item.situationIndex ?? index,
+            String(item.imageNumber || index + 1),
+            item.rating === "nsfw" || item.situationRating === "nsfw" ? "nsfw" : "sfw",
+            normalizeItemStatus(item.status),
+            targetCount,
+            Math.max(0, asInt(item.completedCount, Array.isArray(item.images) ? item.images.length : 0)),
+            Math.max(0, asInt(item.failedCount, 0)),
+            item.stage || "",
+            item.stageLabel || "",
+            item.errorMessage || "",
+            JSON.stringify(clientExtraForItem(item)),
+            index,
+            timestamp,
+            timestamp,
+            item.startedAt || null,
+            item.completedAt || null
+        ).run();
+
+        const runs = Array.isArray(item.variantGenerations) && item.variantGenerations.length
+            ? item.variantGenerations
+            : [{ count: targetCount, generation: generationFromItem(item) }];
+        let variantCountSum = 0;
+        for (const [variantIndex, run] of runs.entries()) {
+            const variantId = makePlannerV3Id("pvar");
+            const variantTargetCount = Math.max(1, asInt(run.count || targetCount, targetCount));
+            variantCountSum += variantTargetCount;
+            await env.DB.prepare(`
+                INSERT INTO planner_v3_item_variants (
+                    id, item_id, character_prompt_variant_id, character_prompt_variant_name,
+                    situation_prompt_variant_id, situation_prompt_variant_name, target_count,
+                    sort_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            `).bind(
+                variantId,
+                itemId,
+                run.characterPromptVariantId || item.characterPromptVariantId || "",
+                run.characterPromptVariantName || item.characterPromptVariantName || "",
+                run.situationPromptVariantId || item.situationPromptVariantId || "",
+                run.situationPromptVariantName || item.situationPromptVariantName || "",
+                variantTargetCount,
+                variantIndex,
+                timestamp,
+                timestamp
+            ).run();
+            const generation = run.generation || generationFromItem(item);
+            await insertPlannerV3GenerationSnapshot(env, {
+                runId,
+                itemId,
+                variantId,
+                ownerType: "variant",
+                ownerId: variantId,
+                generation,
+                timestamp
+            });
+        }
+        if (variantCountSum !== targetCount) {
+            await env.DB.prepare(
+                "UPDATE planner_v3_items SET target_count = ?, updated_at = ? WHERE id = ?"
+            ).bind(variantCountSum || targetCount, timestamp, itemId).run();
+        }
+        await insertPlannerV3GenerationSnapshot(env, {
+            runId,
+            itemId,
+            variantId: null,
+            ownerType: "item",
+            ownerId: itemId,
+            generation: generationFromItem(item),
+            timestamp
+        });
+    }
+
+    if (currentItemIds.length) {
+        const placeholders = currentItemIds.map(() => "?").join(",");
+        await env.DB.prepare(`
+            DELETE FROM planner_v3_items
+            WHERE run_id = ?
+              AND id NOT IN (${placeholders})
+        `).bind(runId, ...currentItemIds).run();
+    } else {
+        await env.DB.prepare("DELETE FROM planner_v3_items WHERE run_id = ?").bind(runId).run();
+    }
+
+    return getPlannerV3RunById(env, runId);
+}
+
+async function insertPlannerV3GenerationSnapshot(env, { runId, itemId, variantId, ownerType, ownerId, generation, timestamp }) {
+    const settings = generationSettingsFromGeneration(generation);
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_generation_settings (
+            id, owner_type, owner_id, run_id, item_id, variant_id, model, resolution,
+            width, height, steps, scale, sampler, seed, sm, sm_dyn, vibe_strength,
+            vibe_info, precise_strength, precise_fidelity, precise_type, vibe_asset_key,
+            precise_asset_key, inpaint_asset_key, extra_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+        makePlannerV3Id("pset"),
+        ownerType,
+        ownerId,
+        runId,
+        itemId,
+        variantId,
+        settings.model,
+        settings.resolution,
+        settings.width,
+        settings.height,
+        settings.steps,
+        settings.scale,
+        settings.sampler,
+        settings.seed,
+        settings.sm,
+        settings.sm_dyn,
+        settings.vibe_strength,
+        settings.vibe_info,
+        settings.precise_strength,
+        settings.precise_fidelity,
+        settings.precise_type,
+        settings.vibe_asset_key,
+        settings.precise_asset_key,
+        settings.inpaint_asset_key,
+        JSON.stringify(generation || {}),
+        timestamp,
+        timestamp
+    ).run();
+
+    const parts = splitGeneration(generation);
+    for (const [sortOrder, key] of PROMPT_PART_KEYS.entries()) {
+        await env.DB.prepare(`
+            INSERT INTO planner_v3_prompt_parts (
+                id, owner_type, owner_id, run_id, item_id, variant_id, part_key,
+                value, sort_order, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(makePlannerV3Id("ppart"), ownerType, ownerId, runId, itemId, variantId, key, parts[key] || "", sortOrder, timestamp, timestamp).run();
+    }
+
+    const rows = Array.isArray(generation.v4PromptCharacters)
+        ? generation.v4PromptCharacters
+        : (Array.isArray(generation.v4_prompt) ? generation.v4_prompt : []);
+    for (const [rowIndex, row] of rows.entries()) {
+        await env.DB.prepare(`
+            INSERT INTO planner_v3_v4_rows (
+                id, owner_type, owner_id, run_id, item_id, variant_id, row_index,
+                subject, clothing, expression, action, negative, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(
+            makePlannerV3Id("pv4"),
+            ownerType,
+            ownerId,
+            runId,
+            itemId,
+            variantId,
+            rowIndex,
+            row?.subject || "",
+            row?.clothing || "",
+            row?.expression || "",
+            row?.action || "",
+            row?.negative || "",
+            timestamp,
+            timestamp
+        ).run();
+    }
+}
+
+export async function getPlannerV3Run(env, { projectId, characterId }) {
+    await ensurePlannerV3Schema(env);
+    const row = await env.DB.prepare(`
+        SELECT id FROM planner_v3_runs
+        WHERE project_id = ? AND character_id = ?
+        ORDER BY updated_at DESC
+        LIMIT 1
+    `).bind(projectId, characterId).first();
+    return row?.id ? getPlannerV3RunById(env, row.id) : null;
+}
+
+export async function getPlannerV3RunById(env, runId) {
+    await ensurePlannerV3Schema(env);
+    const run = await env.DB.prepare("SELECT * FROM planner_v3_runs WHERE id = ?").bind(runId).first();
+    if (!run) return null;
+    const items = (await env.DB.prepare(`
+        SELECT * FROM planner_v3_items
+        WHERE run_id = ?
+        ORDER BY sort_order, image_number
+    `).bind(runId).all()).results || [];
+    const itemIds = items.map(item => item.id);
+    const assetsByItem = new Map();
+    if (itemIds.length) {
+        const placeholders = itemIds.map(() => "?").join(",");
+        const assets = (await env.DB.prepare(`
+            SELECT * FROM planner_v3_assets
+            WHERE item_id IN (${placeholders}) AND status = 'candidate'
+            ORDER BY item_id, image_index, created_at
+        `).bind(...itemIds).all()).results || [];
+        for (const asset of assets) {
+            if (!assetsByItem.has(asset.item_id)) assetsByItem.set(asset.item_id, []);
+            assetsByItem.get(asset.item_id).push(asset);
+        }
+    }
+    return {
+        id: run.id,
+        projectId: run.project_id,
+        projectPrefix: run.project_prefix,
+        characterId: run.character_id,
+        characterPrefix: run.character_prefix,
+        status: run.status,
+        mode: run.mode,
+        defaultCount: run.default_count,
+        backgroundJobId: run.active_job_id || undefined,
+        runningSituationIds: parseJson(run.running_situation_ids_json, []),
+        stage: run.stage || "",
+        stageLabel: run.stage_label || "",
+        errorMessage: run.error_message || "",
+        items: await Promise.all(items.map(item => plannerV3ItemToClient(env, item, assetsByItem.get(item.id) || [])))
+    };
+}
+
+async function plannerV3ItemToClient(env, row, assets = []) {
+    const setting = await env.DB.prepare(`
+        SELECT extra_json FROM planner_v3_generation_settings
+        WHERE owner_type = 'item' AND owner_id = ?
+        LIMIT 1
+    `).bind(row.id).first();
+    const generation = parseJson(setting?.extra_json, {});
+    const extra = parseJson(row.extra_json, {});
+    const fallbackImages = Array.isArray(extra.legacyImages) ? extra.legacyImages : [];
+    const fallbackGeneratedImages = Array.isArray(extra.legacyGeneratedImages) ? extra.legacyGeneratedImages : [];
+    return {
+        ...extra,
+        id: row.id,
+        situationId: row.situation_id,
+        situationName: row.situation_name,
+        situationIndex: row.situation_index,
+        imageNumber: row.image_number,
+        rating: row.situation_rating,
+        status: row.status === "complete" ? "done" : row.status,
+        count: row.target_count,
+        completedCount: row.completed_count,
+        failedCount: row.failed_count,
+        stage: row.stage || "",
+        stageLabel: row.stage_label || "",
+        errorMessage: row.error_message || "",
+        generation,
+        images: assets.length ? assets.map(asset => asset.r2_key) : fallbackImages,
+        generatedImages: assets.length ? assets.map(asset => ({
+            id: asset.id,
+            key: asset.r2_key,
+            r2Key: asset.r2_key,
+            imageIndex: asset.image_index,
+            createdAt: asset.created_at
+        })) : fallbackGeneratedImages
+    };
+}
+
+export async function deletePlannerV3Run(env, runId) {
+    await ensurePlannerV3Schema(env);
+    const timestamp = nowPlannerV3Iso();
+    await env.DB.prepare(`
+        INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
+            id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
+            status, created_at, updated_at
+        )
+        SELECT 'cleanup_' || id, r2_key, id, run_id, item_id, 'deleted_run_cleanup',
+            'pending', ?, ?
+        FROM planner_v3_assets
+        WHERE run_id = ?
+    `).bind(timestamp, timestamp, runId).run();
+    await env.DB.prepare("DELETE FROM planner_v3_runs WHERE id = ?").bind(runId).run();
+    return { success: true };
+}
+
+export async function updatePlannerV3Item(env, itemId, patch = {}) {
+    await ensurePlannerV3Schema(env);
+    const row = await env.DB.prepare("SELECT * FROM planner_v3_items WHERE id = ?").bind(itemId).first();
+    if (!row) throw new Error("Planner item not found");
+    const timestamp = nowPlannerV3Iso();
+    await env.DB.prepare(`
+        UPDATE planner_v3_items
+        SET situation_name = ?, image_number = ?, situation_rating = ?, target_count = ?,
+            stage = ?, stage_label = ?, error_message = ?, extra_json = ?, updated_at = ?
+        WHERE id = ?
+    `).bind(
+        patch.situationName ?? row.situation_name,
+        patch.imageNumber ?? row.image_number,
+        patch.rating === "nsfw" || patch.situationRating === "nsfw" ? "nsfw" : row.situation_rating,
+        Math.max(1, asInt(patch.count || patch.targetCount || row.target_count, row.target_count)),
+        patch.stage ?? row.stage,
+        patch.stageLabel ?? row.stage_label,
+        patch.errorMessage ?? row.error_message,
+        JSON.stringify(clientExtraForItem({ ...parseJson(row.extra_json, {}), ...patch })),
+        timestamp,
+        itemId
+    ).run();
+    return getPlannerV3RunById(env, row.run_id);
+}
+
+export async function deletePlannerV3Item(env, itemId) {
+    await ensurePlannerV3Schema(env);
+    const item = await env.DB.prepare("SELECT * FROM planner_v3_items WHERE id = ?").bind(itemId).first();
+    if (!item) return { success: true };
+    const timestamp = nowPlannerV3Iso();
+    await queuePlannerV3ItemAssetsForCleanup(env, itemId, "deleted_item_cleanup", timestamp);
+    await env.DB.prepare("DELETE FROM planner_v3_items WHERE id = ?").bind(itemId).run();
+    await deleteEmptyPlannerV3JobsAndRuns(env, item.run_id);
+    return { success: true };
+}
+
+async function queuePlannerV3ItemAssetsForCleanup(env, itemId, reason, timestamp = nowPlannerV3Iso()) {
+    await env.DB.prepare(`
+        INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
+            id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
+            status, created_at, updated_at
+        )
+        SELECT 'cleanup_' || id, r2_key, id, run_id, item_id, ?,
+            'pending', ?, ?
+        FROM planner_v3_assets
+        WHERE item_id = ?
+    `).bind(reason, timestamp, timestamp, itemId).run();
+}
+
+async function deleteEmptyPlannerV3JobsAndRuns(env, runId) {
+    await env.DB.prepare(`
+        DELETE FROM planner_v3_jobs
+        WHERE run_id = ?
+          AND id NOT IN (SELECT DISTINCT job_id FROM planner_v3_job_tasks)
+    `).bind(runId).run();
+    await env.DB.prepare(`
+        DELETE FROM planner_v3_runs
+        WHERE id = ?
+          AND id NOT IN (SELECT DISTINCT run_id FROM planner_v3_items)
+    `).bind(runId).run();
+}
+
+export async function startPlannerV3Generation(env, body = {}) {
+    await ensurePlannerV3Schema(env);
+    const meta = body.plannerMeta ? await putPlannerV3RunFromMeta(env, body.plannerMeta) : await getPlannerV3RunById(env, body.runId);
+    if (!meta) throw new Error("Planner run not found");
+    const runId = meta.id;
+    const targetSituationId = body.targetSituationId || "";
+    const mode = body.mode === "browser" ? "browser" : "background";
+    const existing = await env.DB.prepare(`
+        SELECT * FROM planner_v3_jobs
+        WHERE run_id = ? AND status IN ('queued', 'running', 'paused', 'cancel_requested')
+        ORDER BY updated_at DESC
+        LIMIT 1
+    `).bind(runId).first();
+    if (existing) return getPlannerV3Status(env, existing.id);
+
+    const timestamp = nowPlannerV3Iso();
+    const candidates = meta.items.filter(item => {
+        if (targetSituationId && item.situationId !== targetSituationId) return false;
+        return !["done", "complete"].includes(item.status) || (item.images || []).length < item.count;
+    });
+    if (!candidates.length) throw new Error("No runnable planner items");
+
+    const totalCount = candidates.reduce((sum, item) => sum + Math.max(1, asInt(item.count || meta.defaultCount, meta.defaultCount)), 0);
+    const jobId = makePlannerV3Id("pjob");
+    const activeKey = `${meta.projectId}:${meta.characterId}:${targetSituationId || "all"}`;
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_jobs (
+            id, run_id, project_id, project_prefix, character_id, mode, status,
+            target_situation_id, total_count, completed_count, failed_count,
+            stage, stage_label, error_message, active_key, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?, 0, 0, 'queued', 'Queue waiting', '', ?, ?, ?)
+    `).bind(jobId, runId, meta.projectId, meta.projectPrefix, meta.characterId, mode, targetSituationId || null, totalCount, activeKey, timestamp, timestamp).run();
+    await env.DB.prepare("UPDATE planner_v3_runs SET status = 'queued', active_job_id = ?, mode = ?, updated_at = ? WHERE id = ?")
+        .bind(jobId, mode, timestamp, runId).run();
+
+    let sequence = 0;
+    for (const [taskIndex, item] of candidates.entries()) {
+        const itemRow = await env.DB.prepare("SELECT * FROM planner_v3_items WHERE id = ?").bind(item.id).first();
+        const variants = (await env.DB.prepare(`
+            SELECT * FROM planner_v3_item_variants WHERE item_id = ? ORDER BY sort_order
+        `).bind(item.id).all()).results || [];
+        const taskId = makePlannerV3Id("ptask");
+        await env.DB.prepare(`
+            INSERT INTO planner_v3_job_tasks (
+                id, job_id, item_id, status, target_count, completed_count, failed_count,
+                attempts, stage, stage_label, error_message, queue_order, created_at, updated_at
+            ) VALUES (?, ?, ?, 'queued', ?, 0, 0, 0, 'queued', 'Queue waiting', '', ?, ?, ?)
+        `).bind(taskId, jobId, item.id, itemRow.target_count, taskIndex, timestamp, timestamp).run();
+        await env.DB.prepare("UPDATE planner_v3_items SET status = 'queued', updated_at = ? WHERE id = ?")
+            .bind(timestamp, item.id).run();
+        let imageIndex = 0;
+        for (const variant of variants) {
+            for (let variantImageIndex = 0; variantImageIndex < variant.target_count; variantImageIndex += 1) {
+                await env.DB.prepare(`
+                    INSERT INTO planner_v3_queue (
+                        id, job_id, task_id, item_id, variant_id, sequence, image_index,
+                        variant_image_index, executor, status, attempts, scheduled_at,
+                        created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', 0, ?, ?, ?)
+                `).bind(
+                    makePlannerV3Id("pqueue"),
+                    jobId,
+                    taskId,
+                    item.id,
+                    variant.id,
+                    sequence,
+                    imageIndex,
+                    variantImageIndex,
+                    mode,
+                    timestamp,
+                    timestamp,
+                    timestamp
+                ).run();
+                sequence += 1;
+                imageIndex += 1;
+            }
+        }
+    }
+
+    if (mode === "background" && env.GENERATION_QUEUE) {
+        const first = await env.DB.prepare(`
+            SELECT id FROM planner_v3_queue
+            WHERE job_id = ? AND executor = 'background' AND status = 'queued'
+            ORDER BY sequence
+            LIMIT 1
+        `).bind(jobId).first();
+        if (first?.id) await env.GENERATION_QUEUE.send({ plannerV3: true, queueId: first.id, jobId });
+    }
+    return getPlannerV3Status(env, jobId);
+}
+
+export async function getPlannerV3Status(env, jobId) {
+    await ensurePlannerV3Schema(env);
+    const job = await env.DB.prepare("SELECT * FROM planner_v3_jobs WHERE id = ?").bind(jobId).first();
+    if (!job) throw new Error("Planner job not found");
+    const tasks = (await env.DB.prepare(`
+        SELECT t.*, i.situation_id, i.image_number
+        FROM planner_v3_job_tasks t
+        LEFT JOIN planner_v3_items i ON i.id = t.item_id
+        WHERE t.job_id = ?
+        ORDER BY t.queue_order
+    `).bind(jobId).all()).results || [];
+    const assets = (await env.DB.prepare(`
+        SELECT item_id, id, r2_key, image_index, created_at
+        FROM planner_v3_assets
+        WHERE job_id = ?
+        ORDER BY item_id, image_index, created_at
+    `).bind(jobId).all()).results || [];
+    const assetsByItem = new Map();
+    for (const asset of assets) {
+        if (!assetsByItem.has(asset.item_id)) assetsByItem.set(asset.item_id, []);
+        assetsByItem.get(asset.item_id).push(asset);
+    }
+    return {
+        jobId: job.id,
+        runId: job.run_id,
+        status: job.status,
+        mode: job.mode,
+        totalCount: job.total_count,
+        completedCount: job.completed_count,
+        failedCount: job.failed_count,
+        stage: job.stage || "",
+        stageLabel: job.stage_label || "",
+        errorMessage: job.error_message || "",
+        items: tasks.map(task => {
+            const itemAssets = assetsByItem.get(task.item_id) || [];
+            return {
+                id: task.id,
+                itemId: task.item_id,
+                situationId: task.situation_id,
+                imageNumber: task.image_number,
+                status: task.status,
+                targetCount: task.target_count,
+                count: task.target_count,
+                completedCount: task.completed_count,
+                failedCount: task.failed_count,
+                stage: task.stage || "",
+                stageLabel: task.stage_label || "",
+                errorMessage: task.error_message || "",
+                resultKeys: itemAssets.map(asset => asset.r2_key),
+                generatedImages: itemAssets.map(asset => ({
+                    id: asset.id,
+                    key: asset.r2_key,
+                    r2Key: asset.r2_key,
+                    imageIndex: asset.image_index,
+                    createdAt: asset.created_at
+                }))
+            };
+        })
+    };
+}
+
+export async function pausePlannerV3Generation(env, jobId) {
+    await ensurePlannerV3Schema(env);
+    const timestamp = nowPlannerV3Iso();
+    const job = await env.DB.prepare("SELECT * FROM planner_v3_jobs WHERE id = ?").bind(jobId).first();
+    if (!job) throw new Error("Planner job not found");
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_jobs SET status = 'paused', stage = 'paused', stage_label = 'Paused', updated_at = ? WHERE id = ?").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = 'paused', stage = 'paused', stage_label = 'Paused', updated_at = ? WHERE job_id = ? AND status IN ('queued', 'running')").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_queue SET status = 'paused', updated_at = ? WHERE job_id = ? AND status IN ('queued', 'running')").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_runs SET status = 'paused', stage = 'paused', stage_label = 'Paused', updated_at = ? WHERE id = ?").bind(timestamp, job.run_id),
+        env.DB.prepare("UPDATE planner_v3_items SET status = 'paused', stage = 'paused', stage_label = 'Paused', updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?) AND status IN ('queued', 'running')").bind(timestamp, jobId)
+    ]);
+    return getPlannerV3Status(env, jobId);
+}
+
+export async function resumePlannerV3Generation(env, jobId) {
+    await ensurePlannerV3Schema(env);
+    const timestamp = nowPlannerV3Iso();
+    const job = await env.DB.prepare("SELECT * FROM planner_v3_jobs WHERE id = ?").bind(jobId).first();
+    if (!job) throw new Error("Planner job not found");
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_jobs SET status = 'queued', stage = 'queued', stage_label = 'Queue waiting', updated_at = ? WHERE id = ?").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = 'queued', stage = 'queued', stage_label = 'Queue waiting', updated_at = ? WHERE job_id = ? AND status = 'paused'").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_queue SET status = 'queued', claimed_by = '', claim_token = '', claimed_at = NULL, lease_expires_at = NULL, updated_at = ? WHERE job_id = ? AND status = 'paused'").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_runs SET status = 'queued', stage = 'queued', stage_label = 'Queue waiting', updated_at = ? WHERE id = ?").bind(timestamp, job.run_id),
+        env.DB.prepare("UPDATE planner_v3_items SET status = 'queued', stage = 'queued', stage_label = 'Queue waiting', updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?) AND status = 'paused'").bind(timestamp, jobId)
+    ]);
+    if (job.mode === "background" && env.GENERATION_QUEUE) {
+        const next = await env.DB.prepare(`
+            SELECT id FROM planner_v3_queue
+            WHERE job_id = ? AND executor = 'background' AND status = 'queued'
+            ORDER BY sequence LIMIT 1
+        `).bind(jobId).first();
+        if (next?.id) await env.GENERATION_QUEUE.send({ plannerV3: true, queueId: next.id, jobId });
+    }
+    return getPlannerV3Status(env, jobId);
+}
+
+export async function cancelPlannerV3Generation(env, jobId) {
+    await ensurePlannerV3Schema(env);
+    const timestamp = nowPlannerV3Iso();
+    const job = await env.DB.prepare("SELECT * FROM planner_v3_jobs WHERE id = ?").bind(jobId).first();
+    if (!job) throw new Error("Planner job not found");
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_jobs SET status = 'cancelled', stage = 'cancelled', stage_label = 'Cancelled', cancelled_at = ?, updated_at = ? WHERE id = ?").bind(timestamp, timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = 'cancelled', updated_at = ? WHERE job_id = ? AND status NOT IN ('completed', 'partial_failed', 'failed')").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_queue SET status = 'cancelled', updated_at = ? WHERE job_id = ? AND status NOT IN ('completed', 'failed')").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_runs SET status = 'draft', active_job_id = NULL, stage = '', stage_label = '', updated_at = ? WHERE id = ?").bind(timestamp, job.run_id),
+        env.DB.prepare("UPDATE planner_v3_items SET status = CASE WHEN completed_count > 0 THEN status ELSE 'pending' END, stage = '', stage_label = '', updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?)").bind(timestamp, jobId)
+    ]);
+    return getPlannerV3Status(env, jobId);
+}
+
+export async function claimNextPlannerV3BrowserQueue(env, jobId) {
+    await ensurePlannerV3Schema(env);
+    const timestamp = nowPlannerV3Iso();
+    const token = makePlannerV3Id("claim");
+    const row = await env.DB.prepare(`
+        SELECT * FROM planner_v3_queue
+        WHERE job_id = ? AND executor = 'browser'
+          AND (status = 'queued' OR (status = 'running' AND lease_expires_at <= ?))
+        ORDER BY sequence
+        LIMIT 1
+    `).bind(jobId, timestamp).first();
+    if (!row) return { queue: null, status: await getPlannerV3Status(env, jobId) };
+    await env.DB.prepare(`
+        UPDATE planner_v3_queue
+        SET status = 'running', attempts = attempts + 1, claimed_by = 'browser',
+            claim_token = ?, claimed_at = ?, lease_expires_at = ?, started_at = COALESCE(started_at, ?),
+            updated_at = ?
+        WHERE id = ?
+    `).bind(token, timestamp, futurePlannerV3Iso(BROWSER_QUEUE_LEASE_MS), timestamp, timestamp, row.id).run();
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_jobs SET status = 'running', stage = 'running', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?").bind(timestamp, timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?").bind(timestamp, timestamp, row.task_id),
+        env.DB.prepare("UPDATE planner_v3_items SET status = 'running', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ?").bind(timestamp, timestamp, row.item_id)
+    ]);
+    const setting = await env.DB.prepare(`
+        SELECT extra_json FROM planner_v3_generation_settings
+        WHERE owner_type = 'variant' AND owner_id = ?
+        LIMIT 1
+    `).bind(row.variant_id).first();
+    return {
+        queue: {
+            id: row.id,
+            jobId: row.job_id,
+            taskId: row.task_id,
+            itemId: row.item_id,
+            variantId: row.variant_id,
+            imageIndex: row.image_index,
+            variantImageIndex: row.variant_image_index,
+            claimToken: token,
+            generation: parseJson(setting?.extra_json, {})
+        },
+        status: await getPlannerV3Status(env, jobId)
+    };
+}
+
+export async function completePlannerV3BrowserQueue(env, body = {}) {
+    await ensurePlannerV3Schema(env);
+    const queueId = String(body.queueId || "").trim();
+    const claimToken = String(body.claimToken || "").trim();
+    const r2Key = String(body.r2Key || body.key || "").trim();
+    if (!queueId || !claimToken || !r2Key) throw new Error("queueId, claimToken, and r2Key are required");
+    const queue = await env.DB.prepare("SELECT * FROM planner_v3_queue WHERE id = ?").bind(queueId).first();
+    if (!queue || queue.status !== "running" || queue.claim_token !== claimToken) {
+        throw new Error("Queue claim is no longer valid");
+    }
+    const timestamp = nowPlannerV3Iso();
+    const assetId = makePlannerV3Id("passet");
+    const fileName = r2Key.split("/").pop() || `${assetId}.webp`;
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_assets (
+            id, run_id, item_id, variant_id, job_id, task_id, queue_id, r2_key,
+            file_name, mime_type, byte_size, width, height, image_index, status,
+            is_public, created_at, updated_at
+        )
+        SELECT ?, j.run_id, q.item_id, q.variant_id, q.job_id, q.task_id, q.id, ?,
+            ?, ?, ?, ?, ?, q.image_index, 'candidate', 0, ?, ?
+        FROM planner_v3_queue q
+        JOIN planner_v3_jobs j ON j.id = q.job_id
+        WHERE q.id = ?
+    `).bind(
+        assetId,
+        r2Key,
+        fileName,
+        body.mimeType || "image/webp",
+        body.byteSize || null,
+        body.width || null,
+        body.height || null,
+        timestamp,
+        timestamp,
+        queueId
+    ).run();
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_asset_metadata (
+            asset_id, prompt, negative_prompt, model, sampler, steps, scale, seed,
+            width, height, split_prompts_json, v4_rows_json, request_json, response_json,
+            metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+        assetId,
+        body.prompt || "",
+        body.negativePrompt || "",
+        body.model || "",
+        body.sampler || "",
+        body.steps || null,
+        body.scale || "",
+        body.seed || "",
+        body.width || null,
+        body.height || null,
+        JSON.stringify(body.splitPrompts || {}),
+        JSON.stringify(body.v4Rows || []),
+        JSON.stringify(body.request || {}),
+        JSON.stringify(body.response || {}),
+        JSON.stringify(body.metadata || {}),
+        timestamp,
+        timestamp
+    ).run();
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_queue SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?").bind(timestamp, timestamp, queueId),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET completed_count = completed_count + 1, updated_at = ? WHERE id = ?").bind(timestamp, queue.task_id),
+        env.DB.prepare("UPDATE planner_v3_items SET completed_count = completed_count + 1, updated_at = ? WHERE id = ?").bind(timestamp, queue.item_id),
+        env.DB.prepare("UPDATE planner_v3_jobs SET completed_count = completed_count + 1, updated_at = ? WHERE id = ?").bind(timestamp, queue.job_id)
+    ]);
+    await rollupPlannerV3Job(env, queue.job_id);
+    return { assetId, status: await getPlannerV3Status(env, queue.job_id) };
+}
+
+async function rollupPlannerV3Job(env, jobId) {
+    const timestamp = nowPlannerV3Iso();
+    const job = await env.DB.prepare("SELECT * FROM planner_v3_jobs WHERE id = ?").bind(jobId).first();
+    if (!job || PLANNER_V3_TERMINAL_JOB_STATUSES.includes(job.status)) return;
+    const rows = (await env.DB.prepare("SELECT status FROM planner_v3_queue WHERE job_id = ?").bind(jobId).all()).results || [];
+    if (!rows.length) return;
+    const done = rows.every(row => row.status === "completed" || row.status === "failed" || row.status === "cancelled");
+    if (!done) return;
+    const failed = rows.some(row => row.status === "failed");
+    const status = failed ? "partial_failed" : "completed";
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_jobs SET status = ?, stage = ?, stage_label = ?, completed_at = ?, updated_at = ? WHERE id = ?").bind(status, status, status === "completed" ? "Completed" : "Partial failed", timestamp, timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = CASE WHEN failed_count > 0 THEN 'partial_failed' ELSE 'completed' END, completed_at = ?, updated_at = ? WHERE job_id = ?").bind(timestamp, timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_items SET status = CASE WHEN failed_count > 0 THEN 'partial_failed' ELSE 'complete' END, completed_at = ?, updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?)").bind(timestamp, timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_runs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?").bind(failed ? "partial_failed" : "complete", timestamp, timestamp, job.run_id)
+    ]);
+}
+
+export async function confirmPlannerV3Asset(env, body = {}) {
+    await ensurePlannerV3Schema(env);
+    if (!env.imgBucket) throw new Error("imgBucket binding is not configured");
+    const itemId = String(body.itemId || body.item_id || "").trim();
+    const assetId = String(body.assetId || body.asset_id || "").trim();
+    const idempotencyKey = String(body.idempotencyKey || body.idempotency_key || "").trim();
+    if (!itemId || !assetId || !idempotencyKey) throw new Error("itemId, assetId, and idempotencyKey are required");
+    const existing = await env.DB.prepare("SELECT * FROM planner_v3_confirm_operations WHERE idempotency_key = ?").bind(idempotencyKey).first();
+    if (existing?.status === "completed") return { success: true, operation: existing };
+    const conflicting = await env.DB.prepare("SELECT * FROM planner_v3_confirm_operations WHERE item_id = ? AND idempotency_key <> ?").bind(itemId, idempotencyKey).first();
+    if (conflicting) {
+        const error = new Error("A different confirm operation already exists for this item");
+        error.status = 409;
+        throw error;
+    }
+    const asset = await env.DB.prepare("SELECT * FROM planner_v3_assets WHERE id = ? AND item_id = ? AND status = 'candidate'").bind(assetId, itemId).first();
+    if (!asset) throw new Error("Candidate asset not found");
+    const item = await env.DB.prepare("SELECT * FROM planner_v3_items WHERE id = ?").bind(itemId).first();
+    const run = item ? await env.DB.prepare("SELECT * FROM planner_v3_runs WHERE id = ?").bind(item.run_id).first() : null;
+    if (!item || !run) throw new Error("Planner item not found");
+    const targetFolderPrefix = String(body.targetFolderPrefix || body.target_folder_prefix || `${run.character_prefix || run.character_id}/`).replace(/^\/+/, "");
+    const targetFileName = String(body.targetFileName || body.target_file_name || `${item.image_number}.webp`);
+    const targetR2Key = `${targetFolderPrefix}${targetFileName}`;
+    const timestamp = nowPlannerV3Iso();
+    const operationId = existing?.id || makePlannerV3Id("pcfm");
+    if (!existing) {
+        await env.DB.prepare(`
+            INSERT INTO planner_v3_confirm_operations (
+                id, run_id, item_id, selected_asset_id, selected_asset_r2_key,
+                target_r2_key, target_folder_prefix, target_file_name, status,
+                idempotency_key, attempts, error_message, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, 0, '', ?, ?)
+        `).bind(operationId, run.id, itemId, assetId, asset.r2_key, targetR2Key, targetFolderPrefix, targetFileName, idempotencyKey, timestamp, timestamp).run();
+    }
+    await env.DB.prepare("UPDATE planner_v3_confirm_operations SET status = 'copying', attempts = attempts + 1, updated_at = ? WHERE id = ?")
+        .bind(timestamp, operationId).run();
+    const object = await env.imgBucket.get(asset.r2_key);
+    if (!object) throw new Error("Selected candidate image is missing in R2");
+    await env.imgBucket.put(targetR2Key, object.body, {
+        httpMetadata: { contentType: asset.mime_type || "image/webp" },
+        customMetadata: { ispublic: "false", plannerConfirmOperationId: operationId }
+    });
+    await env.DB.prepare(`
+        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+            metadata_json = excluded.metadata_json,
+            updated_at = excluded.updated_at
+    `).bind(targetFolderPrefix, targetFileName, JSON.stringify(body.metadata || {}), timestamp, timestamp).run();
+    await env.DB.prepare("UPDATE planner_v3_confirm_operations SET status = 'metadata_saved', updated_at = ? WHERE id = ?")
+        .bind(timestamp, operationId).run();
+    const itemAssets = (await env.DB.prepare(`
+        SELECT id, run_id, item_id, r2_key
+        FROM planner_v3_assets
+        WHERE item_id = ?
+        ORDER BY image_index, created_at
+    `).bind(itemId).all()).results || [];
+    const cleanupFailures = [];
+    for (const candidate of itemAssets) {
+        try {
+            await env.imgBucket.delete(candidate.r2_key);
+        } catch (error) {
+            cleanupFailures.push({
+                ...candidate,
+                errorMessage: error?.message || String(error)
+            });
+        }
+    }
+    for (const failed of cleanupFailures) {
+        await env.DB.prepare(`
+            INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
+                id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
+                status, attempts, error_message, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, 'confirmed_item_cleanup_failed', 'pending', 0, ?, ?, ?)
+        `).bind(
+            `cleanup_${failed.id}`,
+            failed.r2_key,
+            failed.id,
+            failed.run_id,
+            failed.item_id,
+            failed.errorMessage,
+            timestamp,
+            timestamp
+        ).run();
+    }
+    await env.DB.prepare("UPDATE planner_v3_confirm_operations SET status = 'cleanup_queued', updated_at = ? WHERE id = ?")
+        .bind(timestamp, operationId).run();
+    await env.DB.batch([
+        env.DB.prepare("DELETE FROM planner_v3_queue WHERE item_id = ?").bind(itemId),
+        env.DB.prepare("DELETE FROM planner_v3_job_tasks WHERE item_id = ?").bind(itemId),
+        env.DB.prepare("DELETE FROM planner_v3_items WHERE id = ?").bind(itemId)
+    ]);
+    await env.DB.prepare(`
+        UPDATE planner_v3_confirm_operations
+        SET status = 'completed', completed_at = ?, expires_at = ?, updated_at = ?
+        WHERE id = ?
+    `).bind(timestamp, futurePlannerV3Iso(CONFIRM_RETENTION_MS), timestamp, operationId).run();
+    await deleteEmptyPlannerV3JobsAndRuns(env, run.id);
+    return {
+        success: true,
+        operationId,
+        targetR2Key,
+        cleanupFailedKeys: cleanupFailures.map(item => item.r2_key)
+    };
+}
+
+export async function cleanupPlannerV3Assets(env, limit = 50) {
+    await ensurePlannerV3Schema(env);
+    if (!env.imgBucket) throw new Error("imgBucket binding is not configured");
+    const timestamp = nowPlannerV3Iso();
+    const rows = (await env.DB.prepare(`
+        SELECT * FROM planner_v3_asset_cleanup_queue
+        WHERE status IN ('pending', 'failed')
+        ORDER BY updated_at
+        LIMIT ?
+    `).bind(Math.max(1, Math.min(200, asInt(limit, 50)))).all()).results || [];
+    let completed = 0;
+    let failed = 0;
+    for (const row of rows) {
+        try {
+            await env.DB.prepare("UPDATE planner_v3_asset_cleanup_queue SET status = 'running', attempts = attempts + 1, updated_at = ? WHERE id = ?")
+                .bind(timestamp, row.id).run();
+            await env.imgBucket.delete(row.r2_key);
+            await env.DB.prepare("UPDATE planner_v3_asset_cleanup_queue SET status = 'done', completed_at = ?, updated_at = ? WHERE id = ?")
+                .bind(nowPlannerV3Iso(), nowPlannerV3Iso(), row.id).run();
+            completed += 1;
+        } catch (error) {
+            await env.DB.prepare("UPDATE planner_v3_asset_cleanup_queue SET status = 'failed', error_message = ?, updated_at = ? WHERE id = ?")
+                .bind(error?.message || String(error), nowPlannerV3Iso(), row.id).run();
+            failed += 1;
+        }
+    }
+    await env.DB.prepare(`
+        DELETE FROM planner_v3_confirm_operations
+        WHERE status IN ('completed', 'failed')
+          AND expires_at IS NOT NULL
+          AND expires_at <= ?
+    `).bind(nowPlannerV3Iso()).run();
+    return { completed, failed, checked: rows.length };
+}
+
+async function enqueueNextPlannerV3QueueMessage(env, jobId) {
+    if (!env.GENERATION_QUEUE) return false;
+    const row = await env.DB.prepare(`
+        SELECT id
+        FROM planner_v3_queue
+        WHERE job_id = ?
+          AND executor = 'background'
+          AND status = 'queued'
+        ORDER BY sequence
+        LIMIT 1
+    `).bind(jobId).first();
+    if (!row?.id) return false;
+    await env.GENERATION_QUEUE.send({ plannerV3: true, queueId: row.id, jobId });
+    return true;
+}
+
+async function getPlannerV3QueueContext(env, queueId) {
+    return await env.DB.prepare(`
+        SELECT
+            q.*,
+            j.run_id,
+            j.project_id,
+            j.project_prefix,
+            j.character_id,
+            j.status AS job_status,
+            t.status AS task_status,
+            i.status AS item_status,
+            gs.extra_json AS generation_json
+        FROM planner_v3_queue q
+        JOIN planner_v3_jobs j ON j.id = q.job_id
+        JOIN planner_v3_job_tasks t ON t.id = q.task_id
+        JOIN planner_v3_items i ON i.id = q.item_id
+        LEFT JOIN planner_v3_generation_settings gs
+          ON gs.owner_type = 'variant'
+         AND gs.owner_id = q.variant_id
+        WHERE q.id = ?
+    `).bind(queueId).first();
+}
+
+async function claimPlannerV3Queue(env, queueId) {
+    const timestamp = nowPlannerV3Iso();
+    const claimToken = makePlannerV3Id("claim");
+    const row = await getPlannerV3QueueContext(env, queueId);
+    if (!row) return null;
+    if (row.status === "completed" || row.status === "failed" || row.status === "cancelled") return null;
+    if (row.job_status === "paused" || row.task_status === "paused" || row.item_status === "paused" || row.status === "paused") return null;
+    if (row.job_status === "cancel_requested" || row.status === "cancel_requested") {
+        await env.DB.prepare("UPDATE planner_v3_queue SET status = 'cancelled', updated_at = ? WHERE id = ?")
+            .bind(timestamp, queueId).run();
+        return null;
+    }
+    const result = await env.DB.prepare(`
+        UPDATE planner_v3_queue
+        SET status = 'running',
+            attempts = attempts + 1,
+            claimed_by = 'background',
+            claim_token = ?,
+            claimed_at = ?,
+            lease_expires_at = ?,
+            started_at = COALESCE(started_at, ?),
+            updated_at = ?
+        WHERE id = ?
+          AND (
+              status = 'queued'
+              OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
+          )
+    `).bind(claimToken, timestamp, futurePlannerV3Iso(BROWSER_QUEUE_LEASE_MS), timestamp, timestamp, queueId, timestamp).run();
+    if (!result.success) return null;
+    const claimed = await getPlannerV3QueueContext(env, queueId);
+    if (!claimed || claimed.claim_token !== claimToken) return null;
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_jobs SET status = 'running', stage = 'running', stage_label = 'Preparing generation', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status IN ('queued', 'running')")
+            .bind(timestamp, timestamp, claimed.job_id),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = 'running', stage = 'running', stage_label = 'Preparing generation', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status IN ('queued', 'running')")
+            .bind(timestamp, timestamp, claimed.task_id),
+        env.DB.prepare("UPDATE planner_v3_items SET status = 'running', stage = 'running', stage_label = 'Preparing generation', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status IN ('queued', 'running')")
+            .bind(timestamp, timestamp, claimed.item_id),
+        env.DB.prepare("UPDATE planner_v3_runs SET status = 'running', stage = 'running', stage_label = 'Preparing generation', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status IN ('queued', 'running')")
+            .bind(timestamp, timestamp, claimed.run_id)
+    ]);
+    return claimed;
+}
+
+async function validatePlannerV3Claim(env, queueId, claimToken) {
+    const timestamp = nowPlannerV3Iso();
+    const row = await env.DB.prepare(`
+        SELECT status, claim_token, lease_expires_at
+        FROM planner_v3_queue
+        WHERE id = ?
+    `).bind(queueId).first();
+    return !!row
+        && row.status === "running"
+        && row.claim_token === claimToken
+        && (!row.lease_expires_at || row.lease_expires_at > timestamp);
+}
+
+async function markPlannerV3QueueFailure(env, queue, message) {
+    const timestamp = nowPlannerV3Iso();
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_queue SET status = 'failed', error_message = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status <> 'failed'")
+            .bind(message, timestamp, timestamp, queue.id),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET failed_count = failed_count + 1, status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END, error_message = ?, updated_at = ? WHERE id = ?")
+            .bind(message, timestamp, queue.task_id),
+        env.DB.prepare("UPDATE planner_v3_items SET failed_count = failed_count + 1, status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END, error_message = ?, updated_at = ? WHERE id = ?")
+            .bind(message, timestamp, queue.item_id),
+        env.DB.prepare("UPDATE planner_v3_jobs SET failed_count = failed_count + 1, status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END, error_message = ?, updated_at = ? WHERE id = ?")
+            .bind(message, timestamp, queue.job_id)
+    ]);
+    await rollupPlannerV3Job(env, queue.job_id);
+}
+
+async function registerPlannerV3GeneratedAsset(env, queue, request, r2Key, fileName, webpBuffer) {
+    const timestamp = nowPlannerV3Iso();
+    const assetId = r2Key.split("/").pop().replace(/\.webp$/i, "") || makePlannerV3Id("passet");
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_assets (
+            id, run_id, item_id, variant_id, job_id, task_id, queue_id, r2_key,
+            file_name, mime_type, byte_size, width, height, image_index, status,
+            is_public, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'image/webp', ?, ?, ?, ?, 'candidate', 0, ?, ?)
+    `).bind(
+        assetId,
+        queue.run_id,
+        queue.item_id,
+        queue.variant_id,
+        queue.job_id,
+        queue.task_id,
+        queue.id,
+        r2Key,
+        fileName,
+        webpBuffer.byteLength,
+        request.width || null,
+        request.height || null,
+        queue.image_index,
+        timestamp,
+        timestamp
+    ).run();
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_asset_metadata (
+            asset_id, prompt, negative_prompt, model, sampler, steps, scale, seed,
+            width, height, split_prompts_json, v4_rows_json, request_json, response_json,
+            metadata_json, created_at, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?, ?)
+    `).bind(
+        assetId,
+        request.prompt || "",
+        request.negative || "",
+        request.model || "",
+        request.sampler || "",
+        request.steps || null,
+        request.scale == null ? "" : String(request.scale),
+        request.payload?.parameters?.seed == null ? "" : String(request.payload.parameters.seed),
+        request.width || null,
+        request.height || null,
+        JSON.stringify(request.splitPrompts || {}),
+        JSON.stringify(request.payload?.parameters?.v4_prompt?.caption?.char_captions || []),
+        JSON.stringify(request.payload || {}),
+        JSON.stringify({
+            Prompt: request.prompt || "",
+            "Negative Prompt": request.negative || "",
+            Model: request.model || "",
+            Sampler: request.sampler || "",
+            Steps: request.steps || "",
+            "CFG Scale": request.scale == null ? "" : String(request.scale),
+            Seed: request.payload?.parameters?.seed == null ? "" : String(request.payload.parameters.seed),
+            Width: request.width || "",
+            Height: request.height || ""
+        }),
+        timestamp,
+        timestamp
+    ).run();
+    return assetId;
+}
+
+export async function processPlannerV3QueueMessage(env, body = {}) {
+    requireWorkerBindings(env);
+    await ensurePlannerV3Schema(env);
+    const queueId = String(body.queueId || "").trim();
+    if (!queueId) throw new Error("queueId is required");
+    const queue = await claimPlannerV3Queue(env, queueId);
+    if (!queue) return;
+    const attempt = Number(queue.attempts || 1);
+    const generation = parseJson(queue.generation_json, {});
+    const baseSeed = Number.parseInt(generation.seed, 10);
+    const seed = Number.isFinite(baseSeed)
+        ? (baseSeed + Number(queue.image_index || 0)) % 4294967296
+        : Math.floor(Math.random() * 4294967296);
+    let uploadedKey = "";
+    try {
         const request = buildNovelAiPayload(generation, seed);
         await waitForNovelAiSlot(env);
-        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-        if (await isBackgroundJobPaused(env, jobId, itemId)) {
-            if (queueEntry) {
-                await env.DB.prepare(`
-                    UPDATE planner_background_queue
-                    SET status = 'paused',
-                        updated_at = ?
-                    WHERE id = ?
-                `).bind(nowIso(), queueEntry.id).run();
-            }
-            await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, stage: "paused_before_request" });
-            return;
-        }
+        if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) return;
         const zipBuffer = await callNovelAi(env, request.payload);
-        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-        await updateProgressStage(env, jobId, itemId, "saving");
+        if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) return;
         const extracted = await extractFirstZipFile(zipBuffer);
-        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
         const webpBuffer = await encodeWebP(env, extracted.data);
-        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-        const fileName = makeResultFileName(imageIndex);
-        const key = `${item.output_prefix}${fileName}`;
+        if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) return;
 
-        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-        await putR2WithRetry(env.imgBucket, key, webpBuffer, {
+        const assetId = makePlannerV3Id("passet");
+        const fileName = `${assetId}.webp`;
+        uploadedKey = `planner-v3/${queue.project_id}/${queue.run_id}/${queue.item_id}/${fileName}`;
+        await putR2WithRetry(env.imgBucket, uploadedKey, webpBuffer, {
             httpMetadata: { contentType: "image/webp" },
-            customMetadata: { ispublic: "false", backgroundjobid: jobId }
+            customMetadata: {
+                ispublic: "false",
+                plannerV3JobId: queue.job_id,
+                plannerV3QueueId: queue.id
+            }
         });
-        if (await isBackgroundJobCancelRequested(env, jobId, itemId)) {
-            await env.imgBucket.delete(key).catch(() => null);
-            await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-        }
-
-        const resultKeys = parseResultKeys(item.result_keys);
-        resultKeys[imageIndex] = key;
-        await abortIfBackgroundJobCancelRequested(env, jobId, itemId);
-
-        const completedCount = Number(item.completed_count || 0) + 1;
-        const failedCount = Number(item.failed_count || 0);
-        const count = Number(item.count || 0);
-        const pausedAfterRequest = await isBackgroundJobPaused(env, jobId, itemId);
-        const status = completedCount + failedCount >= count ? "completed" : (pausedAfterRequest ? PAUSED_JOB_STATUS : "queued");
-        await env.DB.prepare(`
-            UPDATE planner_background_items
-            SET completed_count = ?,
-                status = ?,
-                stage = ?,
-                result_keys = ?,
-                generation_json = CASE WHEN ? IN ('completed', 'partial_failed', 'failed') THEN '{}' ELSE generation_json END,
-                error_message = NULL,
-                updated_at = ?,
-                completed_at = CASE WHEN ? IN ('completed', 'partial_failed') THEN ? ELSE completed_at END
-            WHERE id = ?
-        `).bind(completedCount, status, status === "completed" ? "completed" : status, JSON.stringify(resultKeys), status, nowIso(), status, nowIso(), itemId).run();
-        if (pausedAfterRequest) {
-            if (queueEntry) {
-                await env.DB.prepare(`
-                    UPDATE planner_background_queue
-                    SET status = 'paused',
-                        updated_at = ?
-                    WHERE id = ?
-                `).bind(nowIso(), queueEntry.id).run();
-            }
-            await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "paused_after_request" });
+        if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) {
+            await env.DB.prepare(`
+                INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
+                    id, r2_key, source_run_id, source_item_id, reason, status, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, 'stale_queue_upload', 'pending', ?, ?)
+            `).bind(makePlannerV3Id("cleanup"), uploadedKey, queue.run_id, queue.item_id, nowPlannerV3Iso(), nowPlannerV3Iso()).run();
             return;
         }
-        if (queueEntry) {
-            await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
-        }
+        await registerPlannerV3GeneratedAsset(env, queue, request, uploadedKey, fileName, webpBuffer);
+        const timestamp = nowPlannerV3Iso();
+        await env.DB.batch([
+            env.DB.prepare("UPDATE planner_v3_queue SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ? AND status = 'running' AND claim_token = ?")
+                .bind(timestamp, timestamp, queue.id, queue.claim_token),
+            env.DB.prepare("UPDATE planner_v3_job_tasks SET completed_count = completed_count + 1, stage = 'running', updated_at = ? WHERE id = ?")
+                .bind(timestamp, queue.task_id),
+            env.DB.prepare("UPDATE planner_v3_items SET completed_count = completed_count + 1, stage = 'running', updated_at = ? WHERE id = ?")
+                .bind(timestamp, queue.item_id),
+            env.DB.prepare("UPDATE planner_v3_jobs SET completed_count = completed_count + 1, stage = 'running', updated_at = ? WHERE id = ?")
+                .bind(timestamp, queue.job_id)
+        ]);
+        await rollupPlannerV3Job(env, queue.job_id);
+        await enqueueNextPlannerV3QueueMessage(env, queue.job_id);
     } catch (error) {
-        const errorMessage = error.message || String(error);
-        if (error?.code === "BACKGROUND_JOB_CANCEL_REQUESTED") {
-            if (queueEntry) {
-                await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
-            }
-            await syncPlannerMetaToR2(env, jobId).catch(() => null);
-            await cleanupFinishedBackgroundJobs(env).catch(() => null);
-            return;
+        const message = error?.message || String(error);
+        if (uploadedKey) {
+            await env.imgBucket.delete(uploadedKey).catch(() => null);
         }
         const retryDelaySeconds = getRetryDelaySeconds(error, attempt);
         const isRateLimited = isNovelAiRateLimitError(error) || isNovelAiCooldownError(error);
+        if (isRateLimited) await setNovelAiCooldown(env, retryDelaySeconds);
         if (!isNovelAiCooldownError(error)) {
             await writeBackgroundErrorLog(env, error, {
-                jobId,
-                itemId,
-                imageIndex,
+                jobId: queue.job_id,
+                itemId: queue.item_id,
+                queueId: queue.id,
+                imageIndex: queue.image_index,
                 attempt,
-                stage: item.stage || job.stage || "unknown",
-                outputPrefix: item.output_prefix,
-                retryDelaySeconds
+                stage: "planner_v3_queue"
             });
         }
-        if (isRateLimited) {
-            await setNovelAiCooldown(env, retryDelaySeconds);
-        }
-        if (!isR2PutRetryExhausted(error) && attempt < MAX_ATTEMPTS && await enqueueRetry(env, message, attempt, retryDelaySeconds)) {
-            const retryStage = isRateLimited ? "rate_limited" : "running";
-            await env.DB.batch([
-                env.DB.prepare(`
-                    UPDATE planner_background_jobs
-                    SET stage = ?, updated_at = ?
-                    WHERE id = ?
-                `).bind(retryStage, nowIso(), jobId),
-                env.DB.prepare(`
-                    UPDATE planner_background_items
-                    SET status = 'queued', stage = ?, attempts = ?, error_message = ?, updated_at = ?
-                    WHERE id = ?
-                `).bind(retryStage, attempt, errorMessage.slice(0, 1000), nowIso(), itemId)
-            ]);
-            if (queueEntry) {
-                await env.DB.prepare(`
-                    UPDATE planner_background_queue
-                    SET attempts = ?,
-                        error_message = ?,
-                        updated_at = ?
-                    WHERE id = ?
-                `).bind(attempt, errorMessage.slice(0, 1000), nowIso(), queueEntry.id).run();
-            }
-            await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "retry_sync" });
+        if (!isR2PutRetryExhausted(error) && attempt < MAX_ATTEMPTS && env.GENERATION_QUEUE) {
+            await env.DB.prepare(`
+                UPDATE planner_v3_queue
+                SET status = 'queued',
+                    error_message = ?,
+                    claim_token = '',
+                    claimed_by = '',
+                    claimed_at = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+            `).bind(message.slice(0, 1000), nowPlannerV3Iso(), queue.id).run();
+            await env.GENERATION_QUEUE.send({ plannerV3: true, queueId: queue.id, jobId: queue.job_id }, { delaySeconds: retryDelaySeconds });
             return;
         }
-        await markItemFailure(env, item, errorMessage);
-        if (queueEntry) {
-            await env.DB.prepare("DELETE FROM planner_background_queue WHERE id = ?").bind(queueEntry.id).run();
-        }
-        await refreshJobRollup(env, jobId);
-        await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "failure_sync" });
-        await enqueueNextPlannerQueueMessage(env, jobId).catch(() => null);
-        await cleanupFinishedBackgroundJobs(env).catch(() => null);
-        return;
+        await markPlannerV3QueueFailure(env, queue, message.slice(0, 1000));
+        await enqueueNextPlannerV3QueueMessage(env, queue.job_id);
     }
-
-    await refreshJobRollup(env, jobId);
-    await syncPlannerMetaToR2Safely(env, jobId, { itemId, imageIndex, attempt, stage: "success_sync" });
-    await enqueueNextPlannerQueueMessage(env, jobId).catch(() => null);
-    await cleanupFinishedBackgroundJobs(env).catch(() => null);
 }
+
 
 export default {
     async scheduled(_event, env) {
         await cleanupDeletedAssets(env).catch(error => writeBackgroundErrorLog(env, error, {
             stage: "scheduled_asset_cleanup"
-        }));
-        await cleanupFinishedBackgroundJobs(env).catch(error => writeBackgroundErrorLog(env, error, {
-            stage: "scheduled_background_job_cleanup"
         }));
     },
     async queue(batch, env) {
@@ -2385,6 +1988,7 @@ export default {
                 await writeBackgroundErrorLog(env, error, {
                     jobId: message.body?.jobId || "",
                     itemId: message.body?.itemId || "",
+                    queueId: message.body?.queueId || "",
                     imageIndex: message.body?.imageIndex,
                     attempt: message.body?.attempt,
                     stage: "queue_handler_uncaught",

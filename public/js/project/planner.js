@@ -157,7 +157,7 @@ export async function loadPlannerMeta(project, characterId = '', options = {}) {
         const cached = readPlannerMetaCache(targetKey);
         if (cached !== null) return cached;
     }
-    let res = await fetch(`/api/planner/meta?key=${encodeURIComponent(targetKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    let res = await fetch(`/api/planner/v3/run?projectId=${encodeURIComponent(project.id || '')}&characterId=${encodeURIComponent(targetCharacterId)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) return null;
     if (!res.ok) throw new Error('플래너 메타데이터를 불러오지 못했습니다.');
     const payload = await res.json();
@@ -182,12 +182,12 @@ export async function savePlannerMeta(project, meta) {
     const normalized = normalizePlannerStoredMeta(meta || {});
     normalized.projectId = normalized.projectId || project?.id || '';
     normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
-    const res = await fetch('/api/planner/meta?_t=' + Date.now(), {
+    const res = await fetch('/api/planner/v3/run?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
-        body: JSON.stringify({ key, data: normalized }),
+        body: JSON.stringify({ data: normalized }),
         cache: 'no-store'
     });
     if (!res.ok) {
@@ -200,11 +200,13 @@ export async function savePlannerMeta(project, meta) {
 export async function deletePlannerMeta(project, characterId = '') {
     if (!project?.prefix) return;
     const key = getPlannerMetaKey(project, characterId || getSelectedPlannerCharacterId(project));
-    await fetch('/api/planner/meta', {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ key })
-    }).catch(() => null);
+    const meta = await loadPlannerMeta(project, characterId, { force: true }).catch(() => null);
+    if (meta?.id) {
+        await fetch(`/api/planner/v3/run/${encodeURIComponent(meta.id)}`, {
+            method: 'DELETE',
+            headers: { 'Content-Type': 'application/json' }
+        }).catch(() => null);
+    }
     deletePlannerMetaCache(key);
     deletePlannerMetaCache(getPlannerMetaKey(project));
 }
@@ -235,8 +237,7 @@ export async function loadPlannerSettings(project, force = false) {
     if (!project?.prefix) return normalizePlannerSettings();
     if (!force && window.PROJECT_PLANNER_SETTINGS?.projectId === project.id) return window.PROJECT_PLANNER_SETTINGS;
 
-    const key = getPlannerSettingsKey(project);
-    const res = await fetch(`/api/db/json-document?type=planner_settings&key=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/planner/v3/settings?projectId=${encodeURIComponent(project.id || '')}&_t=${Date.now()}`, { cache: 'no-store' });
     if (res.status === 404) {
         window.PROJECT_PLANNER_SETTINGS = { projectId: project.id, ...normalizePlannerSettings() };
         return window.PROJECT_PLANNER_SETTINGS;
@@ -251,13 +252,16 @@ export async function loadPlannerSettings(project, force = false) {
 
 export async function savePlannerSettings(project, settings) {
     const normalized = normalizePlannerSettings(settings);
-    const key = getPlannerSettingsKey(project);
-    const res = await fetch('/api/db/json-document?_t=' + Date.now(), {
+    const res = await fetch('/api/planner/v3/settings?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
-        body: JSON.stringify({ type: 'planner_settings', key, data: normalized }),
+        body: JSON.stringify({
+            projectId: project.id || '',
+            projectPrefix: project.prefix || '',
+            ...normalized
+        }),
         cache: 'no-store'
     });
     if (!res.ok) {
@@ -351,6 +355,7 @@ function isPlannerTerminalStatus(status) {
 
 function isPlannerConfirmBlocked(meta = {}, item = null) {
     if (!item) return false;
+    if (window.PROJECT_PLANNER_CONFIRMING) return true;
     const itemActive = ['running', 'cancel_requested'].includes(item.status);
     const backgroundJobId = meta.backgroundJobId || meta.backgroundStatus?.jobId || item.backgroundJobId;
     if (isPlannerTerminalStatus(meta.status) || isPlannerTerminalStatus(meta.backgroundStatus?.status)) {
@@ -2384,7 +2389,7 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
     const targetJobId = jobId || meta?.backgroundJobId;
     if (!project || !targetJobId) return null;
 
-    const res = await fetch(`/api/planner/background/status?jobId=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/planner/v3/generate/status?jobId=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setPlannerStatus(data.error || '백그라운드 상태 조회에 실패했습니다.');
@@ -2435,6 +2440,8 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
                     stage: statusItem.stage || item.stage || '',
                     stageLabel: statusItem.stageLabel || item.stageLabel || '',
                     images: statusItem.resultKeys?.length ? statusItem.resultKeys : (item.images || []),
+                    generatedImages: statusItem.generatedImages?.length ? statusItem.generatedImages : (item.generatedImages || []),
+                    completedCount: Number(statusItem.completedCount || 0),
                     failedCount: Number(statusItem.failedCount || 0),
                     errorMessage: statusItem.errorMessage || item.errorMessage || ''
                 };
@@ -2470,7 +2477,7 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
         renderPlannerIfVisible();
     }
 
-    const res = await fetch('/api/planner/background/cancel', {
+    const res = await fetch('/api/planner/v3/generate/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: targetJobId })
@@ -2516,7 +2523,7 @@ export async function pausePlannerBackgroundGeneration(jobId = null) {
         renderPlannerIfVisible();
     }
 
-    const res = await fetch('/api/planner/background/pause', {
+    const res = await fetch('/api/planner/v3/generate/pause', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: targetJobId })
@@ -2538,7 +2545,7 @@ export async function resumePlannerBackgroundGeneration(jobId = null) {
     const targetJobId = jobId || meta?.backgroundJobId;
     if (!targetJobId) return;
 
-    const res = await fetch('/api/planner/background/resume', {
+    const res = await fetch('/api/planner/v3/generate/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ jobId: targetJobId })
@@ -2771,13 +2778,14 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
     window.PROJECT_PLANNER_META = meta;
     renderPlannerSectionByState();
 
-    const res = await fetch('/api/planner/background/start', {
+    const res = await fetch('/api/planner/v3/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
             projectId: project.id,
             projectPrefix: project.prefix,
             targetSituationId: situationId || null,
+            mode: 'background',
             plannerMeta: meta
         })
     });
@@ -2967,7 +2975,6 @@ export async function selectPlannerImage(key) {
     if (!item) return;
     item.selectedImage = key;
     meta.updatedAt = Date.now();
-    await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
     renderPlannerSectionByState();
 }
@@ -2981,7 +2988,6 @@ export async function selectPlannerImageFromPreview(key) {
     item.selectedImage = key;
     meta.updatedAt = Date.now();
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    await savePlannerMeta(project, meta);
     window.PROJECT_PLANNER_META = meta;
     syncPlannerResultModalSelection(item);
     renderPlannerPreviewOverlay();
@@ -3028,10 +3034,15 @@ export function buildPlannerMetadataFallback(item) {
 }
 
 export async function confirmPlannerSelection(situationId = null) {
+    if (window.PROJECT_PLANNER_CONFIRMING) return;
+    window.PROJECT_PLANNER_CONFIRMING = true;
     const project = getActiveProject();
     let meta = project ? await loadPlannerMeta(project).catch(() => null) : null;
     if (!meta) meta = window.PROJECT_PLANNER_META || null;
-    if (!project || !meta?.items?.length) return;
+    if (!project || !meta?.items?.length) {
+        window.PROJECT_PLANNER_CONFIRMING = false;
+        return;
+    }
     const confirmButton = document.getElementById('planner-result-confirm-button');
     if (confirmButton) confirmButton.disabled = true;
 
@@ -3040,6 +3051,7 @@ export async function confirmPlannerSelection(situationId = null) {
     if (!character) {
         setPlannerStatus('플래너 캐릭터를 찾을 수 없습니다.');
         if (confirmButton) confirmButton.disabled = false;
+        window.PROJECT_PLANNER_CONFIRMING = false;
         return;
     }
 
@@ -3049,49 +3061,73 @@ export async function confirmPlannerSelection(situationId = null) {
     if (!selectedItems.length) {
         setPlannerStatus('확정 전에 상황별 이미지를 하나 이상 선택하세요.');
         if (confirmButton) confirmButton.disabled = false;
+        window.PROJECT_PLANNER_CONFIRMING = false;
         return;
     }
     const blockedItems = selectedItems.filter(item => isPlannerConfirmBlocked(meta, item));
     if (blockedItems.length) {
         setPlannerStatus('생성 중에는 플랜을 확정할 수 없습니다. 일시정지 또는 완료 후 확정하세요.');
         if (confirmButton) confirmButton.disabled = false;
+        window.PROJECT_PLANNER_CONFIRMING = false;
         return;
     }
 
     try {
     for (const item of selectedItems) {
         const newKey = `${character.prefix}${item.imageNumber}.webp`;
-        const imageRes = await fetch(getAssetUrl(item.selectedImage), { cache: 'no-store' });
-        if (!imageRes.ok) throw new Error(`${item.selectedImage} 이미지를 읽지 못했습니다.`);
-        const blob = await imageRes.blob();
-        const sourceFile = new File([blob], getFileNameFromKey(item.selectedImage), { type: blob.type || 'image/png' });
-        const finalFile = sourceFile.type === 'image/webp' ? sourceFile : await window.convertToWebP(sourceFile);
-        const buffer = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = () => resolve(reader.result);
-            reader.onerror = () => reject(new Error('FileReader error'));
-            reader.readAsArrayBuffer(finalFile);
-        });
-        const uploadRes = await fetch('/api/upload?_t=' + Date.now(), {
-            method: 'PUT',
-            headers: {
-                'X-File-Name': encodeURIComponent(`${item.imageNumber}.webp`),
-                'Content-Type': 'image/webp',
-                'X-Absolute-Path': encodeURIComponent(newKey)
-            },
-            body: buffer,
-            cache: 'no-store'
-        });
-        if (!uploadRes.ok) {
-            const data = await uploadRes.json().catch(() => ({}));
-            throw new Error(data.error || `${item.imageNumber}.webp 확정에 실패했습니다.`);
-        }
-        if (window.loadMetadataFromDB && window.saveMetadataToDB) {
+        const selectedAsset = (item.generatedImages || []).find(asset => asset.id && (asset.key === item.selectedImage || asset.r2Key === item.selectedImage));
+        let metadata = {};
+        if (window.loadMetadataFromDB) {
             const sourcePrefix = item.selectedImage.slice(0, item.selectedImage.lastIndexOf('/') + 1);
             const sourceFileName = getFileNameFromKey(item.selectedImage);
             const sourceMetadata = await window.loadMetadataFromDB(sourcePrefix, sourceFileName).catch(() => null);
-            const metadata = mergePlannerSplitMetadata(item, sourceMetadata, item.selectedImage);
-            if (metadata && Object.keys(metadata).length) await window.saveMetadataToDB(character.prefix, `${item.imageNumber}.webp`, metadata);
+            metadata = mergePlannerSplitMetadata(item, sourceMetadata, item.selectedImage);
+        }
+        if (selectedAsset?.id) {
+            const confirmRes = await fetch('/api/planner/v3/confirm?_t=' + Date.now(), {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json; charset=utf-8' },
+                body: JSON.stringify({
+                    itemId: item.id,
+                    assetId: selectedAsset.id,
+                    idempotencyKey: `confirm:${item.id}:${selectedAsset.id}`,
+                    targetFolderPrefix: character.prefix,
+                    targetFileName: `${item.imageNumber}.webp`,
+                    metadata
+                }),
+                cache: 'no-store'
+            });
+            if (!confirmRes.ok) {
+                const data = await confirmRes.json().catch(() => ({}));
+                throw new Error(data.error || `${item.imageNumber}.webp 확정에 실패했습니다.`);
+            }
+        } else {
+            const imageRes = await fetch(getAssetUrl(item.selectedImage), { cache: 'no-store' });
+            if (!imageRes.ok) throw new Error(`${item.selectedImage} 이미지를 읽지 못했습니다.`);
+            const blob = await imageRes.blob();
+            const sourceFile = new File([blob], getFileNameFromKey(item.selectedImage), { type: blob.type || 'image/png' });
+            const finalFile = sourceFile.type === 'image/webp' ? sourceFile : await window.convertToWebP(sourceFile);
+            const buffer = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(reader.result);
+                reader.onerror = () => reject(new Error('FileReader error'));
+                reader.readAsArrayBuffer(finalFile);
+            });
+            const uploadRes = await fetch('/api/upload?_t=' + Date.now(), {
+                method: 'PUT',
+                headers: {
+                    'X-File-Name': encodeURIComponent(`${item.imageNumber}.webp`),
+                    'Content-Type': 'image/webp',
+                    'X-Absolute-Path': encodeURIComponent(newKey)
+                },
+                body: buffer,
+                cache: 'no-store'
+            });
+            if (!uploadRes.ok) {
+                const data = await uploadRes.json().catch(() => ({}));
+                throw new Error(data.error || `${item.imageNumber}.webp 확정에 실패했습니다.`);
+            }
+            if (window.saveMetadataToDB && metadata && Object.keys(metadata).length) await window.saveMetadataToDB(character.prefix, `${item.imageNumber}.webp`, metadata);
         }
         item.finalImage = newKey;
         item.status = 'confirmed';
@@ -3131,5 +3167,7 @@ export async function confirmPlannerSelection(situationId = null) {
     } catch (err) {
         setPlannerStatus(err.message || '플랜 확정에 실패했습니다.');
         if (confirmButton) confirmButton.disabled = false;
+    } finally {
+        window.PROJECT_PLANNER_CONFIRMING = false;
     }
 }
