@@ -719,14 +719,26 @@
             </div>
             <div class="p-4 sm:p-6 space-y-4">
                 <div>
-                    <label for="craft-quality-tags-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-1.5">Quality Tags</label>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                        <label for="craft-quality-tags-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Quality Tags</label>
+                        <label class="inline-flex items-center gap-1.5 text-[11px] font-bold text-gray-600 dark:text-gray-300 select-none cursor-pointer">
+                            <input id="craft-use-quality-tags" type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" checked>
+                            사용함
+                        </label>
+                    </div>
                     <textarea id="craft-quality-tags-input" rows="3" class="auto-resize-textarea w-full p-3 text-xs border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-gray-50 dark:bg-gray-700 dark:text-white shadow-sm" placeholder="masterpiece, best quality, very aesthetic, no text"></textarea>
-                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">Positive Prompt 뒤에 자동으로 이어 붙습니다. 비워두면 자동 퀄리티 태그를 붙이지 않습니다.</p>
+                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">체크되어 있으면 Positive Prompt 뒤에 자동으로 이어 붙습니다.</p>
                 </div>
                 <div>
-                    <label for="craft-default-negative-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide mb-1.5">Default Negative Prompt</label>
+                    <div class="flex items-center justify-between gap-2 mb-1.5">
+                        <label for="craft-default-negative-input" class="block text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wide">Default Negative Prompt</label>
+                        <label class="inline-flex items-center gap-1.5 text-[11px] font-bold text-gray-600 dark:text-gray-300 select-none cursor-pointer">
+                            <input id="craft-use-default-negative" type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" checked>
+                            사용함
+                        </label>
+                    </div>
                     <textarea id="craft-default-negative-input" rows="4" class="auto-resize-textarea w-full p-3 text-xs border border-red-200 dark:border-red-900 rounded-lg focus:ring-red-400 focus:border-red-400 bg-red-50/40 dark:bg-red-900/10 dark:text-white shadow-sm" placeholder="기본으로 제외할 태그를 입력하세요."></textarea>
-                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">Negative Prompt 입력값 앞에 자동으로 합쳐집니다.</p>
+                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">체크되어 있으면 Negative Prompt 입력값 앞에 자동으로 합쳐집니다.</p>
                 </div>
             </div>
             <div class="p-4 sm:px-6 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-b-xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
@@ -1194,6 +1206,6 @@
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=base-prompt-defaults-20260610a"></script>
+    <script type="module" src="/js/main.js?v=base-prompt-storage-20260612a"></script>
 </body>
 </html>

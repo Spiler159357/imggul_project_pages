@@ -7,6 +7,7 @@ const PLANNER_DEFAULT_IMAGE_COUNT = 20;
 const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
 const PLANNER_META_CACHE_TTL_MS = 3000;
+const DEFAULT_PLANNER_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const plannerMetaMemoryCache = new Map();
 
 function clonePlannerMetaValue(meta) {
@@ -626,6 +627,8 @@ export function readPlannerEditsFromDom(meta) {
         item.generation.negative = fields.negative;
         if (craftSettings.qualityTags !== undefined) item.generation.qualityTags = craftSettings.qualityTags;
         if (craftSettings.defaultNegativePrompt !== undefined) item.generation.defaultNegativePrompt = craftSettings.defaultNegativePrompt;
+        if (craftSettings.useQualityTags !== undefined) item.generation.useQualityTags = craftSettings.useQualityTags;
+        if (craftSettings.useDefaultNegativePrompt !== undefined) item.generation.useDefaultNegativePrompt = craftSettings.useDefaultNegativePrompt;
         item.generation.prompts = {
             ...item.generation.prompts,
             'prompt-style': fields.style,
@@ -905,6 +908,48 @@ export function renderPlannerGenerationFields(item) {
     `;
 }
 
+function getPlannerBasePromptSettings() {
+    if (window.readCraftBasePromptSettings) return window.readCraftBasePromptSettings();
+    return {
+        qualityTags: DEFAULT_PLANNER_QUALITY_TAGS,
+        defaultNegativePrompt: '',
+        useQualityTags: true,
+        useDefaultNegativePrompt: true
+    };
+}
+
+function renderPlannerBasePromptSettings() {
+    const settings = getPlannerBasePromptSettings();
+    return `
+        <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 p-3 space-y-3">
+            <div>
+                <p class="text-[11px] font-bold text-gray-700 dark:text-gray-200">기본 생성 태그</p>
+                <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">이미지 생성 패널과 동일한 공용 태그 저장소를 사용합니다.</p>
+            </div>
+            <div>
+                <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <label for="planner-setting-quality-tags" class="block text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Quality Tags</label>
+                    <label class="inline-flex items-center gap-1.5 text-[11px] font-bold text-gray-600 dark:text-gray-300 select-none cursor-pointer">
+                        <input id="planner-setting-use-quality-tags" type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" ${settings.useQualityTags ? 'checked' : ''}>
+                        사용함
+                    </label>
+                </div>
+                <textarea id="planner-setting-quality-tags" rows="2" class="w-full p-2.5 text-xs rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="masterpiece, best quality, very aesthetic, no text">${escapeHtml(settings.qualityTags || '')}</textarea>
+            </div>
+            <div>
+                <div class="flex items-center justify-between gap-2 mb-1.5">
+                    <label for="planner-setting-default-negative" class="block text-[11px] font-bold text-gray-500 dark:text-gray-400 uppercase tracking-wide">Default Negative Prompt</label>
+                    <label class="inline-flex items-center gap-1.5 text-[11px] font-bold text-gray-600 dark:text-gray-300 select-none cursor-pointer">
+                        <input id="planner-setting-use-default-negative" type="checkbox" class="w-3.5 h-3.5 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500" ${settings.useDefaultNegativePrompt ? 'checked' : ''}>
+                        사용함
+                    </label>
+                </div>
+                <textarea id="planner-setting-default-negative" rows="3" class="w-full p-2.5 text-xs rounded-lg border border-red-200 dark:border-red-900 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-red-400" placeholder="기본으로 제외할 태그">${escapeHtml(settings.defaultNegativePrompt || '')}</textarea>
+            </div>
+        </div>
+    `;
+}
+
 export function renderPlannerSettingsModal(settings) {
     return `
         <div id="planner-settings-modal" class="fixed inset-0 z-50 hidden bg-black/60 backdrop-blur-sm items-center justify-center p-4" onclick="window.closePlannerSettingsModal(event)">
@@ -937,6 +982,7 @@ export function renderPlannerSettingsModal(settings) {
                     ])}
                     ${renderPlannerReferencePicker('vibe', 'Vibe 이미지', settings.vibeImageKey)}
                     ${renderPlannerReferencePicker('precise', 'Reference 이미지', settings.preciseImageKey)}
+                    ${renderPlannerBasePromptSettings()}
                     <p id="planner-settings-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                 </div>
                 <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
@@ -1782,9 +1828,22 @@ export function closePlannerImagePreview(event) {
     renderPlannerPreviewOverlay();
 }
 
+function syncPlannerBasePromptSettingsInputs() {
+    const settings = getPlannerBasePromptSettings();
+    const qualityInput = document.getElementById('planner-setting-quality-tags');
+    const negativeInput = document.getElementById('planner-setting-default-negative');
+    const qualityEnabledInput = document.getElementById('planner-setting-use-quality-tags');
+    const negativeEnabledInput = document.getElementById('planner-setting-use-default-negative');
+    if (qualityInput) qualityInput.value = settings.qualityTags || '';
+    if (negativeInput) negativeInput.value = settings.defaultNegativePrompt || '';
+    if (qualityEnabledInput) qualityEnabledInput.checked = !!settings.useQualityTags;
+    if (negativeEnabledInput) negativeEnabledInput.checked = !!settings.useDefaultNegativePrompt;
+}
+
 export function openPlannerSettingsModal() {
     const modal = document.getElementById('planner-settings-modal');
     if (!modal) return;
+    syncPlannerBasePromptSettingsInputs();
     modal.classList.remove('hidden');
     modal.classList.add('flex');
     refreshProjectIcons();
@@ -1805,6 +1864,19 @@ export async function savePlannerSettingsFromModal() {
     if (status) status.textContent = '저장 중...';
 
     try {
+        const basePromptSettings = window.saveCraftBasePromptSettings
+            ? window.saveCraftBasePromptSettings({
+                qualityTags: document.getElementById('planner-setting-quality-tags')?.value || '',
+                defaultNegativePrompt: document.getElementById('planner-setting-default-negative')?.value || '',
+                useQualityTags: document.getElementById('planner-setting-use-quality-tags')?.checked ?? true,
+                useDefaultNegativePrompt: document.getElementById('planner-setting-use-default-negative')?.checked ?? true
+            })
+            : {
+                qualityTags: document.getElementById('planner-setting-quality-tags')?.value || '',
+                defaultNegativePrompt: document.getElementById('planner-setting-default-negative')?.value || '',
+                useQualityTags: document.getElementById('planner-setting-use-quality-tags')?.checked ?? true,
+                useDefaultNegativePrompt: document.getElementById('planner-setting-use-default-negative')?.checked ?? true
+            };
         const settings = await savePlannerSettings(project, {
             model: document.getElementById('planner-setting-model')?.value,
             steps: document.getElementById('planner-setting-steps')?.value,
@@ -1822,7 +1894,13 @@ export async function savePlannerSettingsFromModal() {
         });
         let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
         if (meta?.items?.length) {
-            meta.items.forEach(item => applyPlannerSettingsToGeneration(item.generation, settings));
+            meta.items.forEach(item => {
+                applyPlannerSettingsToGeneration(item.generation, settings);
+                item.generation.qualityTags = basePromptSettings.useQualityTags ? String(basePromptSettings.qualityTags || '').trim() : '';
+                item.generation.defaultNegativePrompt = basePromptSettings.useDefaultNegativePrompt ? String(basePromptSettings.defaultNegativePrompt || '').trim() : '';
+                item.generation.useQualityTags = !!basePromptSettings.useQualityTags;
+                item.generation.useDefaultNegativePrompt = !!basePromptSettings.useDefaultNegativePrompt;
+            });
             meta.updatedAt = Date.now();
             await savePlannerMeta(project, meta);
             window.PROJECT_PLANNER_META = meta;

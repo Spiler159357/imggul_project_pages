@@ -1,6 +1,7 @@
 // 5. craft.js: 이미지 생성 큐, 설정 로직
 const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
+const CRAFT_BASE_PROMPT_STORAGE_KEY = 'naiCraftBasePromptSettings';
 const MAX_V4_PROMPT_CHARACTERS = 6;
 const DEFAULT_CRAFT_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const DEFAULT_CRAFT_DEFAULT_NEGATIVE_PROMPT = '';
@@ -50,18 +51,39 @@ function writeCraftUploadContextCache(cache) {
     } catch {}
 }
 
+function normalizeCraftBasePromptSettings(source = {}, fallback = {}) {
+    return {
+        qualityTags: source.qualityTags === undefined
+            ? (fallback.qualityTags ?? DEFAULT_CRAFT_QUALITY_TAGS)
+            : String(source.qualityTags || '').trim(),
+        defaultNegativePrompt: source.defaultNegativePrompt === undefined
+            ? (fallback.defaultNegativePrompt ?? DEFAULT_CRAFT_DEFAULT_NEGATIVE_PROMPT)
+            : String(source.defaultNegativePrompt || '').trim(),
+        useQualityTags: source.useQualityTags === undefined
+            ? (fallback.useQualityTags ?? true)
+            : !!source.useQualityTags,
+        useDefaultNegativePrompt: source.useDefaultNegativePrompt === undefined
+            ? (fallback.useDefaultNegativePrompt ?? true)
+            : !!source.useDefaultNegativePrompt
+    };
+}
+
 function getSavedCraftPromptDefaults() {
     try {
-        const saved = JSON.parse(localStorage.getItem('naiCraftSettings') || '{}') || {};
-        return {
-            qualityTags: saved.qualityTags === undefined ? DEFAULT_CRAFT_QUALITY_TAGS : String(saved.qualityTags || '').trim(),
-            defaultNegativePrompt: saved.defaultNegativePrompt === undefined ? DEFAULT_CRAFT_DEFAULT_NEGATIVE_PROMPT : String(saved.defaultNegativePrompt || '').trim()
-        };
+        const savedBasePrompt = localStorage.getItem(CRAFT_BASE_PROMPT_STORAGE_KEY);
+        if (savedBasePrompt) return normalizeCraftBasePromptSettings(JSON.parse(savedBasePrompt) || {});
+
+        const legacyCraftSettings = JSON.parse(localStorage.getItem('naiCraftSettings') || '{}') || {};
+        const migrated = normalizeCraftBasePromptSettings({
+            qualityTags: legacyCraftSettings.qualityTags,
+            defaultNegativePrompt: legacyCraftSettings.defaultNegativePrompt,
+            useQualityTags: legacyCraftSettings.useQualityTags,
+            useDefaultNegativePrompt: legacyCraftSettings.useDefaultNegativePrompt
+        });
+        saveCraftBasePromptStorage(migrated);
+        return migrated;
     } catch {
-        return {
-            qualityTags: DEFAULT_CRAFT_QUALITY_TAGS,
-            defaultNegativePrompt: DEFAULT_CRAFT_DEFAULT_NEGATIVE_PROMPT
-        };
+        return normalizeCraftBasePromptSettings();
     }
 }
 
@@ -74,10 +96,16 @@ function combinePromptSegments(...parts) {
 
 function getCraftPromptDefaultSettings(settings = null) {
     const savedDefaults = getSavedCraftPromptDefaults();
-    const source = settings || {};
+    const source = settings ? normalizeCraftBasePromptSettings(settings, savedDefaults) : savedDefaults;
+    const rawQualityTags = source.qualityTags;
+    const rawDefaultNegativePrompt = source.defaultNegativePrompt;
     return {
-        qualityTags: source.qualityTags === undefined ? savedDefaults.qualityTags : String(source.qualityTags || '').trim(),
-        defaultNegativePrompt: source.defaultNegativePrompt === undefined ? savedDefaults.defaultNegativePrompt : String(source.defaultNegativePrompt || '').trim()
+        rawQualityTags,
+        rawDefaultNegativePrompt,
+        useQualityTags: source.useQualityTags,
+        useDefaultNegativePrompt: source.useDefaultNegativePrompt,
+        qualityTags: source.useQualityTags ? rawQualityTags : '',
+        defaultNegativePrompt: source.useDefaultNegativePrompt ? rawDefaultNegativePrompt : ''
     };
 }
 
@@ -85,10 +113,26 @@ function syncCraftBasePromptSummary(settings = null) {
     const defaults = getCraftPromptDefaultSettings(settings);
     const summary = document.getElementById('craft-base-prompt-summary');
     if (summary) {
-        const qualityState = defaults.qualityTags ? '퀄리티 적용' : '퀄리티 비움';
-        const negativeState = defaults.defaultNegativePrompt ? '기본 네거티브 적용' : '기본 네거티브 없음';
+        const qualityState = defaults.useQualityTags && defaults.rawQualityTags ? '퀄리티 사용' : '퀄리티 안함';
+        const negativeState = defaults.useDefaultNegativePrompt && defaults.rawDefaultNegativePrompt ? '기본 네거티브 사용' : '기본 네거티브 안함';
         summary.textContent = `${qualityState} · ${negativeState}`;
     }
+}
+
+function saveCraftBasePromptStorage(settings = {}) {
+    const normalized = normalizeCraftBasePromptSettings(settings);
+    localStorage.setItem(CRAFT_BASE_PROMPT_STORAGE_KEY, JSON.stringify(normalized));
+    return normalized;
+}
+
+export function readCraftBasePromptSettings() {
+    return normalizeCraftBasePromptSettings(getSavedCraftPromptDefaults());
+}
+
+export function saveCraftBasePromptSettings(settings = {}) {
+    const saved = saveCraftBasePromptStorage(settings);
+    syncCraftBasePromptSummary(saved);
+    return saved;
 }
 
 function getCachedCraftProjectContext(projectPath) {
@@ -349,21 +393,30 @@ export function loadCraftSettings() {
  * 반환값: 명시 반환 없음.
  */
 export function saveCraftSettings() {
-    localStorage.setItem('naiCraftSettings', JSON.stringify(window.readCraftSettings()));
+    const {
+        qualityTags,
+        defaultNegativePrompt,
+        useQualityTags,
+        useDefaultNegativePrompt,
+        ...settings
+    } = window.readCraftSettings();
+    localStorage.setItem('naiCraftSettings', JSON.stringify(settings));
 }
 
 export function readCraftSettings() {
     let promptsObj = {};
     window.PROMPT_IDS.forEach(id => { promptsObj[id] = document.getElementById(id)?.value || ''; });
     promptsObj['prompt-raw'] = document.getElementById('prompt-raw')?.value || '';
-    const savedDefaults = getSavedCraftPromptDefaults();
+    const promptDefaults = getCraftPromptDefaultSettings();
 
     return {
         simpleMode: document.getElementById('prompt-toggle-simple')?.checked || false,
         prompts: promptsObj,
         negative: document.getElementById('nai-negative')?.value || '',
-        qualityTags: document.getElementById('craft-quality-tags-input')?.value.trim() ?? savedDefaults.qualityTags,
-        defaultNegativePrompt: document.getElementById('craft-default-negative-input')?.value.trim() ?? savedDefaults.defaultNegativePrompt,
+        qualityTags: promptDefaults.qualityTags,
+        defaultNegativePrompt: promptDefaults.defaultNegativePrompt,
+        useQualityTags: promptDefaults.useQualityTags,
+        useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt,
         v4PromptCharacters: readCraftV4PromptRows(),
         res: document.querySelector('input[name="nai-res"]:checked')?.value || '832x1216',
         model: document.getElementById('nai-model')?.value || 'nai-diffusion-4-5-full',
@@ -427,8 +480,10 @@ export function applyCraftSettings(settings = {}) {
     }
     if (settings.sm !== undefined && document.getElementById('nai-sm')) document.getElementById('nai-sm').checked = !!settings.sm;
     if (settings.sm_dyn !== undefined && document.getElementById('nai-sm-dyn')) document.getElementById('nai-sm-dyn').checked = !!settings.sm_dyn;
-    if (document.getElementById('craft-quality-tags-input')) document.getElementById('craft-quality-tags-input').value = promptDefaults.qualityTags;
-    if (document.getElementById('craft-default-negative-input')) document.getElementById('craft-default-negative-input').value = promptDefaults.defaultNegativePrompt;
+    if (document.getElementById('craft-quality-tags-input')) document.getElementById('craft-quality-tags-input').value = promptDefaults.rawQualityTags;
+    if (document.getElementById('craft-default-negative-input')) document.getElementById('craft-default-negative-input').value = promptDefaults.rawDefaultNegativePrompt;
+    if (document.getElementById('craft-use-quality-tags')) document.getElementById('craft-use-quality-tags').checked = promptDefaults.useQualityTags;
+    if (document.getElementById('craft-use-default-negative')) document.getElementById('craft-use-default-negative').checked = promptDefaults.useDefaultNegativePrompt;
     syncCraftBasePromptSummary(promptDefaults);
 
     ['vibe-strength', 'vibe-info', 'precise-strength', 'precise-fidelity'].forEach(id => {
@@ -445,11 +500,15 @@ export function applyCraftSettings(settings = {}) {
 }
 
 export function openCraftBasePromptModal() {
-    const defaults = getCraftPromptDefaultSettings(window.readCraftSettings ? window.readCraftSettings() : null);
+    const defaults = getCraftPromptDefaultSettings();
     const qualityInput = document.getElementById('craft-quality-tags-input');
     const negativeInput = document.getElementById('craft-default-negative-input');
-    if (qualityInput) qualityInput.value = defaults.qualityTags;
-    if (negativeInput) negativeInput.value = defaults.defaultNegativePrompt;
+    const qualityEnabledInput = document.getElementById('craft-use-quality-tags');
+    const negativeEnabledInput = document.getElementById('craft-use-default-negative');
+    if (qualityInput) qualityInput.value = defaults.rawQualityTags;
+    if (negativeInput) negativeInput.value = defaults.rawDefaultNegativePrompt;
+    if (qualityEnabledInput) qualityEnabledInput.checked = defaults.useQualityTags;
+    if (negativeEnabledInput) negativeEnabledInput.checked = defaults.useDefaultNegativePrompt;
     const modal = document.getElementById('craft-base-prompt-modal');
     if (modal) modal.classList.remove('hidden');
     if (window.lucide) lucide.createIcons();
@@ -464,13 +523,22 @@ export function closeCraftBasePromptModal(event) {
 export function resetCraftBasePromptDefaults() {
     const qualityInput = document.getElementById('craft-quality-tags-input');
     const negativeInput = document.getElementById('craft-default-negative-input');
+    const qualityEnabledInput = document.getElementById('craft-use-quality-tags');
+    const negativeEnabledInput = document.getElementById('craft-use-default-negative');
     if (qualityInput) qualityInput.value = DEFAULT_CRAFT_QUALITY_TAGS;
     if (negativeInput) negativeInput.value = DEFAULT_CRAFT_DEFAULT_NEGATIVE_PROMPT;
+    if (qualityEnabledInput) qualityEnabledInput.checked = true;
+    if (negativeEnabledInput) negativeEnabledInput.checked = true;
 }
 
 export function saveCraftBasePromptDefaults() {
-    window.saveCraftSettings();
-    syncCraftBasePromptSummary(window.readCraftSettings ? window.readCraftSettings() : null);
+    const saved = window.saveCraftBasePromptSettings({
+        qualityTags: document.getElementById('craft-quality-tags-input')?.value || '',
+        defaultNegativePrompt: document.getElementById('craft-default-negative-input')?.value || '',
+        useQualityTags: document.getElementById('craft-use-quality-tags')?.checked ?? true,
+        useDefaultNegativePrompt: document.getElementById('craft-use-default-negative')?.checked ?? true
+    });
+    syncCraftBasePromptSummary(saved);
     window.closeCraftBasePromptModal();
 }
 
@@ -783,7 +851,7 @@ export async function generateNaiImage(options = {}) {
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < batchCount; i++) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
-        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix: options.outputPrefix || window.TEMP_FOLDER, planner: options.planner || null });
+        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix: options.outputPrefix || window.TEMP_FOLDER, planner: options.planner || null });
     }
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }

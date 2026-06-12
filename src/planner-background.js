@@ -249,10 +249,12 @@ function combinePromptSegments(...parts) {
 }
 
 function getGenerationQualityTags(generation = {}) {
+    if (generation.useQualityTags === false) return "";
     return generation.qualityTags === undefined ? QUALITY_TAGS : String(generation.qualityTags || "").trim();
 }
 
 function getGenerationDefaultNegativePrompt(generation = {}) {
+    if (generation.useDefaultNegativePrompt === false) return "";
     return generation.defaultNegativePrompt === undefined ? DEFAULT_NEGATIVE_PROMPT : String(generation.defaultNegativePrompt || "").trim();
 }
 
