@@ -161,7 +161,8 @@ export async function loadPlannerMeta(project, characterId = '', options = {}) {
     if (res.status === 404) return null;
     if (!res.ok) throw new Error('플래너 메타데이터를 불러오지 못했습니다.');
     const payload = await res.json();
-    const meta = normalizePlannerStoredMeta(payload.data || {});
+    if (!payload.data) return null;
+    const meta = normalizePlannerStoredMeta(payload.data);
     if (targetCharacterId && meta?.characterId && meta.characterId !== targetCharacterId) return null;
     writePlannerMetaCache(targetKey, meta);
     return meta;

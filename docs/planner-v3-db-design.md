@@ -1196,6 +1196,8 @@ WHERE id = ?
 | `POST` | `/api/planner/v3/confirm` | `item_id`, `asset_id`, `idempotency_key`를 받아 즉시 확정 |
 | `POST` | `/api/planner/v3/cleanup-assets` | 삭제 예정 후보 이미지 cleanup |
 
+`GET /api/planner/v3/run`은 해당 캐릭터에 열린 run이 없을 때 콘솔에 불필요한 네트워크 오류가 찍히지 않도록 `200 { data: null }`을 반환한다.
+
 ## 11. Frontend Code Changes
 
 기존 함수 이름은 UI 회귀를 줄이기 위해 1차로 유지할 수 있다. 다만 내부 호출 대상은 v3 API로 바꾼다.

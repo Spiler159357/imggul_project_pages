@@ -1913,7 +1913,7 @@ export async function onRequest(context) {
             const characterId = url.searchParams.get('characterId') || '';
             if (!projectId || !characterId) return jsonResponse({ error: 'projectId and characterId are required' }, { status: 400 });
             const data = await getPlannerV3Run(env, { projectId, characterId });
-            if (!data) return jsonResponse({ data: null }, { status: 404 });
+            if (!data) return jsonResponse({ data: null });
             return jsonResponse({ data });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
