@@ -908,7 +908,7 @@ export async function processNextQueueItem() {
 
         const requestBody = {
             input: task.prompt, model: task.inpaintPayload ? toInpaintModel(task.model) : task.model, action: task.inpaintPayload ? "infill" : "generate",
-            parameters: { params_version: 3, width: task.width, height: task.height, steps: task.steps, sampler: task.sampler, scale: task.scale, cfg_rescale: 0.0, seed: task.seed, noise_schedule: "native", legacy_v3_extend: false, skip_cfg_above_sigma: 58.0 }
+            parameters: { params_version: 3, width: task.width, height: task.height, steps: task.steps, sampler: task.sampler, scale: task.scale, cfg_rescale: 0.0, negative_prompt: task.negative || "", seed: task.seed, noise_schedule: "native", legacy_v3_extend: false, skip_cfg_above_sigma: 58.0 }
         };
 
         if (task.inpaintPayload) {

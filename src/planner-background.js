@@ -298,6 +298,7 @@ function buildNovelAiPayload(generation = {}, seed) {
             sampler,
             scale,
             cfg_rescale: 0.0,
+            negative_prompt: negative,
             seed,
             noise_schedule: "native",
             legacy_v3_extend: false,
