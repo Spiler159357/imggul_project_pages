@@ -2143,7 +2143,7 @@ export async function savePlannerSituationPlan() {
     window.PROJECT_PLANNER_META = meta;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     renderPlannerSituationPlanOverlay();
-    renderPlannerSectionByState();
+    renderPlannerSectionByState({ preserveScroll: true });
 }
 
 function buildPlannerPlanItemFromSituation({
@@ -2316,7 +2316,7 @@ export async function createMissingPlannerPlans() {
     window.PROJECT_PLANNER_META = meta;
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     updatePlannerQueueMetaCache(project, meta);
-    renderPlannerSectionByState();
+    renderPlannerSectionByState({ preserveScroll: true });
     setPlannerStatus(`${newItems.length}개 누락 이미지 플랜을 생성했습니다.`);
 }
 
