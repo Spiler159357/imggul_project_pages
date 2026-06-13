@@ -764,17 +764,21 @@ function writeImportContextCache(cache) {
     } catch {}
 }
 
-function cacheImportProjectContext({ projectPath, characterPath, situationId } = {}) {
+function cacheImportProjectContext({ projectPath, characterPath, situationId, characterVariantId, situationVariantId, backgroundPromptId } = {}) {
     const normalizedProject = normalizeImportPath(projectPath);
     if (!normalizedProject) return;
     const cache = readImportContextCache();
     cache.projectPath = normalizedProject;
     cache.byProject = cache.byProject || {};
-    cache.byProject[normalizedProject] = {
+    const projectCache = {
         ...(cache.byProject[normalizedProject] || {}),
         characterPath: normalizeImportPath(characterPath),
         situationId: situationId || ''
     };
+    if (characterVariantId !== undefined) projectCache.characterVariantId = characterVariantId || '';
+    if (situationVariantId !== undefined) projectCache.situationVariantId = situationVariantId || '';
+    if (backgroundPromptId !== undefined) projectCache.backgroundPromptId = backgroundPromptId || '';
+    cache.byProject[normalizedProject] = projectCache;
     writeImportContextCache(cache);
     if (window.cacheCraftUploadSelection) {
         window.cacheCraftUploadSelection({ projectPath: normalizedProject, characterPath, situationId });
@@ -809,6 +813,111 @@ function getImportSituationLabel(situation, index) {
     return `${number} - ${name}`;
 }
 
+function getSelectedImportCharacter(state = window.IMPORT_PROJECT_PICKER_STATE || {}) {
+    return (state.characters || []).find(character => character.prefix === state.characterPath) || null;
+}
+
+function getSelectedImportSituation(state = window.IMPORT_PROJECT_PICKER_STATE || {}) {
+    return (state.situations || []).find((situation, index) => {
+        const id = situation.id || situation.folderName || `situation-${index + 1}`;
+        return String(id) === String(state.situationId);
+    }) || null;
+}
+
+function setImportVariantSelect(type, items = [], selectedId = '') {
+    const id = type === 'background' ? 'import-background-select' : `import-${type}-variant-select`;
+    const select = document.getElementById(id);
+    if (!select) return;
+    const emptyMessage = {
+        background: '프로젝트를 먼저 선택하세요',
+        character: '캐릭터를 먼저 선택하세요',
+        situation: '상황을 먼저 선택하세요'
+    }[type] || '선택 항목이 없습니다.';
+
+    select.innerHTML = '';
+    if (!items.length) {
+        select.disabled = true;
+        select.appendChild(new Option(emptyMessage, ''));
+        return;
+    }
+
+    select.disabled = false;
+    items.forEach(item => {
+        select.appendChild(new Option(item.name || item.label || item.id || 'Default', item.id || 'default'));
+    });
+    select.value = items.some(item => item.id === selectedId) ? selectedId : (items[0]?.id || '');
+}
+
+async function loadImportCharacterVariants(characterPath, restoreCached = false) {
+    const state = window.IMPORT_PROJECT_PICKER_STATE || {};
+    state.characterPath = normalizeImportPath(characterPath);
+    state.characterVariants = [];
+    state.characterVariantId = '';
+    window.IMPORT_PROJECT_PICKER_STATE = state;
+    setImportVariantSelect('character', []);
+
+    const character = getSelectedImportCharacter(state);
+    if (!character) {
+        updateImportProjectSummary();
+        return;
+    }
+
+    const meta = window.loadCharacterMeta ? await window.loadCharacterMeta(character).catch(() => ({})) : {};
+    const variants = window.normalizeCharacterPromptVariants ? window.normalizeCharacterPromptVariants(meta) : [];
+    const cache = readImportContextCache();
+    const projectCache = cache.byProject?.[state.projectPath] || {};
+    const cachedId = restoreCached ? projectCache.characterVariantId : '';
+    const selectedId = variants.some(variant => variant.id === cachedId)
+        ? cachedId
+        : (meta.activePromptVariantId || variants[0]?.id || 'default');
+
+    state.characterMeta = meta;
+    state.characterVariants = variants;
+    state.characterVariantId = selectedId;
+    window.IMPORT_PROJECT_PICKER_STATE = state;
+    setImportVariantSelect('character', variants, selectedId);
+    updateImportProjectSummary();
+}
+
+function loadImportSituationVariants(situationId, restoreCached = false) {
+    const state = window.IMPORT_PROJECT_PICKER_STATE || {};
+    state.situationId = situationId || '';
+    const situation = getSelectedImportSituation(state);
+    const variants = situation && window.normalizeSituationPromptVariants ? window.normalizeSituationPromptVariants(situation) : [];
+    const cache = readImportContextCache();
+    const projectCache = cache.byProject?.[state.projectPath] || {};
+    const cachedId = restoreCached ? projectCache.situationVariantId : '';
+    const selectedId = variants.some(variant => variant.id === cachedId)
+        ? cachedId
+        : (situation?.activePromptVariantId || variants[0]?.id || 'default');
+
+    state.situationVariants = variants;
+    state.situationVariantId = selectedId;
+    window.IMPORT_PROJECT_PICKER_STATE = state;
+    setImportVariantSelect('situation', variants, selectedId);
+    updateImportProjectSummary();
+}
+
+async function loadImportBackgroundOptions(project, restoreCached = false) {
+    const state = window.IMPORT_PROJECT_PICKER_STATE || {};
+    const data = window.loadProjectBackgroundPrompts
+        ? await window.loadProjectBackgroundPrompts(project).catch(() => null)
+        : null;
+    const backgrounds = data?.backgrounds || [];
+    const cache = readImportContextCache();
+    const projectCache = cache.byProject?.[state.projectPath] || {};
+    const cachedId = restoreCached ? projectCache.backgroundPromptId : '';
+    const selectedId = backgrounds.some(background => background.id === cachedId)
+        ? cachedId
+        : (data?.activeBackgroundId || backgrounds[0]?.id || '');
+
+    state.backgrounds = backgrounds;
+    state.backgroundPromptId = selectedId;
+    window.IMPORT_PROJECT_PICKER_STATE = state;
+    setImportVariantSelect('background', backgrounds, selectedId);
+    updateImportProjectSummary();
+}
+
 async function initImportProjectPicker() {
     const cache = readImportContextCache();
     const projectPath = normalizeImportPath(cache.projectPath || document.getElementById('craft-project-select')?.value || '');
@@ -819,7 +928,13 @@ async function initImportProjectPicker() {
         situations: [],
         projectPath,
         characterPath: normalizeImportPath(projectCache.characterPath || document.getElementById('craft-char-select')?.value || ''),
-        situationId: projectCache.situationId || document.getElementById('craft-situation-select')?.value || ''
+        situationId: projectCache.situationId || document.getElementById('craft-situation-select')?.value || '',
+        characterVariants: [],
+        situationVariants: [],
+        backgrounds: [],
+        characterVariantId: projectCache.characterVariantId || '',
+        situationVariantId: projectCache.situationVariantId || '',
+        backgroundPromptId: projectCache.backgroundPromptId || ''
     };
     await loadImportProjectList();
     if (projectPath) await loadImportProjectTargets(projectPath, true);
@@ -844,10 +959,19 @@ async function loadImportProjectTargets(projectPath, restoreCached = false) {
     if (!restoreCached) {
         state.characterPath = '';
         state.situationId = '';
+        state.characterVariantId = '';
+        state.situationVariantId = '';
+        state.backgroundPromptId = '';
     }
+    state.characterVariants = [];
+    state.situationVariants = [];
+    state.backgrounds = [];
     window.IMPORT_PROJECT_PICKER_STATE = state;
     setImportListMessage('import-character-list', '불러오는 중...');
     setImportListMessage('import-situation-list', '불러오는 중...');
+    setImportVariantSelect('character', []);
+    setImportVariantSelect('situation', []);
+    setImportVariantSelect('background', []);
 
     try {
         const project = window.getProjectByPrefix ? window.getProjectByPrefix(state.projectPath) : null;
@@ -856,7 +980,8 @@ async function loadImportProjectTargets(projectPath, restoreCached = false) {
         const projectCache = cache.byProject?.[state.projectPath] || {};
         await Promise.all([
             window.loadProjectCharacters(project, true),
-            window.loadProjectSituations(project, true)
+            window.loadProjectSituations(project, true),
+            loadImportBackgroundOptions(project, restoreCached)
         ]);
         state.characters = window.getProjectItems ? window.getProjectItems(project, 'characters') : [];
         state.situations = window.getProjectItems ? window.getProjectItems(project, 'situations') : [];
@@ -866,6 +991,8 @@ async function loadImportProjectTargets(projectPath, restoreCached = false) {
         renderImportProjectList('project');
         renderImportProjectList('character');
         renderImportProjectList('situation');
+        if (state.characterPath) await loadImportCharacterVariants(state.characterPath, restoreCached);
+        if (state.situationId) loadImportSituationVariants(state.situationId, restoreCached);
         updateImportProjectSummary();
     } catch (err) {
         setImportListMessage('import-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
@@ -895,11 +1022,11 @@ function renderImportProjectList(type) {
                 label: character.name || character.alias || character.folderName || character.id,
                 subLabel: character.prefix,
                 active: character.prefix === state.characterPath,
-                onClick: () => {
+                onClick: async () => {
                     state.characterPath = character.prefix;
                     window.IMPORT_PROJECT_PICKER_STATE = state;
                     renderImportProjectList('character');
-                    updateImportProjectSummary();
+                    await loadImportCharacterVariants(character.prefix);
                 }
             }));
         });
@@ -915,7 +1042,7 @@ function renderImportProjectList(type) {
                     state.situationId = String(id);
                     window.IMPORT_PROJECT_PICKER_STATE = state;
                     renderImportProjectList('situation');
-                    updateImportProjectSummary();
+                    loadImportSituationVariants(String(id));
                 }
             }));
         });
@@ -931,16 +1058,20 @@ window.filterImportProjectList = function(type, value = '') {
     });
 };
 
+window.selectImportProjectVariant = function(type, value = '') {
+    const state = window.IMPORT_PROJECT_PICKER_STATE || {};
+    if (type === 'character') state.characterVariantId = value || '';
+    else if (type === 'situation') state.situationVariantId = value || '';
+    else if (type === 'background') state.backgroundPromptId = value || '';
+    window.IMPORT_PROJECT_PICKER_STATE = state;
+    updateImportProjectSummary();
+};
+
 function updateImportProjectSummary() {
     const state = window.IMPORT_PROJECT_PICKER_STATE || {};
-    const setText = (id, value) => {
-        const el = document.getElementById(id);
-        if (el) el.textContent = value || '-';
-    };
-
-    setText('import-project-current', state.projectPath || '');
-    setText('import-character-current', state.characterPath || '');
-    setText('import-situation-current', state.situationId || '');
+    setImportVariantSelect('background', state.backgrounds || [], state.backgroundPromptId || '');
+    setImportVariantSelect('character', state.characterVariants || [], state.characterVariantId || '');
+    setImportVariantSelect('situation', state.situationVariants || [], state.situationVariantId || '');
 }
 
 window.showImportMode = async function(mode = 'hub') {
@@ -1020,14 +1151,30 @@ window.importProjectPromptData = async function() {
         const situationId = pickerState.situationId || '';
         const character = characterPrefix && window.getCharacterById ? window.getCharacterById(project, characterPrefix) : null;
         const situation = situationId && window.getSituationById ? window.getSituationById(project, situationId) : null;
-        const [projectStyle, characterMeta] = await Promise.all([
+        const [projectStyle, characterMeta, backgroundData] = await Promise.all([
             window.loadProjectStylePrompt ? window.loadProjectStylePrompt(project).catch(() => '') : Promise.resolve(''),
-            character && window.loadCharacterMeta ? window.loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
+            character && window.loadCharacterMeta ? window.loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({}),
+            window.loadProjectBackgroundPrompts ? window.loadProjectBackgroundPrompts(project).catch(() => ({ backgrounds: [] })) : Promise.resolve({ backgrounds: [] })
         ]);
 
-        const characterParts = characterMeta.parts || {};
-        const situationPrompt = window.getSituationPrompt ? window.getSituationPrompt(situation) : {};
-        const situationGeneration = window.getSituationGeneration ? window.getSituationGeneration(situation) : {};
+        const characterVariants = window.normalizeCharacterPromptVariants ? window.normalizeCharacterPromptVariants(characterMeta) : [];
+        const characterVariant = characterVariants.find(variant => variant.id === pickerState.characterVariantId)
+            || characterVariants.find(variant => variant.id === characterMeta.activePromptVariantId)
+            || characterVariants[0]
+            || {};
+        const situationVariants = situation && window.normalizeSituationPromptVariants ? window.normalizeSituationPromptVariants(situation) : [];
+        const situationVariant = situationVariants.find(variant => variant.id === pickerState.situationVariantId)
+            || situationVariants.find(variant => variant.id === situation?.activePromptVariantId)
+            || situationVariants[0]
+            || {};
+        const background = (backgroundData.backgrounds || []).find(item => item.id === pickerState.backgroundPromptId)
+            || (backgroundData.backgrounds || []).find(item => item.id === backgroundData.activeBackgroundId)
+            || (backgroundData.backgrounds || [])[0]
+            || null;
+
+        const characterParts = characterVariant.parts || characterMeta.parts || {};
+        const situationPrompt = situationVariant.prompt || (window.getSituationPrompt ? window.getSituationPrompt(situation) : {});
+        const situationGeneration = situationVariant.generation || (window.getSituationGeneration ? window.getSituationGeneration(situation) : {});
         const promptValues = {};
 
         if (options.optStyle) promptValues['prompt-style'] = projectStyle || '';
@@ -1036,7 +1183,7 @@ window.importProjectPromptData = async function() {
         if (options.optCloth) promptValues['prompt-clothing'] = characterParts.clothing || '';
         if (options.optExp) promptValues['prompt-expression'] = situationPrompt.expression || '';
         if (options.optAct) promptValues['prompt-action'] = situationPrompt.action || '';
-        if (options.optBg) promptValues['prompt-background'] = situationPrompt.background || '';
+        if (options.optBg) promptValues['prompt-background'] = background?.prompt || situationPrompt.background || '';
 
         const negativeParts = [characterParts.negative, situationPrompt.negative].filter(Boolean);
         const negative = window.combinePromptParts
@@ -1056,7 +1203,14 @@ window.importProjectPromptData = async function() {
         if (window.updateModelSpecificUI) window.updateModelSpecificUI();
         if (window.saveCraftSettings) window.saveCraftSettings();
         if (window.switchTab) window.switchTab('craft');
-        cacheImportProjectContext({ projectPath: project.prefix, characterPath: characterPrefix, situationId });
+        cacheImportProjectContext({
+            projectPath: project.prefix,
+            characterPath: characterPrefix,
+            situationId,
+            characterVariantId: characterVariant.id || '',
+            situationVariantId: situationVariant.id || '',
+            backgroundPromptId: background?.id || ''
+        });
         window.closeImportModal(null, true);
         alert('프로젝트 데이터를 조합해서 불러왔습니다.');
     } catch (err) {
