@@ -1515,6 +1515,8 @@ export async function getPlannerV3Status(env, jobId) {
     return {
         jobId: job.id,
         runId: job.run_id,
+        projectId: job.project_id,
+        characterId: job.character_id,
         status: job.status,
         mode: job.mode,
         totalCount: job.total_count,

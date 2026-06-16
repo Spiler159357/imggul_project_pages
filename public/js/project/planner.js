@@ -2582,10 +2582,15 @@ export async function clearPlannerItemImages(project, item) {
 }
 
 export function startPlannerBackgroundPolling(jobId) {
-    if (!jobId) return;
+    const jobIds = Array.isArray(jobId) ? jobId.filter(Boolean) : [jobId].filter(Boolean);
+    if (!jobIds.length) return;
+    window.PLANNER_BACKGROUND_POLL_JOB_IDS = Array.from(new Set(jobIds));
     if (window.PLANNER_BACKGROUND_POLL_TIMER) clearInterval(window.PLANNER_BACKGROUND_POLL_TIMER);
     window.PLANNER_BACKGROUND_POLL_TIMER = setInterval(() => {
-        window.refreshPlannerBackgroundStatus(jobId).catch(() => null);
+        const activeJobIds = Array.isArray(window.PLANNER_BACKGROUND_POLL_JOB_IDS) ? [...window.PLANNER_BACKGROUND_POLL_JOB_IDS] : [];
+        activeJobIds.forEach(activeJobId => {
+            window.refreshPlannerBackgroundStatus(activeJobId).catch(() => null);
+        });
     }, 5000);
 }
 
@@ -2593,12 +2598,36 @@ export function stopPlannerBackgroundPolling() {
     if (!window.PLANNER_BACKGROUND_POLL_TIMER) return;
     clearInterval(window.PLANNER_BACKGROUND_POLL_TIMER);
     window.PLANNER_BACKGROUND_POLL_TIMER = null;
+    window.PLANNER_BACKGROUND_POLL_JOB_IDS = [];
+}
+
+function removePlannerBackgroundPollingJob(jobId) {
+    if (!jobId || !Array.isArray(window.PLANNER_BACKGROUND_POLL_JOB_IDS)) return;
+    window.PLANNER_BACKGROUND_POLL_JOB_IDS = window.PLANNER_BACKGROUND_POLL_JOB_IDS.filter(id => id !== jobId);
+    if (!window.PLANNER_BACKGROUND_POLL_JOB_IDS.length) stopPlannerBackgroundPolling();
+}
+
+function findPlannerQueueEntryByJob(jobId, status = {}) {
+    const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
+    return queueMetas.find(entry =>
+        entry.meta?.backgroundJobId === jobId
+        || (status.runId && entry.meta?.id === status.runId)
+        || (status.characterId && entry.meta?.characterId === status.characterId)
+    ) || null;
+}
+
+function setPlannerActiveMetaIfSelected(project, meta) {
+    if (!project || !meta) return;
+    const selectedCharacterId = getSelectedPlannerCharacterId(project);
+    if (!selectedCharacterId || meta.characterId === selectedCharacterId) {
+        window.PROJECT_PLANNER_META = meta;
+    }
 }
 
 export async function refreshPlannerBackgroundStatus(jobId = null) {
     const project = getActiveProject();
-    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    const targetJobId = jobId || meta?.backgroundJobId;
+    const currentMeta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const targetJobId = jobId || currentMeta?.backgroundJobId;
     if (!project || !targetJobId) return null;
 
     const res = await fetch(`/api/planner/v3/generate/status?jobId=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
@@ -2612,31 +2641,34 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
     const eta = updatePlannerBackgroundEta(targetJobId, status);
     const statusForView = eta ? { ...status, eta } : status;
     const statusForStorage = withoutPlannerVolatileEta(statusForView);
+    const queuedEntry = findPlannerQueueEntryByJob(targetJobId, status);
+    const meta = queuedEntry?.meta || currentMeta;
     if (status.expired || status.status === 'expired') {
-        stopPlannerBackgroundPolling();
+        removePlannerBackgroundPollingJob(targetJobId);
         if (meta?.backgroundJobId === targetJobId) {
             delete meta.backgroundJobId;
             if (['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) meta.status = 'draft';
             meta.updatedAt = Date.now();
             await savePlannerMeta(project, meta).catch(() => null);
-            window.PROJECT_PLANNER_META = meta;
+            setPlannerActiveMetaIfSelected(project, meta);
+            updatePlannerQueueMetaCache(project, meta);
         }
         window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
         setPlannerStatus('이전 백그라운드 작업 기록이 만료되었습니다.');
         renderPlannerIfVisible();
         return status;
     }
-    const nextMeta = await loadPlannerMeta(project).catch(() => window.PROJECT_PLANNER_META);
+    const nextMeta = await loadPlannerMeta(project, status.characterId || meta?.characterId || '', { force: true }).catch(() => meta || window.PROJECT_PLANNER_META);
     if (nextMeta) {
         if (status.status === 'cancel_requested') {
             resetPlannerMetaAfterCancel(nextMeta);
             nextMeta.backgroundStatus = { ...statusForStorage, status: 'queued' };
             await savePlannerMeta(project, nextMeta).catch(() => null);
             nextMeta.backgroundStatus = { ...statusForView, status: 'queued' };
-            window.PROJECT_PLANNER_META = nextMeta;
+            setPlannerActiveMetaIfSelected(project, nextMeta);
             window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
             updatePlannerQueueMetaCache(project, nextMeta);
-            stopPlannerBackgroundPolling();
+            removePlannerBackgroundPollingJob(targetJobId);
             renderPlannerIfVisible();
             return statusForView;
         }
@@ -2666,11 +2698,11 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
         }
         await savePlannerMeta(project, nextMeta).catch(() => null);
         nextMeta.backgroundStatus = statusForView;
-        window.PROJECT_PLANNER_META = nextMeta;
+        setPlannerActiveMetaIfSelected(project, nextMeta);
     }
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
     if (nextMeta) updatePlannerQueueMetaCache(project, nextMeta);
-    if (!['queued', 'running', 'cancel_requested'].includes(status.status)) stopPlannerBackgroundPolling();
+    if (!['queued', 'running', 'cancel_requested'].includes(status.status)) removePlannerBackgroundPollingJob(targetJobId);
     renderPlannerIfVisible();
     return statusForView;
 }
@@ -2836,6 +2868,12 @@ export async function pausePlannerGeneration() {
         renderPlannerIfVisible();
         return;
     }
+    const backgroundEntries = await getPlannerBackgroundControlEntries(project, ['queued', 'running', 'cancel_requested']);
+    if (backgroundEntries.length) {
+        await controlPlannerBackgroundEntries(project, backgroundEntries, 'pause');
+        setPlannerStatus('백그라운드 작업을 일시정지했습니다.');
+        return;
+    }
     if (meta?.backgroundJobId && ['queued', 'running'].includes(meta.status)) {
         await pausePlannerBackgroundGeneration(meta.backgroundJobId);
         return;
@@ -2865,8 +2903,8 @@ export async function resumePlannerGeneration() {
     try {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    if (!meta?.items?.length) return;
     if (window.PROJECT_PLANNER_GENERATION_MODE !== 'background') {
+        if (!meta?.items?.length) return;
         meta.items = meta.items.map(item => item.status === 'paused' && !isPlannerItemTargetComplete(item, meta)
             ? { ...item, status: 'pending', stage: '', stageLabel: '' }
             : item
@@ -2877,10 +2915,17 @@ export async function resumePlannerGeneration() {
         await startPlannerGeneration(null, { resume: true });
         return;
     }
+    const backgroundEntries = await getPlannerBackgroundControlEntries(project, ['paused']);
+    if (backgroundEntries.length) {
+        await controlPlannerBackgroundEntries(project, backgroundEntries, 'resume');
+        setPlannerStatus('백그라운드 작업을 재개했습니다.');
+        return;
+    }
     if (meta.backgroundJobId && meta.status === 'paused') {
         await resumePlannerBackgroundGeneration(meta.backgroundJobId);
         return;
     }
+    if (!meta?.items?.length) return;
     meta.items = meta.items.map(item => item.status === 'paused' && !isPlannerItemTargetComplete(item, meta)
         ? { ...item, status: 'pending' }
         : item
@@ -2916,6 +2961,12 @@ export async function cancelPlannerGeneration() {
         renderPlannerIfVisible();
         return;
     }
+    const backgroundEntries = await getPlannerBackgroundControlEntries(project, ['queued', 'running', 'cancel_requested', 'paused']);
+    if (backgroundEntries.length) {
+        await controlPlannerBackgroundEntries(project, backgroundEntries, 'cancel');
+        setPlannerStatus('백그라운드 작업을 취소했습니다. 다시 실행할 수 있습니다.');
+        return;
+    }
     if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) {
         await cancelPlannerBackgroundGeneration(meta.backgroundJobId);
         return;
@@ -2946,9 +2997,203 @@ export async function startPlannerBackgroundGeneration(situationId = null, optio
     }
 }
 
+function getPlannerRunnableItems(meta = {}, situationId = null) {
+    const items = Array.isArray(meta.items) ? meta.items : [];
+    return situationId
+        ? items.filter(item => item.situationId === situationId && isPlannerRunnableItem(item, meta))
+        : items.filter(item => isPlannerRunnableItem(item, meta));
+}
+
+function hasUnsupportedPlannerBackgroundReference(items = []) {
+    return items.some(item => item.generation?.vibeImageKey || item.generation?.preciseImageKey);
+}
+
+async function startPlannerBackgroundRun(project, meta, targetItems, situationId = null) {
+    const res = await fetch('/api/planner/v3/generate/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            projectId: project.id,
+            projectPrefix: project.prefix,
+            runId: meta.id,
+            targetSituationId: situationId || null,
+            mode: 'background'
+        })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        throw new Error(data.error || '백그라운드 생성 등록에 실패했습니다.');
+    }
+
+    const nextMeta = {
+        ...meta,
+        backgroundJobId: data.jobId || meta.backgroundJobId,
+        status: data.status || 'queued',
+        runningSituationIds: targetItems.map(item => item.situationId),
+        updatedAt: Date.now()
+    };
+    nextMeta.items = (nextMeta.items || []).map(item =>
+        targetItems.some(target => target.situationId === item.situationId)
+            ? { ...item, status: 'queued', stage: 'queued', stageLabel: getPlannerStageLabel('queued') }
+            : item
+    );
+    updatePlannerQueueMetaCache(project, nextMeta);
+    setPlannerActiveMetaIfSelected(project, nextMeta);
+    return { data, meta: nextMeta };
+}
+
+async function runAllPlannerBackgroundGenerationStart(options = {}) {
+    const project = getActiveProject();
+    if (!project) return;
+    const characters = getProjectItems(project, 'characters');
+    if (!characters.length) {
+        setPlannerStatus('실행할 캐릭터가 없습니다.');
+        return;
+    }
+
+    const queueMetas = await loadPlannerQueueMetas(project, characters, { force: true }).catch(() => []);
+    const runnableEntries = queueMetas
+        .map(entry => ({ ...entry, targetItems: getPlannerRunnableItems(entry.meta) }))
+        .filter(entry => entry.meta?.items?.length && (entry.targetItems.length || entry.meta.backgroundJobId));
+    if (!runnableEntries.length) {
+        setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
+        window.PROJECT_PLANNER_QUEUE_METAS = queueMetas;
+        renderPlannerSectionByState();
+        return;
+    }
+
+    const unsupportedEntry = runnableEntries.find(entry => hasUnsupportedPlannerBackgroundReference(entry.targetItems));
+    if (unsupportedEntry) {
+        const characterName = unsupportedEntry.character?.name || unsupportedEntry.character?.folderName || unsupportedEntry.meta?.characterId || '';
+        setPlannerStatus(`백그라운드 생성은 아직 참조 이미지를 지원하지 않습니다. ${characterName ? `${characterName} 플랜의 ` : ''}참조 이미지를 제거하거나 브라우저 모드를 사용하세요.`);
+        return;
+    }
+
+    window.PROJECT_PLANNER_VIEW = 'run';
+    const startedJobIds = [];
+    const failed = [];
+    let existingCount = 0;
+    let startedCount = 0;
+
+    for (const entry of runnableEntries) {
+        const meta = entry.meta;
+        if (meta.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
+            startedJobIds.push(meta.backgroundJobId);
+            existingCount += 1;
+            continue;
+        }
+        if (!entry.targetItems.length) continue;
+        try {
+            if (options.clearExisting === true) {
+                for (const item of entry.targetItems) {
+                    if (item.images?.length || item.selectedImage) {
+                        await clearPlannerItemImages(project, item);
+                    }
+                }
+            }
+            const result = await startPlannerBackgroundRun(project, meta, entry.targetItems);
+            if (result.data?.jobId) startedJobIds.push(result.data.jobId);
+            startedCount += 1;
+        } catch (error) {
+            failed.push({
+                character: entry.character,
+                message: error?.message || String(error)
+            });
+        }
+    }
+
+    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, characters, { force: true }).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
+    if (startedJobIds.length) {
+        startPlannerBackgroundPolling(startedJobIds);
+        await Promise.all(startedJobIds.map(jobId => refreshPlannerBackgroundStatus(jobId).catch(() => null)));
+    }
+    renderPlannerSectionByState();
+    if (failed.length) {
+        const first = failed[0];
+        const name = first.character?.name || first.character?.folderName || first.character?.id || '일부 캐릭터';
+        setPlannerStatus(`${name} 등 ${failed.length}개 캐릭터의 백그라운드 등록에 실패했습니다: ${first.message}`);
+    } else if (startedCount || existingCount) {
+        setPlannerStatus(`${startedCount}개 캐릭터의 백그라운드 생성 작업을 등록했습니다.${existingCount ? ` 이미 실행 중인 ${existingCount}개 작업도 함께 추적합니다.` : ''}`);
+    } else {
+        setPlannerStatus('새로 실행할 플랜을 찾을 수 없습니다.');
+    }
+}
+
+async function getPlannerBackgroundControlEntries(project, statuses) {
+    const characters = getProjectItems(project, 'characters');
+    const queueMetas = (Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) && window.PROJECT_PLANNER_QUEUE_METAS.length)
+        ? window.PROJECT_PLANNER_QUEUE_METAS
+        : await loadPlannerQueueMetas(project, characters, { force: true }).catch(() => []);
+    const statusSet = new Set(statuses);
+    return queueMetas.filter(entry => entry.meta?.backgroundJobId && statusSet.has(entry.meta.status));
+}
+
+async function controlPlannerBackgroundEntries(project, entries, action) {
+    if (!entries.length) return false;
+    const endpoint = {
+        pause: '/api/planner/v3/generate/pause',
+        resume: '/api/planner/v3/generate/resume',
+        cancel: '/api/planner/v3/generate/cancel'
+    }[action];
+    if (!endpoint) return false;
+
+    const nextPollingJobIds = [];
+    for (const entry of entries) {
+        const meta = entry.meta;
+        const jobId = meta.backgroundJobId;
+        const res = await fetch(endpoint, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ jobId })
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            throw new Error(data.error || '백그라운드 작업 제어에 실패했습니다.');
+        }
+        if (action === 'pause') {
+            meta.status = 'paused';
+            meta.stage = 'paused';
+            meta.stageLabel = getPlannerStageLabel('paused');
+            delete meta.runningSituationIds;
+            meta.items = (meta.items || []).map(item => ['queued', 'running', 'cancel_requested'].includes(item.status)
+                ? { ...item, status: 'paused', stage: 'paused', stageLabel: getPlannerStageLabel('paused') }
+                : item
+            );
+            removePlannerBackgroundPollingJob(jobId);
+        } else if (action === 'resume') {
+            meta.status = 'running';
+            meta.stage = 'running';
+            meta.stageLabel = getPlannerStageLabel('running');
+            meta.items = (meta.items || []).map(item => item.status === 'paused'
+                ? { ...item, status: 'queued', stage: 'queued', stageLabel: getPlannerStageLabel('queued') }
+                : item
+            );
+            nextPollingJobIds.push(jobId);
+        } else if (action === 'cancel') {
+            resetPlannerMetaAfterCancel(meta);
+            removePlannerBackgroundPollingJob(jobId);
+        }
+        meta.updatedAt = Date.now();
+        updatePlannerQueueMetaCache(project, meta);
+        setPlannerActiveMetaIfSelected(project, meta);
+    }
+
+    if (nextPollingJobIds.length) {
+        startPlannerBackgroundPolling(nextPollingJobIds);
+        await Promise.all(nextPollingJobIds.map(jobId => refreshPlannerBackgroundStatus(jobId).catch(() => null)));
+    }
+    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, getProjectItems(project, 'characters'), { force: true }).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
+    renderPlannerIfVisible();
+    return true;
+}
+
 export async function runPlannerBackgroundGenerationStart(situationId = null, options = {}) {
     const project = getActiveProject();
     if (!project) return;
+    if (!situationId) {
+        await runAllPlannerBackgroundGenerationStart(options);
+        return;
+    }
 
     let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!meta?.items?.length) {
