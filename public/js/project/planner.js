@@ -9,6 +9,7 @@ const PLANNER_MAX_IMAGE_COUNT = 100;
 const PLANNER_META_CACHE_TTL_MS = 3000;
 const PLANNER_BACKGROUND_ETA_STORAGE_KEY = 'imggul_planner_background_eta';
 const PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS = 10000;
+const PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT = 100;
 const DEFAULT_PLANNER_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const plannerMetaMemoryCache = new Map();
 
@@ -480,9 +481,27 @@ function writePlannerBackgroundEtaStore(store) {
     } catch {}
 }
 
-function getPlannerBackgroundEtaAverage(store) {
-    const averageMs = Number(store.averageMs || 0);
-    return Number.isFinite(averageMs) && averageMs > 0 ? averageMs : PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS;
+function getPlannerBackgroundEtaSamples(store) {
+    return (Array.isArray(store.samples) ? store.samples : [])
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value) && value >= 1000 && value <= 10 * 60 * 1000)
+        .slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
+}
+
+function getPlannerBackgroundEtaAverage(samples, fallbackAverageMs = 0) {
+    if (samples.length) {
+        return Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length);
+    }
+    const fallback = Number(fallbackAverageMs || 0);
+    return Number.isFinite(fallback) && fallback > 0 ? fallback : PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS;
+}
+
+function prunePlannerBackgroundEtaJobs(jobs = {}) {
+    return Object.fromEntries(
+        Object.entries(jobs)
+            .sort(([, a], [, b]) => Number(b?.observedAt || 0) - Number(a?.observedAt || 0))
+            .slice(0, PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT)
+    );
 }
 
 function updatePlannerBackgroundEta(jobId, status = {}) {
@@ -495,18 +514,19 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
     const store = readPlannerBackgroundEtaStore();
     const jobs = store.jobs || {};
     const previous = jobs[jobId] || {};
-    let averageMs = getPlannerBackgroundEtaAverage(store);
-    let sampleCount = Number(store.sampleCount || 0);
+    let samples = getPlannerBackgroundEtaSamples(store);
 
     if (Number.isFinite(previous.completedCount) && completed > previous.completedCount && previous.observedAt) {
         const deltaCount = completed - previous.completedCount;
         const observedMs = Math.max(0, now - Number(previous.observedAt || now));
         const observedAverageMs = observedMs / deltaCount;
         if (Number.isFinite(observedAverageMs) && observedAverageMs >= 1000 && observedAverageMs <= 10 * 60 * 1000) {
-            averageMs = Math.round(averageMs * 0.7 + observedAverageMs * 0.3);
-            sampleCount += deltaCount;
+            samples = samples.concat(Array.from({ length: deltaCount }, () => Math.round(observedAverageMs)))
+                .slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
         }
     }
+    const averageMs = getPlannerBackgroundEtaAverage(samples, store.averageMs);
+    const sampleCount = samples.length;
 
     if (!Number.isFinite(previous.completedCount) || completed > previous.completedCount || completed < previous.completedCount) {
         jobs[jobId] = { completedCount: completed, observedAt: now };
@@ -517,8 +537,9 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
         ...store,
         averageMs,
         sampleCount,
+        samples,
         updatedAt: new Date(now).toISOString(),
-        jobs
+        jobs: prunePlannerBackgroundEtaJobs(jobs)
     });
 
     const remainingMs = Math.round(remainingCount * averageMs);
