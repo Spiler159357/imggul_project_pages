@@ -644,6 +644,10 @@ function isPlannerRunnableItem(item, meta = {}, resumeOnly = false) {
     return true;
 }
 
+function isPlannerRestartableItem(item) {
+    return !!item && item.status !== 'confirmed';
+}
+
 function buildPlannerRunGenerations(item, meta = {}, resumeRun = false) {
     const runs = Array.isArray(item.variantGenerations) && item.variantGenerations.length
         ? item.variantGenerations
@@ -1235,6 +1239,32 @@ export function renderPlannerImagePreviewModal() {
     `;
 }
 
+export function renderPlannerRunConfirmModal() {
+    if (!window.PROJECT_PLANNER_RUN_CONFIRM) return '';
+    return `
+        <div id="planner-run-confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onclick="window.closePlannerRunConfirmModal(event)">
+            <div class="w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
+                <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+                    <div class="min-w-0">
+                        <h3 class="text-sm font-bold text-gray-900 dark:text-white">기존 결과를 삭제하고 다시 생성</h3>
+                        <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">현재 생성된 후보 이미지는 모두 삭제 대기열로 이동되고 새 작업이 시작됩니다.</p>
+                    </div>
+                    <button type="button" onclick="window.closePlannerRunConfirmModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" title="닫기" aria-label="닫기">
+                        <i data-lucide="x" class="w-5 h-5"></i>
+                    </button>
+                </div>
+                <div class="px-4 py-4">
+                    <p class="text-xs leading-5 text-gray-600 dark:text-gray-300">선택하지 않은 기존 후보 이미지가 남아 있지 않도록 정리한 뒤, 완료된 플랜도 처음부터 다시 생성합니다.</p>
+                </div>
+                <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-end gap-2">
+                    <button type="button" onclick="window.closePlannerRunConfirmModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">취소</button>
+                    <button type="button" onclick="window.confirmPlannerRunStart()" class="px-3 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700">삭제 후 실행</button>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
 export function ensurePlannerOverlayRoot(id) {
     let root = document.getElementById(id);
     if (!root) {
@@ -1254,6 +1284,12 @@ export function renderPlannerResultOverlay() {
 export function renderPlannerPreviewOverlay() {
     const root = ensurePlannerOverlayRoot('planner-preview-overlay-root');
     root.innerHTML = renderPlannerImagePreviewModal();
+    if (window.lucide) lucide.createIcons();
+}
+
+export function renderPlannerRunConfirmOverlay() {
+    const root = ensurePlannerOverlayRoot('planner-run-confirm-overlay-root');
+    root.innerHTML = renderPlannerRunConfirmModal();
     if (window.lucide) lucide.createIcons();
 }
 
@@ -1439,7 +1475,7 @@ function renderPlannerRunControls(summary) {
     const canStart = !summary.active && !summary.paused;
     return `
         ${canStart ? `
-            <button type="button" onclick="window.startPlannerGeneration(null, { clearExisting: true })" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 ${pendingClass}">
+            <button type="button" onclick="window.openPlannerRunConfirmModal()" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 ${pendingClass}">
                 <i data-lucide="play" class="w-4 h-4"></i> 실행 시작
             </button>
         ` : ''}
@@ -1859,6 +1895,23 @@ export function setPlannerGenerationMode(mode = 'browser') {
     renderPlannerSectionByState({ preserveScroll: true });
 }
 
+export function openPlannerRunConfirmModal() {
+    window.PROJECT_PLANNER_RUN_CONFIRM = true;
+    renderPlannerRunConfirmOverlay();
+}
+
+export function closePlannerRunConfirmModal(event) {
+    if (event && event.target?.id !== 'planner-run-confirm-modal') return;
+    window.PROJECT_PLANNER_RUN_CONFIRM = false;
+    renderPlannerRunConfirmOverlay();
+}
+
+export async function confirmPlannerRunStart() {
+    window.PROJECT_PLANNER_RUN_CONFIRM = false;
+    renderPlannerRunConfirmOverlay();
+    await startPlannerGeneration(null, { clearExisting: true });
+}
+
 export async function loadPlannerForSelectedCharacter() {
     const project = getActiveProject();
     if (!project) return;
@@ -1868,6 +1921,7 @@ export async function loadPlannerForSelectedCharacter() {
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
+    window.PROJECT_PLANNER_RUN_CONFIRM = false;
     const character = getCharacterById(project, characterId);
     if (character) {
         await Promise.all([
@@ -1886,6 +1940,7 @@ export async function loadPlannerForSelectedCharacter() {
     renderPlannerSituationPlanOverlay();
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
+    renderPlannerRunConfirmOverlay();
     renderPlannerSectionByState();
 }
 
@@ -2997,11 +3052,14 @@ export async function startPlannerBackgroundGeneration(situationId = null, optio
     }
 }
 
-function getPlannerRunnableItems(meta = {}, situationId = null) {
+function getPlannerRunnableItems(meta = {}, situationId = null, includeCompleted = false) {
     const items = Array.isArray(meta.items) ? meta.items : [];
+    const predicate = includeCompleted
+        ? item => isPlannerRestartableItem(item)
+        : item => isPlannerRunnableItem(item, meta);
     return situationId
-        ? items.filter(item => item.situationId === situationId && isPlannerRunnableItem(item, meta))
-        : items.filter(item => isPlannerRunnableItem(item, meta));
+        ? items.filter(item => item.situationId === situationId && predicate(item))
+        : items.filter(predicate);
 }
 
 function hasUnsupportedPlannerBackgroundReference(items = []) {
@@ -3056,7 +3114,7 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
 
     const queueMetas = await loadPlannerQueueMetas(project, characters, { force: true }).catch(() => []);
     const runnableEntries = queueMetas
-        .map(entry => ({ ...entry, targetItems: getPlannerRunnableItems(entry.meta) }))
+        .map(entry => ({ ...entry, targetItems: getPlannerRunnableItems(entry.meta, null, options.clearExisting === true) }))
         .filter(entry => entry.meta?.items?.length && (entry.targetItems.length || entry.meta.backgroundJobId));
     if (!runnableEntries.length) {
         setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
@@ -3216,9 +3274,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
 
     meta = readPlannerEditsFromDom(meta);
     await persistPlannerGenerationToSituations(project, meta).catch(() => null);
-    const targetItems = situationId
-        ? meta.items.filter(item => item.situationId === situationId && isPlannerRunnableItem(item, meta))
-        : meta.items.filter(item => isPlannerRunnableItem(item, meta));
+    const targetItems = getPlannerRunnableItems(meta, situationId, options.clearExisting === true);
     if (!targetItems.length) {
         setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
         return;
@@ -3322,8 +3378,8 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     const resumeRun = !!options.resume;
     const clearExisting = options.clearExisting === true && !resumeRun;
     const targetItems = situationId
-        ? meta.items.filter(item => item.situationId === situationId && isPlannerRunnableItem(item, meta, resumeRun))
-        : meta.items.filter(item => isPlannerRunnableItem(item, meta, resumeRun));
+        ? meta.items.filter(item => item.situationId === situationId && (clearExisting ? isPlannerRestartableItem(item) : isPlannerRunnableItem(item, meta, resumeRun)))
+        : meta.items.filter(item => clearExisting ? isPlannerRestartableItem(item) : isPlannerRunnableItem(item, meta, resumeRun));
     if (!targetItems.length) {
         setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
         return;

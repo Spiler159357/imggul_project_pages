@@ -1493,7 +1493,7 @@ export async function startPlannerV3Generation(env, body = {}) {
     const timestamp = nowPlannerV3Iso();
     const targetItems = meta.items.filter(item => {
         if (targetSituationId && item.situationId !== targetSituationId) return false;
-        return true;
+        return item.status !== "confirmed";
     });
     if (body.clearExisting === true) {
         await clearPlannerV3ItemsForRegeneration(env, targetItems.map(item => item.id));
