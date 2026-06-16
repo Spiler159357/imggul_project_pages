@@ -555,6 +555,7 @@ const PLANNER_V3_ACTIVE_JOB_STATUSES = ["queued", "running", "paused", "cancel_r
 const PLANNER_V3_TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "cancelled"];
 const CONFIRM_RETENTION_MS = 24 * 60 * 60 * 1000;
 const BROWSER_QUEUE_LEASE_MS = 5 * 60 * 1000;
+const PLANNER_V3_BATCH_KEY_PREFIX = "batch:";
 
 function nowPlannerV3Iso() {
     const date = new Date(Date.now() + 9 * 60 * 60 * 1000);
@@ -582,6 +583,47 @@ function parseJson(value, fallback) {
 function asInt(value, fallback = 0) {
     const parsed = Number.parseInt(value, 10);
     return Number.isFinite(parsed) ? parsed : fallback;
+}
+
+function normalizePlannerV3BatchKey(value = "") {
+    return String(value || "").trim().replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80);
+}
+
+function makePlannerV3ActiveKey(meta, targetSituationId = "", body = {}) {
+    const baseKey = `${meta.projectId}:${meta.characterId}:${targetSituationId || "all"}`;
+    const batchKey = normalizePlannerV3BatchKey(body.batchKey);
+    if (!batchKey) return baseKey;
+    const batchIndex = Math.max(0, asInt(body.batchIndex, 0));
+    return `${PLANNER_V3_BATCH_KEY_PREFIX}${batchKey}:${String(batchIndex).padStart(4, "0")}:${baseKey}`;
+}
+
+function getPlannerV3BatchKeyFromActiveKey(activeKey = "") {
+    const value = String(activeKey || "");
+    if (!value.startsWith(PLANNER_V3_BATCH_KEY_PREFIX)) return "";
+    return value.slice(PLANNER_V3_BATCH_KEY_PREFIX.length).split(":")[0] || "";
+}
+
+function shouldEnqueueInitialPlannerV3Job(mode, body = {}) {
+    if (mode !== "background") return false;
+    const batchKey = normalizePlannerV3BatchKey(body.batchKey);
+    if (!batchKey) return true;
+    return Math.max(0, asInt(body.batchIndex, 0)) === 0;
+}
+
+async function hasEarlierActivePlannerV3BatchJob(env, job) {
+    const batchKey = getPlannerV3BatchKeyFromActiveKey(job?.active_key);
+    if (!batchKey) return false;
+    const row = await env.DB.prepare(`
+        SELECT id
+        FROM planner_v3_jobs
+        WHERE mode = 'background'
+          AND active_key LIKE ?
+          AND active_key < ?
+          AND status NOT IN ('completed', 'partial_failed', 'failed', 'cancelled')
+        ORDER BY active_key
+        LIMIT 1
+    `).bind(`${PLANNER_V3_BATCH_KEY_PREFIX}${batchKey}:%`, job.active_key).first();
+    return !!row?.id;
 }
 
 function plannerV3DbValue(value) {
@@ -1422,7 +1464,7 @@ export async function startPlannerV3Generation(env, body = {}) {
 
     const totalCount = candidates.reduce((sum, item) => sum + Math.max(1, asInt(item.count || meta.defaultCount, meta.defaultCount)), 0);
     const jobId = makePlannerV3Id("pjob");
-    const activeKey = `${meta.projectId}:${meta.characterId}:${targetSituationId || "all"}`;
+    const activeKey = makePlannerV3ActiveKey(meta, targetSituationId, body);
     await env.DB.prepare(`
         INSERT INTO planner_v3_jobs (
             id, run_id, project_id, project_prefix, character_id, mode, status,
@@ -1477,7 +1519,7 @@ export async function startPlannerV3Generation(env, body = {}) {
         }
     }
 
-    if (mode === "background" && env.GENERATION_QUEUE) {
+    if (shouldEnqueueInitialPlannerV3Job(mode, body) && env.GENERATION_QUEUE) {
         const first = await env.DB.prepare(`
             SELECT id FROM planner_v3_queue
             WHERE job_id = ? AND executor = 'background' AND status = 'queued'
@@ -1573,14 +1615,17 @@ export async function resumePlannerV3Generation(env, jobId) {
     const timestamp = nowPlannerV3Iso();
     const job = await env.DB.prepare("SELECT * FROM planner_v3_jobs WHERE id = ?").bind(jobId).first();
     if (!job) throw new Error("Planner job not found");
+    const waitForEarlierBatchJob = await hasEarlierActivePlannerV3BatchJob(env, job);
+    const resumedJobStatus = waitForEarlierBatchJob ? "queued" : "running";
+    const resumedStageLabel = waitForEarlierBatchJob ? "Queue waiting" : "Preparing generation";
     await env.DB.batch([
-        env.DB.prepare("UPDATE planner_v3_jobs SET status = 'running', stage = 'running', stage_label = 'Preparing generation', updated_at = ? WHERE id = ?").bind(timestamp, jobId),
-        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = 'running', stage = 'running', stage_label = 'Preparing generation', updated_at = ? WHERE job_id = ? AND status = 'paused'").bind(timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_jobs SET status = ?, stage = ?, stage_label = ?, updated_at = ? WHERE id = ?").bind(resumedJobStatus, resumedJobStatus, resumedStageLabel, timestamp, jobId),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET status = ?, stage = ?, stage_label = ?, updated_at = ? WHERE job_id = ? AND status = 'paused'").bind(resumedJobStatus, resumedJobStatus, resumedStageLabel, timestamp, jobId),
         env.DB.prepare("UPDATE planner_v3_queue SET status = 'queued', claimed_by = '', claim_token = '', claimed_at = NULL, lease_expires_at = NULL, updated_at = ? WHERE job_id = ? AND status = 'paused'").bind(timestamp, jobId),
-        env.DB.prepare("UPDATE planner_v3_runs SET status = 'running', stage = 'running', stage_label = 'Preparing generation', active_job_id = ?, updated_at = ? WHERE id = ?").bind(jobId, timestamp, job.run_id),
-        env.DB.prepare("UPDATE planner_v3_items SET status = 'running', stage = 'running', stage_label = 'Preparing generation', updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?) AND status = 'paused'").bind(timestamp, jobId)
+        env.DB.prepare("UPDATE planner_v3_runs SET status = ?, stage = ?, stage_label = ?, active_job_id = ?, updated_at = ? WHERE id = ?").bind(resumedJobStatus, resumedJobStatus, resumedStageLabel, jobId, timestamp, job.run_id),
+        env.DB.prepare("UPDATE planner_v3_items SET status = ?, stage = ?, stage_label = ?, updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?) AND status = 'paused'").bind(resumedJobStatus, resumedJobStatus, resumedStageLabel, timestamp, jobId)
     ]);
-    if (job.mode === "background" && env.GENERATION_QUEUE) {
+    if (!waitForEarlierBatchJob && job.mode === "background" && env.GENERATION_QUEUE) {
         const next = await env.DB.prepare(`
             SELECT id FROM planner_v3_queue
             WHERE job_id = ? AND executor = 'background' AND status = 'queued'
@@ -1696,6 +1741,35 @@ export async function completePlannerV3BrowserQueue(env, body = {}) {
     return { assetId, status: await getPlannerV3Status(env, queue.job_id) };
 }
 
+async function enqueueNextPlannerV3BatchJob(env, job) {
+    if (!env.GENERATION_QUEUE || job?.mode !== "background") return false;
+    const batchKey = getPlannerV3BatchKeyFromActiveKey(job.active_key);
+    if (!batchKey) return false;
+    const nextJob = await env.DB.prepare(`
+        SELECT id
+        FROM planner_v3_jobs
+        WHERE mode = 'background'
+          AND status = 'queued'
+          AND active_key LIKE ?
+          AND active_key > ?
+        ORDER BY active_key
+        LIMIT 1
+    `).bind(`${PLANNER_V3_BATCH_KEY_PREFIX}${batchKey}:%`, job.active_key).first();
+    if (!nextJob?.id) return false;
+    const firstQueue = await env.DB.prepare(`
+        SELECT id
+        FROM planner_v3_queue
+        WHERE job_id = ?
+          AND executor = 'background'
+          AND status = 'queued'
+        ORDER BY sequence
+        LIMIT 1
+    `).bind(nextJob.id).first();
+    if (!firstQueue?.id) return false;
+    await env.GENERATION_QUEUE.send({ plannerV3: true, queueId: firstQueue.id, jobId: nextJob.id });
+    return true;
+}
+
 async function rollupPlannerV3Job(env, jobId) {
     const timestamp = nowPlannerV3Iso();
     const job = await env.DB.prepare("SELECT * FROM planner_v3_jobs WHERE id = ?").bind(jobId).first();
@@ -1712,6 +1786,7 @@ async function rollupPlannerV3Job(env, jobId) {
         env.DB.prepare("UPDATE planner_v3_items SET status = CASE WHEN failed_count > 0 THEN 'partial_failed' ELSE 'complete' END, completed_at = ?, updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?)").bind(timestamp, timestamp, jobId),
         env.DB.prepare("UPDATE planner_v3_runs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?").bind(failed ? "partial_failed" : "complete", timestamp, timestamp, job.run_id)
     ]);
+    await enqueueNextPlannerV3BatchJob(env, { ...job, status });
 }
 
 export async function confirmPlannerV3Asset(env, body = {}) {

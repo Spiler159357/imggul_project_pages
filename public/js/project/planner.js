@@ -3008,7 +3008,7 @@ function hasUnsupportedPlannerBackgroundReference(items = []) {
     return items.some(item => item.generation?.vibeImageKey || item.generation?.preciseImageKey);
 }
 
-async function startPlannerBackgroundRun(project, meta, targetItems, situationId = null) {
+async function startPlannerBackgroundRun(project, meta, targetItems, situationId = null, batch = null) {
     const res = await fetch('/api/planner/v3/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3017,7 +3017,9 @@ async function startPlannerBackgroundRun(project, meta, targetItems, situationId
             projectPrefix: project.prefix,
             runId: meta.id,
             targetSituationId: situationId || null,
-            mode: 'background'
+            mode: 'background',
+            batchKey: batch?.key || '',
+            batchIndex: batch?.index ?? 0
         })
     });
     const data = await res.json().catch(() => ({}));
@@ -3074,6 +3076,8 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
     const failed = [];
     let existingCount = 0;
     let startedCount = 0;
+    const batchKey = `planner_${project.id || project.prefix || 'project'}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
+    let batchIndex = 0;
 
     for (const entry of runnableEntries) {
         const meta = entry.meta;
@@ -3091,9 +3095,10 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
                     }
                 }
             }
-            const result = await startPlannerBackgroundRun(project, meta, entry.targetItems);
+            const result = await startPlannerBackgroundRun(project, meta, entry.targetItems, null, { key: batchKey, index: batchIndex });
             if (result.data?.jobId) startedJobIds.push(result.data.jobId);
             startedCount += 1;
+            batchIndex += 1;
         } catch (error) {
             failed.push({
                 character: entry.character,
