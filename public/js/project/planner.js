@@ -7,6 +7,8 @@ const PLANNER_DEFAULT_IMAGE_COUNT = 20;
 const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
 const PLANNER_META_CACHE_TTL_MS = 3000;
+const PLANNER_BACKGROUND_ETA_STORAGE_KEY = 'imggul_planner_background_eta';
+const PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS = 10000;
 const DEFAULT_PLANNER_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const plannerMetaMemoryCache = new Map();
 
@@ -435,6 +437,107 @@ function getPlannerQueueSummary(queueMetas = []) {
         paused,
         status: active ? 'running' : paused ? 'paused' : (queueMetas[0]?.meta?.status || 'draft')
     };
+}
+
+function getPlannerQueueEta(queueMetas = []) {
+    return queueMetas
+        .map(entry => entry.meta?.backgroundStatus?.eta || entry.meta?.eta || null)
+        .find(eta => eta && Number(eta.remainingMs) >= 0 && eta.remainingText);
+}
+
+function renderPlannerEtaBadge(eta) {
+    if (!eta?.remainingText) return '';
+    const basisLabel = eta.basis === 'completed_average'
+        ? `최근 ${eta.sampleCount || 0}장 기준`
+        : '기본 추정';
+    return `
+        <span class="inline-flex items-center gap-1 rounded-full border border-indigo-200 dark:border-indigo-800 bg-white/80 dark:bg-indigo-950/40 px-2 py-1 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
+            <i data-lucide="clock-3" class="w-3 h-3"></i>
+            예상 ${escapeHtml(eta.remainingText)} 남음 · ${escapeHtml(basisLabel)}
+        </span>
+    `;
+}
+
+function formatPlannerDuration(ms) {
+    const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
+    if (seconds < 60) return `${seconds}초`;
+    const minutes = Math.floor(seconds / 60);
+    const rest = seconds % 60;
+    return rest ? `${minutes}분 ${rest}초` : `${minutes}분`;
+}
+
+function readPlannerBackgroundEtaStore() {
+    try {
+        return JSON.parse(localStorage.getItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY) || '{}') || {};
+    } catch {
+        return {};
+    }
+}
+
+function writePlannerBackgroundEtaStore(store) {
+    try {
+        localStorage.setItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY, JSON.stringify(store || {}));
+    } catch {}
+}
+
+function getPlannerBackgroundEtaAverage(store) {
+    const averageMs = Number(store.averageMs || 0);
+    return Number.isFinite(averageMs) && averageMs > 0 ? averageMs : PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS;
+}
+
+function updatePlannerBackgroundEta(jobId, status = {}) {
+    if (!jobId || status.mode !== 'background' || !isPlannerActiveStatus(status.status)) return null;
+    const now = Date.now();
+    const completed = Number(status.completedCount || 0);
+    const failed = Number(status.failedCount || 0);
+    const total = Number(status.totalCount || 0);
+    const remainingCount = Math.max(0, total - completed - failed);
+    const store = readPlannerBackgroundEtaStore();
+    const jobs = store.jobs || {};
+    const previous = jobs[jobId] || {};
+    let averageMs = getPlannerBackgroundEtaAverage(store);
+    let sampleCount = Number(store.sampleCount || 0);
+
+    if (Number.isFinite(previous.completedCount) && completed > previous.completedCount && previous.observedAt) {
+        const deltaCount = completed - previous.completedCount;
+        const observedMs = Math.max(0, now - Number(previous.observedAt || now));
+        const observedAverageMs = observedMs / deltaCount;
+        if (Number.isFinite(observedAverageMs) && observedAverageMs >= 1000 && observedAverageMs <= 10 * 60 * 1000) {
+            averageMs = Math.round(averageMs * 0.7 + observedAverageMs * 0.3);
+            sampleCount += deltaCount;
+        }
+    }
+
+    if (!Number.isFinite(previous.completedCount) || completed > previous.completedCount || completed < previous.completedCount) {
+        jobs[jobId] = { completedCount: completed, observedAt: now };
+    } else {
+        jobs[jobId] = previous;
+    }
+    writePlannerBackgroundEtaStore({
+        ...store,
+        averageMs,
+        sampleCount,
+        updatedAt: new Date(now).toISOString(),
+        jobs
+    });
+
+    const remainingMs = Math.round(remainingCount * averageMs);
+    return {
+        source: 'browser_observed_background_status',
+        basis: sampleCount ? 'completed_average' : 'fallback',
+        averageMs,
+        sampleCount,
+        remainingCount,
+        remainingMs,
+        remainingText: formatPlannerDuration(remainingMs),
+        generatedAt: new Date(now).toISOString()
+    };
+}
+
+function withoutPlannerVolatileEta(status = {}) {
+    if (!status?.eta) return status;
+    const { eta, ...rest } = status;
+    return rest;
 }
 
 function updatePlannerQueueMetaCache(project, meta) {
@@ -1254,6 +1357,7 @@ export function renderPlannerProgressPanel(meta) {
     const runningIndex = runningItem ? progressItems.findIndex(item => item.situationId === runningItem.situationId) + 1 : doneCount + failedCount + 1;
     const progressCount = Math.min(total, doneCount + failedCount);
     const percent = total ? Math.round((progressCount / total) * 100) : 0;
+    const eta = meta.backgroundStatus?.eta || meta.eta || null;
 
     return `
         <div class="mb-4 rounded-xl border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
@@ -1273,6 +1377,7 @@ export function renderPlannerProgressPanel(meta) {
                     <span>실패 ${failedCount}</span>
                 </div>
             </div>
+            ${eta ? `<div class="mt-3 flex flex-wrap gap-2">${renderPlannerEtaBadge(eta)}</div>` : ''}
             <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
                 <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
             </div>
@@ -1299,6 +1404,7 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
     const percent = summary.totalImages ? Math.round((summary.completedImages / summary.totalImages) * 100) : 0;
     const activeEntry = summary.entries.find(entry => isPlannerActiveStatus(entry.item.status) || isPlannerActiveStatus(entry.meta.status));
     const statusText = summary.active ? '생성 진행 중' : summary.paused ? '일시정지됨' : '대기열';
+    const eta = getPlannerQueueEta(queueMetas);
     return `
         <div class="mb-4 rounded-lg border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1317,6 +1423,7 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
                     <span>실패 ${summary.failed}</span>
                 </div>
             </div>
+            ${eta ? `<div class="mt-3 flex flex-wrap gap-2">${renderPlannerEtaBadge(eta)}</div>` : ''}
             <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
                 <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
             </div>
@@ -2502,6 +2609,9 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
     }
 
     const status = await res.json();
+    const eta = updatePlannerBackgroundEta(targetJobId, status);
+    const statusForView = eta ? { ...status, eta } : status;
+    const statusForStorage = withoutPlannerVolatileEta(statusForView);
     if (status.expired || status.status === 'expired') {
         stopPlannerBackgroundPolling();
         if (meta?.backgroundJobId === targetJobId) {
@@ -2520,15 +2630,17 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
     if (nextMeta) {
         if (status.status === 'cancel_requested') {
             resetPlannerMetaAfterCancel(nextMeta);
-            nextMeta.backgroundStatus = { ...status, status: 'queued' };
+            nextMeta.backgroundStatus = { ...statusForStorage, status: 'queued' };
             await savePlannerMeta(project, nextMeta).catch(() => null);
+            nextMeta.backgroundStatus = { ...statusForView, status: 'queued' };
             window.PROJECT_PLANNER_META = nextMeta;
             window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
+            updatePlannerQueueMetaCache(project, nextMeta);
             stopPlannerBackgroundPolling();
             renderPlannerIfVisible();
-            return status;
+            return statusForView;
         }
-        nextMeta.backgroundStatus = status;
+        nextMeta.backgroundStatus = statusForStorage;
         nextMeta.status = status.status || nextMeta.status;
         nextMeta.backgroundJobId = status.jobId || nextMeta.backgroundJobId;
         if (!isPlannerActiveStatus(status.status)) {
@@ -2553,12 +2665,14 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
             });
         }
         await savePlannerMeta(project, nextMeta).catch(() => null);
+        nextMeta.backgroundStatus = statusForView;
         window.PROJECT_PLANNER_META = nextMeta;
     }
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project).catch(() => window.PROJECT_PLANNER_QUEUE_METAS || []);
+    if (nextMeta) updatePlannerQueueMetaCache(project, nextMeta);
     if (!['queued', 'running', 'cancel_requested'].includes(status.status)) stopPlannerBackgroundPolling();
     renderPlannerIfVisible();
-    return status;
+    return statusForView;
 }
 
 export async function cancelPlannerBackgroundGeneration(jobId = null) {

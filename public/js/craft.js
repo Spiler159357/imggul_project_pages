@@ -2,10 +2,7 @@
 const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
 const CRAFT_BASE_PROMPT_STORAGE_KEY = 'naiCraftBasePromptSettings';
-const CRAFT_GENERATION_ESTIMATE_CACHE_KEY = 'imggul_craft_generation_estimate_cache';
-const CRAFT_GENERATION_TIMING_META_KEY = 'Imggul Generation Timing';
-const CRAFT_ESTIMATE_SAMPLE_LIMIT = 20;
-const CRAFT_MIN_ESTIMATE_MS = 4000;
+const CRAFT_FIXED_GENERATION_ESTIMATE_MS = 7000;
 const MAX_V4_PROMPT_CHARACTERS = 6;
 const DEFAULT_CRAFT_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const DEFAULT_CRAFT_DEFAULT_NEGATIVE_PROMPT = '';
@@ -18,60 +15,8 @@ function formatDurationMs(ms) {
     return rest ? `${minutes}분 ${rest}초` : `${minutes}분`;
 }
 
-function getFallbackEstimateMs(steps) {
-    const stepEstimate = (Number(steps) || 28) * 200;
-    return Math.max(CRAFT_MIN_ESTIMATE_MS, stepEstimate);
-}
-
-function readCraftGenerationEstimateCache() {
-    try {
-        const cache = JSON.parse(localStorage.getItem(CRAFT_GENERATION_ESTIMATE_CACHE_KEY) || '{}') || {};
-        return Number(cache.averageMs) > 0 ? cache : null;
-    } catch {
-        return null;
-    }
-}
-
-function writeCraftGenerationEstimateCache(averageMs, sampleCount) {
-    try {
-        localStorage.setItem(CRAFT_GENERATION_ESTIMATE_CACHE_KEY, JSON.stringify({
-            averageMs: Math.round(averageMs),
-            sampleCount,
-            updatedAt: new Date().toISOString()
-        }));
-    } catch {}
-}
-
-function getTimingDurationMs(metadata) {
-    const timing = metadata?.[CRAFT_GENERATION_TIMING_META_KEY] || metadata?.generationTiming || null;
-    const duration = Number(timing?.durationMs || timing?.totalDurationMs || 0);
-    return Number.isFinite(duration) && duration >= CRAFT_MIN_ESTIMATE_MS && duration <= 10 * 60 * 1000 ? duration : 0;
-}
-
-async function loadCraftGenerationEstimateFromTempStorage() {
-    const tempImages = Array.isArray(window.TEMP_IMAGES) ? window.TEMP_IMAGES.slice(0, CRAFT_ESTIMATE_SAMPLE_LIMIT) : [];
-    const durations = [];
-    for (const img of tempImages) {
-        const fileName = String(img?.key || '').split('/').pop();
-        if (!fileName || !window.loadMetadataFromDB) continue;
-        const metadata = await window.loadMetadataFromDB(window.TEMP_FOLDER, fileName).catch(() => null);
-        const duration = getTimingDurationMs(metadata);
-        if (duration) durations.push(duration);
-    }
-    if (!durations.length) return readCraftGenerationEstimateCache();
-
-    const averageMs = durations.reduce((sum, value) => sum + value, 0) / durations.length;
-    writeCraftGenerationEstimateCache(averageMs, durations.length);
-    return { averageMs, sampleCount: durations.length, source: 'temp-storage' };
-}
-
-async function getCraftGenerationEstimateMs(taskTemplate = {}) {
-    const fromTemp = await loadCraftGenerationEstimateFromTempStorage().catch(() => null);
-    return Math.round(fromTemp?.averageMs || readCraftGenerationEstimateCache()?.averageMs || getFallbackEstimateMs(taskTemplate.steps));
-}
-
 function getGenerationRemainingMs(task, progress, startedAtMs) {
-    const estimateMs = Math.max(CRAFT_MIN_ESTIMATE_MS, Number(task?.estimatedDurationMs || 0) || getFallbackEstimateMs(task?.steps));
+    const estimateMs = Number(task?.estimatedDurationMs || 0) || CRAFT_FIXED_GENERATION_ESTIMATE_MS;
     const elapsedMs = startedAtMs ? Date.now() - startedAtMs : 0;
     const byEstimate = estimateMs - elapsedMs;
     const byProgress = progress > 0 ? (elapsedMs / Math.max(progress, 1)) * (100 - progress) : estimateMs;
@@ -926,9 +871,7 @@ export async function generateNaiImage(options = {}) {
     }
 
     const outputPrefix = options.outputPrefix || window.TEMP_FOLDER;
-    const estimatedDurationMs = outputPrefix === window.TEMP_FOLDER
-        ? await getCraftGenerationEstimateMs({ steps })
-        : getFallbackEstimateMs(steps);
+    const estimatedDurationMs = CRAFT_FIXED_GENERATION_ESTIMATE_MS;
 
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < batchCount; i++) {
@@ -960,10 +903,7 @@ export async function processNextQueueItem() {
     const floatBar = document.getElementById('craft-floating-bar'); const floatText = document.getElementById('craft-floating-text'); const floatPercent = document.getElementById('craft-floating-percent');
 
     const taskStartedAtMs = Date.now();
-    const taskStartedAtIso = new Date(taskStartedAtMs).toISOString();
-    let requestStartedAtMs = 0;
-    let responseReceivedAtMs = 0;
-    let progress = 0; let expectedMs = Math.max(CRAFT_MIN_ESTIMATE_MS, Number(task.estimatedDurationMs || 0) || getFallbackEstimateMs(task.steps));
+    let progress = 0; let expectedMs = Number(task.estimatedDurationMs || 0) || CRAFT_FIXED_GENERATION_ESTIMATE_MS;
     const updateInterval = 100; const increment = 100 / (expectedMs / updateInterval);
     
     /**
@@ -1033,9 +973,7 @@ export async function processNextQueueItem() {
             if (requestBody.parameters.v4_prompt) requestBody.parameters.v4_prompt.use_coords = true;
         }
 
-        requestStartedAtMs = Date.now();
         const res = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) });
-        responseReceivedAtMs = Date.now();
         if (!res.ok) {
             let errStr = "서버 통신 오류 발생"; const rawText = await res.text();
             try { const errJson = JSON.parse(rawText); errStr = errJson.error || errJson.message || rawText; } catch(e) { errStr = rawText; }
@@ -1089,23 +1027,7 @@ export async function processNextQueueItem() {
         const uploadRes = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: uploadHeaders, body: buffer, cache: 'no-store' });
         if (!uploadRes.ok) throw new Error("서버 임시 저장소 동기화에 실패했습니다.");
 
-        const taskCompletedAtMs = Date.now();
-        const generationTiming = {
-            kind: 'craft',
-            startedAt: taskStartedAtIso,
-            completedAt: new Date(taskCompletedAtMs).toISOString(),
-            durationMs: taskCompletedAtMs - taskStartedAtMs,
-            novelAiRequestMs: responseReceivedAtMs && requestStartedAtMs ? responseReceivedAtMs - requestStartedAtMs : null,
-            width: task.width,
-            height: task.height,
-            steps: task.steps,
-            model: task.model
-        };
-        if (!extractedMetadata) extractedMetadata = {};
-        extractedMetadata[CRAFT_GENERATION_TIMING_META_KEY] = generationTiming;
-
         if (extractedMetadata) await window.saveMetadataToDB(outputPrefix, uploadFileName, extractedMetadata);
-        if (outputPrefix === window.TEMP_FOLDER) writeCraftGenerationEstimateCache(generationTiming.durationMs, 1);
 
         updateProgress('완료!', 100);
         if (outputPrefix === window.TEMP_FOLDER) window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString(), inpaintSourceKey: task.inpaintSource?.key || '' });
