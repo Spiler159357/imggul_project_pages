@@ -1427,6 +1427,41 @@ async function queuePlannerV3ItemAssetsForCleanup(env, itemId, reason, timestamp
     `).bind(reason, timestamp, timestamp, itemId).run();
 }
 
+async function clearPlannerV3ItemsForRegeneration(env, itemIds = []) {
+    const ids = Array.from(new Set(itemIds.map(id => String(id || "").trim()).filter(Boolean)));
+    if (!ids.length) return;
+    const timestamp = nowPlannerV3Iso();
+    const placeholders = ids.map(() => "?").join(",");
+    await env.DB.prepare(`
+        INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
+            id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
+            status, created_at, updated_at
+        )
+        SELECT 'cleanup_regenerate_' || a.id, a.r2_key, a.id, i.run_id, a.item_id,
+            'regenerate_item_cleanup', 'pending', ?, ?
+        FROM planner_v3_assets a
+        JOIN planner_v3_items i ON i.id = a.item_id
+        WHERE a.item_id IN (${placeholders})
+    `).bind(timestamp, timestamp, ...ids).run();
+    await env.DB.prepare(`
+        DELETE FROM planner_v3_assets
+        WHERE item_id IN (${placeholders})
+    `).bind(...ids).run();
+    await env.DB.prepare(`
+        UPDATE planner_v3_items
+        SET status = 'pending',
+            completed_count = 0,
+            failed_count = 0,
+            stage = '',
+            stage_label = '',
+            error_message = '',
+            started_at = NULL,
+            completed_at = NULL,
+            updated_at = ?
+        WHERE id IN (${placeholders})
+    `).bind(timestamp, ...ids).run();
+}
+
 async function deleteEmptyPlannerV3JobsAndRuns(env, runId) {
     await env.DB.prepare(`
         DELETE FROM planner_v3_jobs
@@ -1456,8 +1491,25 @@ export async function startPlannerV3Generation(env, body = {}) {
     if (existing) return getPlannerV3Status(env, existing.id);
 
     const timestamp = nowPlannerV3Iso();
-    const candidates = meta.items.filter(item => {
+    const targetItems = meta.items.filter(item => {
         if (targetSituationId && item.situationId !== targetSituationId) return false;
+        return true;
+    });
+    if (body.clearExisting === true) {
+        await clearPlannerV3ItemsForRegeneration(env, targetItems.map(item => item.id));
+        for (const item of targetItems) {
+            item.images = [];
+            item.generatedImages = [];
+            item.selectedImage = null;
+            item.completedCount = 0;
+            item.failedCount = 0;
+            item.status = "pending";
+            item.stage = "";
+            item.stageLabel = "";
+            item.errorMessage = "";
+        }
+    }
+    const candidates = targetItems.filter(item => {
         return !["done", "complete"].includes(item.status) || (item.images || []).length < item.count;
     });
     if (!candidates.length) throw new Error("No runnable planner items");

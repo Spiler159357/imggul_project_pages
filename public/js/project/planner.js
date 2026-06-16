@@ -3019,7 +3019,8 @@ async function startPlannerBackgroundRun(project, meta, targetItems, situationId
             targetSituationId: situationId || null,
             mode: 'background',
             batchKey: batch?.key || '',
-            batchIndex: batch?.index ?? 0
+            batchIndex: batch?.index ?? 0,
+            clearExisting: batch?.clearExisting === true
         })
     });
     const data = await res.json().catch(() => ({}));
@@ -3095,7 +3096,7 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
                     }
                 }
             }
-            const result = await startPlannerBackgroundRun(project, meta, entry.targetItems, null, { key: batchKey, index: batchIndex });
+            const result = await startPlannerBackgroundRun(project, meta, entry.targetItems, null, { key: batchKey, index: batchIndex, clearExisting: options.clearExisting === true });
             if (result.data?.jobId) startedJobIds.push(result.data.jobId);
             startedCount += 1;
             batchIndex += 1;
@@ -3259,7 +3260,8 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
             projectPrefix: project.prefix,
             targetSituationId: situationId || null,
             mode: 'background',
-            plannerMeta: meta
+            plannerMeta: meta,
+            clearExisting
         })
     });
     const data = await res.json().catch(() => ({}));
