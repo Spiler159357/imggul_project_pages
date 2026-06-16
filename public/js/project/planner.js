@@ -187,12 +187,18 @@ export async function savePlannerMeta(project, meta, options = {}) {
     const normalized = normalizePlannerStoredMeta(meta || {}, options);
     normalized.projectId = normalized.projectId || project?.id || '';
     normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
+    const clearExistingItemIds = Array.isArray(options.clearExistingItemIds)
+        ? options.clearExistingItemIds.filter(Boolean)
+        : [];
     const res = await fetch('/api/planner/v3/run?_t=' + Date.now(), {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
-        body: JSON.stringify({ data: normalized }),
+        body: JSON.stringify({
+            data: normalized,
+            ...(clearExistingItemIds.length ? { clearExistingItemIds } : {})
+        }),
         cache: 'no-store'
     });
     if (!res.ok) {
@@ -672,7 +678,8 @@ function isPlannerRestartableItem(item) {
 function hasPlannerGeneratedImages(item = {}) {
     return (Array.isArray(item.images) && item.images.length > 0)
         || (Array.isArray(item.generatedImages) && item.generatedImages.length > 0)
-        || !!item.selectedImage;
+        || !!item.selectedImage
+        || Number(item.completedCount || 0) > 0;
 }
 
 function buildPlannerRunGenerations(item, meta = {}, resumeRun = false) {
@@ -1926,7 +1933,7 @@ function getPlannerRunStartItemsForCurrentView() {
     const metas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) && window.PROJECT_PLANNER_QUEUE_METAS.length
         ? window.PROJECT_PLANNER_QUEUE_METAS.map(entry => entry.meta).filter(Boolean)
         : [window.PROJECT_PLANNER_META].filter(Boolean);
-    return metas.flatMap(meta => getPlannerRunnableItems(meta, null, true));
+    return metas.flatMap(meta => getPlannerClearableItems(meta));
 }
 
 export async function openPlannerRunConfirmModal() {
@@ -2681,12 +2688,18 @@ export async function clearPlannerItemImages(project, item) {
     item.status = 'pending';
 }
 
-async function clearPlannerItemsImages(project, items = []) {
+async function clearPlannerItemsImages(project, items = [], meta = null) {
     const uniqueItems = Array.from(new Map(
         items.filter(Boolean).map(item => [item.situationId || item.id || item.imageNumber, item])
     ).values());
     for (const item of uniqueItems) {
         await clearPlannerItemImages(project, item);
+    }
+    const clearExistingItemIds = uniqueItems.map(item => item.id).filter(Boolean);
+    if (meta?.id && clearExistingItemIds.length) {
+        await savePlannerMeta(project, meta, { clearExistingItemIds }).catch(error => {
+            throw new Error(error?.message || '기존 플래너 이미지 정리에 실패했습니다.');
+        });
     }
 }
 
@@ -3116,6 +3129,14 @@ function getPlannerRunnableItems(meta = {}, situationId = null, includeCompleted
         : items.filter(predicate);
 }
 
+function getPlannerClearableItems(meta = {}, situationId = null) {
+    const items = Array.isArray(meta.items) ? meta.items : [];
+    const clearableItems = situationId
+        ? items.filter(item => item.situationId === situationId && isPlannerRestartableItem(item))
+        : items.filter(item => isPlannerRestartableItem(item));
+    return clearableItems.filter(item => hasPlannerGeneratedImages(item));
+}
+
 function hasUnsupportedPlannerBackgroundReference(items = []) {
     return items.some(item => item.generation?.vibeImageKey || item.generation?.preciseImageKey);
 }
@@ -3131,8 +3152,7 @@ async function startPlannerBackgroundRun(project, meta, targetItems, situationId
             targetSituationId: situationId || null,
             mode: 'background',
             batchKey: batch?.key || '',
-            batchIndex: batch?.index ?? 0,
-            clearExisting: batch?.clearExisting === true
+            batchIndex: batch?.index ?? 0
         })
     });
     const data = await res.json().catch(() => ({}));
@@ -3193,12 +3213,14 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
     let batchIndex = 0;
 
     if (options.clearExisting === true) {
-        const entriesToClear = runnableEntries.filter(entry =>
-            !(entry.meta.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(entry.meta.status))
-            && entry.targetItems.length
-        );
+        const entriesToClear = queueMetas
+            .map(entry => ({ ...entry, clearItems: getPlannerClearableItems(entry.meta) }))
+            .filter(entry =>
+                !(entry.meta.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(entry.meta.status))
+                && entry.clearItems.length
+            );
         for (const entry of entriesToClear) {
-            await clearPlannerItemsImages(project, entry.targetItems);
+            await clearPlannerItemsImages(project, entry.clearItems, entry.meta);
             entry.meta.updatedAt = Date.now();
             updatePlannerQueueMetaCache(project, entry.meta);
             setPlannerActiveMetaIfSelected(project, entry.meta);
@@ -3349,7 +3371,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
 
     const clearExisting = options.clearExisting === true;
     if (clearExisting) {
-        await clearPlannerItemsImages(project, targetItems);
+        await clearPlannerItemsImages(project, getPlannerClearableItems(meta), meta);
     }
 
     for (const item of targetItems) {
@@ -3373,8 +3395,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
             projectPrefix: project.prefix,
             targetSituationId: situationId || null,
             mode: 'background',
-            plannerMeta: meta,
-            clearExisting
+            plannerMeta: meta
         })
     });
     const data = await res.json().catch(() => ({}));
@@ -3443,9 +3464,8 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     }
     if (clearExisting) {
         setPlannerStatus('기존 이미지를 정리하는 중...');
-        await clearPlannerItemsImages(project, targetItems);
+        await clearPlannerItemsImages(project, getPlannerClearableItems(meta), meta);
         meta.updatedAt = Date.now();
-        await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
         window.PROJECT_PLANNER_META = meta;
         updatePlannerQueueMetaCache(project, meta);
         renderPlannerSectionByState({ preserveScroll: true });

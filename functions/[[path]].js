@@ -1924,7 +1924,9 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await putPlannerV3RunFromMeta(env, body?.data || body || {});
+            const data = await putPlannerV3RunFromMeta(env, body?.data || body || {}, {
+                clearExistingItemIds: Array.isArray(body?.clearExistingItemIds) ? body.clearExistingItemIds : []
+            });
             return jsonResponse({ success: true, data });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
