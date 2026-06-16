@@ -1437,23 +1437,38 @@ async function queuePlannerV3ItemAssetsForCleanup(env, itemId, reason, timestamp
 async function clearPlannerV3ItemsForRegeneration(env, itemIds = []) {
     const ids = Array.from(new Set(itemIds.map(id => String(id || "").trim()).filter(Boolean)));
     if (!ids.length) return;
+    if (!env.imgBucket) throw new Error("imgBucket binding is not configured");
     const timestamp = nowPlannerV3Iso();
     const placeholders = ids.map(() => "?").join(",");
-    await env.DB.prepare(`
-        INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
-            id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
-            status, created_at, updated_at
-        )
-        SELECT 'cleanup_regenerate_' || a.id, a.r2_key, a.id, i.run_id, a.item_id,
-            'regenerate_item_cleanup', 'pending', ?, ?
-        FROM planner_v3_assets a
-        JOIN planner_v3_items i ON i.id = a.item_id
-        WHERE a.item_id IN (${placeholders})
-    `).bind(timestamp, timestamp, ...ids).run();
-    await env.DB.prepare(`
-        DELETE FROM planner_v3_assets
+    const assets = (await env.DB.prepare(`
+        SELECT id, r2_key
+        FROM planner_v3_assets
         WHERE item_id IN (${placeholders})
-    `).bind(...ids).run();
+    `).bind(...ids).all()).results || [];
+    const deletedAssetIds = [];
+    const failures = [];
+    for (const asset of assets) {
+        try {
+            await env.imgBucket.delete(asset.r2_key);
+            deletedAssetIds.push(asset.id);
+        } catch (error) {
+            failures.push({
+                r2Key: asset.r2_key,
+                message: error?.message || String(error)
+            });
+        }
+    }
+    if (deletedAssetIds.length) {
+        const assetPlaceholders = deletedAssetIds.map(() => "?").join(",");
+        await env.DB.prepare(`
+            DELETE FROM planner_v3_assets
+            WHERE id IN (${assetPlaceholders})
+        `).bind(...deletedAssetIds).run();
+    }
+    if (failures.length) {
+        const first = failures[0];
+        throw new Error(`Failed to delete existing planner image from R2 before regeneration: ${first.r2Key} (${first.message})`);
+    }
     await env.DB.prepare(`
         UPDATE planner_v3_items
         SET status = 'pending',

@@ -2810,8 +2810,8 @@ export async function refreshPlannerBackgroundStatus(jobId = null) {
                     status: statusItem.status === 'completed' ? 'done' : statusItem.status,
                     stage: statusItem.stage || item.stage || '',
                     stageLabel: statusItem.stageLabel || item.stageLabel || '',
-                    images: statusItem.resultKeys?.length ? statusItem.resultKeys : (item.images || []),
-                    generatedImages: statusItem.generatedImages?.length ? statusItem.generatedImages : (item.generatedImages || []),
+                    images: Array.isArray(statusItem.resultKeys) ? statusItem.resultKeys : (item.images || []),
+                    generatedImages: Array.isArray(statusItem.generatedImages) ? statusItem.generatedImages : (item.generatedImages || []),
                     completedCount: Number(statusItem.completedCount || 0),
                     failedCount: Number(statusItem.failedCount || 0),
                     errorMessage: statusItem.errorMessage || item.errorMessage || ''
