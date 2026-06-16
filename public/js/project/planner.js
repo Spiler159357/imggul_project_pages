@@ -648,6 +648,12 @@ function isPlannerRestartableItem(item) {
     return !!item && item.status !== 'confirmed';
 }
 
+function hasPlannerGeneratedImages(item = {}) {
+    return (Array.isArray(item.images) && item.images.length > 0)
+        || (Array.isArray(item.generatedImages) && item.generatedImages.length > 0)
+        || !!item.selectedImage;
+}
+
 function buildPlannerRunGenerations(item, meta = {}, resumeRun = false) {
     const runs = Array.isArray(item.variantGenerations) && item.variantGenerations.length
         ? item.variantGenerations
@@ -1247,14 +1253,14 @@ export function renderPlannerRunConfirmModal() {
                 <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                     <div class="min-w-0">
                         <h3 class="text-sm font-bold text-gray-900 dark:text-white">기존 결과를 삭제하고 다시 생성</h3>
-                        <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">현재 생성된 후보 이미지는 모두 삭제 대기열로 이동되고 새 작업이 시작됩니다.</p>
+                        <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">기존에 생성된 이미지를 삭제하고 처음부터 다시 생성합니다.</p>
                     </div>
                     <button type="button" onclick="window.closePlannerRunConfirmModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" title="닫기" aria-label="닫기">
                         <i data-lucide="x" class="w-5 h-5"></i>
                     </button>
                 </div>
                 <div class="px-4 py-4">
-                    <p class="text-xs leading-5 text-gray-600 dark:text-gray-300">선택하지 않은 기존 후보 이미지가 남아 있지 않도록 정리한 뒤, 완료된 플랜도 처음부터 다시 생성합니다.</p>
+                    <p class="text-xs leading-5 text-gray-600 dark:text-gray-300">삭제된 후보 이미지는 되돌릴 수 없습니다. 계속 진행하시겠습니까?</p>
                 </div>
                 <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-end gap-2">
                     <button type="button" onclick="window.closePlannerRunConfirmModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">취소</button>
@@ -1895,7 +1901,19 @@ export function setPlannerGenerationMode(mode = 'browser') {
     renderPlannerSectionByState({ preserveScroll: true });
 }
 
-export function openPlannerRunConfirmModal() {
+function getPlannerRunStartItemsForCurrentView() {
+    const metas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) && window.PROJECT_PLANNER_QUEUE_METAS.length
+        ? window.PROJECT_PLANNER_QUEUE_METAS.map(entry => entry.meta).filter(Boolean)
+        : [window.PROJECT_PLANNER_META].filter(Boolean);
+    return metas.flatMap(meta => getPlannerRunnableItems(meta, null, true));
+}
+
+export async function openPlannerRunConfirmModal() {
+    const items = getPlannerRunStartItemsForCurrentView();
+    if (!items.some(item => hasPlannerGeneratedImages(item))) {
+        await startPlannerGeneration(null, { clearExisting: true });
+        return;
+    }
     window.PROJECT_PLANNER_RUN_CONFIRM = true;
     renderPlannerRunConfirmOverlay();
 }
@@ -2631,9 +2649,24 @@ export async function clearPlannerItemImages(project, item) {
         body: JSON.stringify({ action: 'delete_folder', key: prefix })
     }).catch(() => null);
     item.images = [];
+    item.generatedImages = [];
     item.imagePromptSnapshots = {};
     item.selectedImage = null;
+    item.completedCount = 0;
+    item.failedCount = 0;
+    item.stage = '';
+    item.stageLabel = '';
+    item.errorMessage = '';
     item.status = 'pending';
+}
+
+async function clearPlannerItemsImages(project, items = []) {
+    const uniqueItems = Array.from(new Map(
+        items.filter(Boolean).map(item => [item.situationId || item.id || item.imageNumber, item])
+    ).values());
+    for (const item of uniqueItems) {
+        await clearPlannerItemImages(project, item);
+    }
 }
 
 export function startPlannerBackgroundPolling(jobId) {
@@ -3138,6 +3171,20 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
     const batchKey = `planner_${project.id || project.prefix || 'project'}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
     let batchIndex = 0;
 
+    if (options.clearExisting === true) {
+        const entriesToClear = runnableEntries.filter(entry =>
+            !(entry.meta.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(entry.meta.status))
+            && entry.targetItems.length
+        );
+        for (const entry of entriesToClear) {
+            await clearPlannerItemsImages(project, entry.targetItems);
+            entry.meta.updatedAt = Date.now();
+            updatePlannerQueueMetaCache(project, entry.meta);
+            setPlannerActiveMetaIfSelected(project, entry.meta);
+        }
+        renderPlannerSectionByState({ preserveScroll: true });
+    }
+
     for (const entry of runnableEntries) {
         const meta = entry.meta;
         if (meta.backgroundJobId && ['queued', 'running', 'cancel_requested'].includes(meta.status)) {
@@ -3147,13 +3194,6 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
         }
         if (!entry.targetItems.length) continue;
         try {
-            if (options.clearExisting === true) {
-                for (const item of entry.targetItems) {
-                    if (item.images?.length || item.selectedImage) {
-                        await clearPlannerItemImages(project, item);
-                    }
-                }
-            }
             const result = await startPlannerBackgroundRun(project, meta, entry.targetItems, null, { key: batchKey, index: batchIndex, clearExisting: options.clearExisting === true });
             if (result.data?.jobId) startedJobIds.push(result.data.jobId);
             startedCount += 1;
@@ -3288,11 +3328,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
 
     const clearExisting = options.clearExisting === true;
     if (clearExisting) {
-        for (const item of targetItems) {
-            if (item.images?.length || item.selectedImage) {
-                await clearPlannerItemImages(project, item);
-            }
-        }
+        await clearPlannerItemsImages(project, targetItems);
     }
 
     for (const item of targetItems) {
@@ -3384,6 +3420,15 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
         return;
     }
+    if (clearExisting) {
+        setPlannerStatus('기존 이미지를 정리하는 중...');
+        await clearPlannerItemsImages(project, targetItems);
+        meta.updatedAt = Date.now();
+        await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
+        window.PROJECT_PLANNER_META = meta;
+        updatePlannerQueueMetaCache(project, meta);
+        renderPlannerSectionByState({ preserveScroll: true });
+    }
     meta.status = 'running';
     meta.runningSituationIds = targetItems.map(item => item.situationId);
     setPlannerBrowserRunState({
@@ -3410,10 +3455,6 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     try {
         for (const item of targetItems) {
-            if (clearExisting && (item.images?.length || item.selectedImage)) {
-                await clearPlannerItemImages(project, item);
-                await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-            }
             item.status = 'running';
             const runGenerations = buildPlannerRunGenerations(item, meta, resumeRun);
             if (!runGenerations.length) {
