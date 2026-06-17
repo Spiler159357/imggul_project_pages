@@ -1368,18 +1368,8 @@ async function plannerV3ItemToClient(env, row, assets = []) {
 
 export async function deletePlannerV3Run(env, runId) {
     await ensurePlannerV3Schema(env);
-    const timestamp = nowPlannerV3Iso();
-    await env.DB.prepare(`
-        INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
-            id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
-            status, created_at, updated_at
-        )
-        SELECT 'cleanup_' || a.id, a.r2_key, a.id, i.run_id, a.item_id, 'deleted_run_cleanup',
-            'pending', ?, ?
-        FROM planner_v3_assets a
-        JOIN planner_v3_items i ON i.id = a.item_id
-        WHERE i.run_id = ?
-    `).bind(timestamp, timestamp, runId).run();
+    const rows = (await env.DB.prepare("SELECT id FROM planner_v3_items WHERE run_id = ?").bind(runId).all()).results || [];
+    await deletePlannerV3AssetsForItems(env, rows.map(row => row.id));
     await env.DB.prepare("DELETE FROM planner_v3_runs WHERE id = ?").bind(runId).run();
     return { success: true };
 }
@@ -1413,62 +1403,18 @@ export async function deletePlannerV3Item(env, itemId) {
     await ensurePlannerV3Schema(env);
     const item = await env.DB.prepare("SELECT * FROM planner_v3_items WHERE id = ?").bind(itemId).first();
     if (!item) return { success: true };
-    const timestamp = nowPlannerV3Iso();
-    await queuePlannerV3ItemAssetsForCleanup(env, itemId, "deleted_item_cleanup", timestamp);
+    await deletePlannerV3AssetsForItems(env, [itemId]);
     await env.DB.prepare("DELETE FROM planner_v3_items WHERE id = ?").bind(itemId).run();
     await deleteEmptyPlannerV3JobsAndRuns(env, item.run_id);
     return { success: true };
 }
 
-async function queuePlannerV3ItemAssetsForCleanup(env, itemId, reason, timestamp = nowPlannerV3Iso()) {
-    await env.DB.prepare(`
-        INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
-            id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
-            status, created_at, updated_at
-        )
-        SELECT 'cleanup_' || a.id, a.r2_key, a.id, i.run_id, a.item_id, ?,
-            'pending', ?, ?
-        FROM planner_v3_assets a
-        JOIN planner_v3_items i ON i.id = a.item_id
-        WHERE a.item_id = ?
-    `).bind(reason, timestamp, timestamp, itemId).run();
-}
-
 async function clearPlannerV3ItemsForRegeneration(env, itemIds = []) {
     const ids = Array.from(new Set(itemIds.map(id => String(id || "").trim()).filter(Boolean)));
     if (!ids.length) return;
-    if (!env.imgBucket) throw new Error("imgBucket binding is not configured");
     const timestamp = nowPlannerV3Iso();
+    await deletePlannerV3AssetsForItems(env, ids);
     const placeholders = ids.map(() => "?").join(",");
-    const assets = (await env.DB.prepare(`
-        SELECT id, r2_key
-        FROM planner_v3_assets
-        WHERE item_id IN (${placeholders})
-    `).bind(...ids).all()).results || [];
-    const deletedAssetIds = [];
-    const failures = [];
-    for (const asset of assets) {
-        try {
-            await env.imgBucket.delete(asset.r2_key);
-            deletedAssetIds.push(asset.id);
-        } catch (error) {
-            failures.push({
-                r2Key: asset.r2_key,
-                message: error?.message || String(error)
-            });
-        }
-    }
-    if (deletedAssetIds.length) {
-        const assetPlaceholders = deletedAssetIds.map(() => "?").join(",");
-        await env.DB.prepare(`
-            DELETE FROM planner_v3_assets
-            WHERE id IN (${assetPlaceholders})
-        `).bind(...deletedAssetIds).run();
-    }
-    if (failures.length) {
-        const first = failures[0];
-        throw new Error(`Failed to delete existing planner image from R2 before regeneration: ${first.r2Key} (${first.message})`);
-    }
     await env.DB.prepare(`
         UPDATE planner_v3_items
         SET status = 'pending',
@@ -1482,6 +1428,30 @@ async function clearPlannerV3ItemsForRegeneration(env, itemIds = []) {
             updated_at = ?
         WHERE id IN (${placeholders})
     `).bind(timestamp, ...ids).run();
+}
+
+async function deletePlannerV3AssetsForItems(env, itemIds = []) {
+    const ids = Array.from(new Set(itemIds.map(id => String(id || "").trim()).filter(Boolean)));
+    if (!ids.length) return { deletedCount: 0 };
+    if (!env.imgBucket) throw new Error("imgBucket binding is not configured");
+    const placeholders = ids.map(() => "?").join(",");
+    const assets = (await env.DB.prepare(`
+        SELECT id, r2_key
+        FROM planner_v3_assets
+        WHERE item_id IN (${placeholders})
+    `).bind(...ids).all()).results || [];
+    if (!assets.length) return { deletedCount: 0 };
+    const deletedAssetIds = [];
+    for (const asset of assets) {
+        await env.imgBucket.delete(asset.r2_key);
+        deletedAssetIds.push(asset.id);
+    }
+    const assetPlaceholders = deletedAssetIds.map(() => "?").join(",");
+    await env.DB.prepare(`
+        DELETE FROM planner_v3_assets
+        WHERE id IN (${assetPlaceholders})
+    `).bind(...deletedAssetIds).run();
+    return { deletedCount: deletedAssetIds.length };
 }
 
 async function deleteEmptyPlannerV3JobsAndRuns(env, runId) {
@@ -1921,33 +1891,18 @@ export async function confirmPlannerV3Asset(env, body = {}) {
         WHERE a.item_id = ?
         ORDER BY a.image_index, a.created_at
     `).bind(itemId).all()).results || [];
-    const cleanupFailures = [];
-    for (const candidate of itemAssets) {
-        try {
+    try {
+        for (const candidate of itemAssets) {
             await env.imgBucket.delete(candidate.r2_key);
-        } catch (error) {
-            cleanupFailures.push({
-                ...candidate,
-                errorMessage: error?.message || String(error)
-            });
         }
-    }
-    for (const failed of cleanupFailures) {
+    } catch (error) {
+        const message = error?.message || String(error);
         await env.DB.prepare(`
-            INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
-                id, r2_key, source_asset_id, source_run_id, source_item_id, reason,
-                status, attempts, error_message, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, 'confirmed_item_cleanup_failed', 'pending', 0, ?, ?, ?)
-        `).bind(
-            `cleanup_${failed.id}`,
-            failed.r2_key,
-            failed.id,
-            failed.run_id,
-            failed.item_id,
-            failed.errorMessage,
-            timestamp,
-            timestamp
-        ).run();
+            UPDATE planner_v3_confirm_operations
+            SET status = 'failed', error_message = ?, updated_at = ?
+            WHERE id = ?
+        `).bind(message.slice(0, 1000), nowPlannerV3Iso(), operationId).run();
+        throw error;
     }
     await env.DB.prepare("UPDATE planner_v3_confirm_operations SET status = 'cleanup_queued', updated_at = ? WHERE id = ?")
         .bind(timestamp, operationId).run();
@@ -1966,7 +1921,7 @@ export async function confirmPlannerV3Asset(env, body = {}) {
         success: true,
         operationId,
         targetR2Key,
-        cleanupFailedKeys: cleanupFailures.map(item => item.r2_key)
+        cleanupFailedKeys: []
     };
 }
 
@@ -2178,11 +2133,7 @@ export async function processPlannerV3QueueMessage(env, body = {}) {
             }
         });
         if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) {
-            await env.DB.prepare(`
-                INSERT OR IGNORE INTO planner_v3_asset_cleanup_queue (
-                    id, r2_key, source_run_id, source_item_id, reason, status, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, 'stale_queue_upload', 'pending', ?, ?)
-            `).bind(makePlannerV3Id("cleanup"), uploadedKey, queue.run_id, queue.item_id, nowPlannerV3Iso(), nowPlannerV3Iso()).run();
+            await env.imgBucket.delete(uploadedKey);
             return;
         }
         await registerPlannerV3GeneratedAsset(env, queue, request, uploadedKey, fileName, webpBuffer);

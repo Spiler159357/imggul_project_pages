@@ -584,6 +584,57 @@ function updatePlannerQueueMetaCache(project, meta) {
     window.PROJECT_PLANNER_QUEUE_METAS = queueMetas.filter(entry => entry.meta?.items?.length);
 }
 
+function getPlannerQueueMetaEntry(project, characterId = '') {
+    if (!project) return null;
+    const targetCharacterId = String(characterId || '').trim();
+    const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
+    return queueMetas.find(entry =>
+        (targetCharacterId && (entry.meta?.characterId === targetCharacterId || entry.character?.id === targetCharacterId))
+        || (!targetCharacterId && entry.meta?.characterId === window.PROJECT_PLANNER_META?.characterId)
+    ) || null;
+}
+
+function getPlannerMetaForCharacter(project, characterId = '') {
+    const targetCharacterId = String(characterId || '').trim();
+    const entry = getPlannerQueueMetaEntry(project, targetCharacterId);
+    if (entry?.meta) return entry.meta;
+    const activeMeta = window.PROJECT_PLANNER_META || null;
+    if (!targetCharacterId || activeMeta?.characterId === targetCharacterId) return activeMeta;
+    return null;
+}
+
+function setPlannerMetaForCharacter(project, meta) {
+    if (!project || !meta) return;
+    updatePlannerQueueMetaCache(project, meta);
+    if (getSelectedPlannerCharacterId(project) === meta.characterId) {
+        window.PROJECT_PLANNER_META = meta;
+    }
+}
+
+function getPlannerResultModalCharacterId(project = getActiveProject()) {
+    return window.PLANNER_RESULT_MODAL_CHARACTER_ID
+        || getSelectedPlannerCharacterId(project)
+        || window.PROJECT_PLANNER_META?.characterId
+        || '';
+}
+
+function getPlannerResultModalMeta(project = getActiveProject()) {
+    return getPlannerMetaForCharacter(project, getPlannerResultModalCharacterId(project));
+}
+
+function findPlannerMetaByImageKey(project, key = '') {
+    const modalMeta = getPlannerResultModalMeta(project);
+    if (modalMeta?.items?.some(item => Array.isArray(item.images) && item.images.includes(key))) return modalMeta;
+    const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
+    const entry = queueMetas.find(queueEntry =>
+        queueEntry.meta?.items?.some(item => Array.isArray(item.images) && item.images.includes(key))
+    );
+    if (entry?.meta) return entry.meta;
+    const activeMeta = window.PROJECT_PLANNER_META || null;
+    if (activeMeta?.items?.some(item => Array.isArray(item.images) && item.images.includes(key))) return activeMeta;
+    return null;
+}
+
 function resetPlannerMetaAfterCancel(meta) {
     if (!meta) return meta;
     meta.status = 'draft';
@@ -1178,7 +1229,7 @@ export function renderPlannerResultList(meta) {
                 const generatedCount = Array.isArray(item.images) ? item.images.length : 0;
                 const selected = !!item.selectedImage;
                 return `
-                    <div role="button" tabindex="0" onclick="window.openPlannerResultModal('${escapeJsString(item.situationId)}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openPlannerResultModal('${escapeJsString(item.situationId)}'); }" class="w-full cursor-pointer rounded-lg border ${selected ? 'border-indigo-300 dark:border-indigo-700 bg-indigo-50/60 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30'} p-3 text-left hover:border-indigo-400 transition">
+                    <div role="button" tabindex="0" onclick="window.openPlannerResultModal('${escapeJsString(item.situationId)}', '${escapeJsString(meta?.characterId || '')}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openPlannerResultModal('${escapeJsString(item.situationId)}', '${escapeJsString(meta?.characterId || '')}'); }" class="w-full cursor-pointer rounded-lg border ${selected ? 'border-indigo-300 dark:border-indigo-700 bg-indigo-50/60 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30'} p-3 text-left hover:border-indigo-400 transition">
                         <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-center">
                             <div class="min-w-0">
                                 <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.situationName || item.situationId)}</p>
@@ -1236,7 +1287,7 @@ export function renderPlannerResultModal(meta) {
                     <p id="planner-result-selected-label" class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.'}</p>
                     <div class="flex items-center gap-2">
                         <button type="button" onclick="window.closePlannerResultModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
-                        <button type="button" onclick="window.startPlannerGeneration('${escapeJsString(item.situationId)}', { clearExisting: true })" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">다시 생성</button>
+                        <button type="button" onclick="window.startPlannerResultGeneration('${escapeJsString(item.situationId)}')" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">다시 생성</button>
                         <button id="planner-result-confirm-button" type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}', this)" ${item.selectedImage && !confirmBlocked ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
                     </div>
                 </div>
@@ -1311,7 +1362,7 @@ export function ensurePlannerOverlayRoot(id) {
 
 export function renderPlannerResultOverlay() {
     const root = ensurePlannerOverlayRoot('planner-result-overlay-root');
-    root.innerHTML = renderPlannerResultModal(window.PROJECT_PLANNER_META || null);
+    root.innerHTML = renderPlannerResultModal(getPlannerResultModalMeta());
     if (window.lucide) lucide.createIcons();
 }
 
@@ -1410,7 +1461,7 @@ export function syncPlannerResultModalSelection(item) {
     const label = document.getElementById('planner-result-selected-label');
     if (label) label.textContent = item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.';
     const confirmButton = document.getElementById('planner-result-confirm-button');
-    if (confirmButton) confirmButton.disabled = !item.selectedImage || window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(window.PROJECT_PLANNER_META || {}, item);
+    if (confirmButton) confirmButton.disabled = !item.selectedImage || window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(getPlannerResultModalMeta() || {}, item);
 }
 
 export function renderPlannerProgressPanel(meta) {
@@ -1586,7 +1637,7 @@ export function renderPlannerSituationGrid(project, situations, character, meta,
                     ? (selected ? '선택됨' : generatedCount ? `결과 ${generatedCount}` : '결과 없음')
                     : (complete ? '완료' : '미완료');
                 const clickAction = mode === 'result'
-                    ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}')` : `window.setPlannerStatus('이 상황에 저장된 플랜 결과가 없습니다.')`)
+                    ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id || '')}')` : `window.setPlannerStatus('이 상황에 저장된 플랜 결과가 없습니다.')`)
                     : `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}')`;
                 return `
                     <button type="button" onclick="${clickAction}" class="group min-h-[112px] rounded-lg border ${item ? 'border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'} p-3 text-left hover:border-indigo-400 transition">
@@ -1964,6 +2015,7 @@ export async function loadPlannerForSelectedCharacter() {
     const characterId = getSelectedPlannerCharacterId(project);
     window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = characterId;
     setCachedPlannerCharacterId(project, characterId);
+    window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
@@ -2007,18 +2059,26 @@ export function closePlannerSituationPlanModal(event) {
     renderPlannerSituationPlanOverlay();
 }
 
-export function openPlannerResultModal(situationId) {
+export async function openPlannerResultModal(situationId, characterId = '') {
+    const project = getActiveProject();
+    const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
+    window.PLANNER_RESULT_MODAL_CHARACTER_ID = targetCharacterId;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = situationId;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    if (project && targetCharacterId && !getPlannerMetaForCharacter(project, targetCharacterId)) {
+        const meta = await loadPlannerMeta(project, targetCharacterId, { force: true }).catch(() => null);
+        if (meta) setPlannerMetaForCharacter(project, meta);
+    }
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
-    const meta = window.PROJECT_PLANNER_META || null;
+    const meta = getPlannerMetaForCharacter(project, targetCharacterId);
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background' && meta?.backgroundJobId) {
         refreshPlannerBackgroundStatus(meta.backgroundJobId).catch(() => null);
     }
 }
 
 export function closePlannerResultModal() {
+    window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     renderPlannerResultOverlay();
@@ -3433,6 +3493,43 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
     await refreshPlannerBackgroundStatus(data.jobId);
 }
 
+export async function startPlannerResultGeneration(situationId = null) {
+    const project = getActiveProject();
+    const meta = getPlannerResultModalMeta(project);
+    if (!project || !meta?.items?.length) {
+        setPlannerStatus('다시 생성할 플랜을 찾을 수 없습니다.');
+        return;
+    }
+    if (window.PROJECT_PLANNER_GENERATION_MODE !== 'background') {
+        setPlannerStatus('다중 캐릭터 결과에서는 백그라운드 모드에서 다시 생성하세요.');
+        return;
+    }
+    const targetItems = getPlannerRunnableItems(meta, situationId, true);
+    if (!targetItems.length) {
+        setPlannerStatus('다시 생성할 플랜을 찾을 수 없습니다.');
+        return;
+    }
+    if (hasUnsupportedPlannerBackgroundReference(targetItems)) {
+        setPlannerStatus('백그라운드 생성은 아직 참조 이미지를 지원하지 않습니다. 브라우저 모드를 사용하세요.');
+        return;
+    }
+    if (!confirm('이 플랜의 기존 후보 이미지를 삭제하고 다시 생성하시겠습니까?')) return;
+    try {
+        await clearPlannerItemsImages(project, targetItems, meta);
+        const result = await startPlannerBackgroundRun(project, meta, targetItems, situationId);
+        if (result.data?.jobId) startPlannerBackgroundPolling(result.data.jobId);
+        setPlannerStatus('백그라운드 생성 작업을 등록했습니다.');
+        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+        window.PLANNER_IMAGE_PREVIEW_KEY = null;
+        renderPlannerResultOverlay();
+        renderPlannerPreviewOverlay();
+        renderPlannerSectionByState({ preserveScroll: true });
+        if (result.data?.jobId) await refreshPlannerBackgroundStatus(result.data.jobId).catch(() => null);
+    } catch (error) {
+        setPlannerStatus(error?.message || '다시 생성에 실패했습니다.');
+    }
+}
+
 export async function startPlannerGeneration(situationId = null, options = {}) {
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
         await startPlannerBackgroundGeneration(situationId, options);
@@ -3582,28 +3679,33 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
 
 export async function selectPlannerImage(key) {
     const project = getActiveProject();
-    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const meta = findPlannerMetaByImageKey(project, key);
     if (!project || !meta?.items) return;
     const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
     if (!item) return;
     item.selectedImage = key;
     meta.updatedAt = Date.now();
-    window.PROJECT_PLANNER_META = meta;
-    renderPlannerSectionByState();
+    setPlannerMetaForCharacter(project, meta);
+    syncPlannerResultModalSelection(item);
+    renderPlannerResultOverlay();
+    renderPlannerPreviewOverlay();
+    renderPlannerSectionByState({ preserveScroll: true });
 }
 
 export async function selectPlannerImageFromPreview(key) {
     const project = getActiveProject();
-    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const meta = findPlannerMetaByImageKey(project, key);
     if (!project || !meta?.items) return;
     const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
     if (!item) return;
     item.selectedImage = key;
     meta.updatedAt = Date.now();
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    window.PROJECT_PLANNER_META = meta;
+    setPlannerMetaForCharacter(project, meta);
     syncPlannerResultModalSelection(item);
+    renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
+    renderPlannerSectionByState({ preserveScroll: true });
 }
 
 export function buildPlannerMetadataFallback(item) {
@@ -3653,8 +3755,9 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
     if (confirmButton) confirmButton.disabled = true;
     try {
     const project = getActiveProject();
-    let meta = window.PROJECT_PLANNER_META || null;
-    if (!meta && project) meta = await loadPlannerMeta(project).catch(() => null);
+    const targetCharacterId = getPlannerResultModalCharacterId(project);
+    let meta = getPlannerMetaForCharacter(project, targetCharacterId);
+    if (!meta && project && targetCharacterId) meta = await loadPlannerMeta(project, targetCharacterId, { force: true }).catch(() => null);
     if (!project || !meta?.items?.length) {
         setPlannerStatus('확정할 플래너 데이터가 없습니다.');
         if (confirmButton) confirmButton.disabled = false;
@@ -3752,15 +3855,17 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
     meta.items = meta.items.filter(item => !selectedIds.has(item.situationId));
     meta.status = meta.items.length ? 'draft' : 'confirmed';
     meta.updatedAt = Date.now();
+    window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     if (meta.items.length) {
         await savePlannerMeta(project, meta);
-        window.PROJECT_PLANNER_META = meta;
+        setPlannerMetaForCharacter(project, meta);
         setPlannerStatus(`${selectedItems.length}개 플랜을 확정했습니다. 선택하지 않은 플랜은 남아 있습니다.`);
     } else {
-        await deletePlannerMeta(project);
-        window.PROJECT_PLANNER_META = null;
+        await deletePlannerMeta(project, meta.characterId);
+        updatePlannerQueueMetaCache(project, { ...meta, items: [] });
+        if (window.PROJECT_PLANNER_META?.characterId === meta.characterId) window.PROJECT_PLANNER_META = null;
         setPlannerStatus('선택한 플랜이 모두 확정되었습니다.');
     }
     await Promise.all(selectedItems.map(item => fetch('/api/manage', {
