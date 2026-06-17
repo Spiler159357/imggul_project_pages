@@ -850,7 +850,7 @@ async function deletePlannerV3SnapshotsForRun(env, runId) {
     ]);
 }
 
-export async function putPlannerV3RunFromMeta(env, meta = {}, options = {}) {
+export async function putPlannerV3RunFromMeta(env, meta = {}) {
     await ensurePlannerV3Schema(env);
     const projectId = String(meta.projectId || "").trim();
     const projectPrefix = String(meta.projectPrefix || "").trim();
@@ -919,12 +919,6 @@ export async function putPlannerV3RunFromMeta(env, meta = {}, options = {}) {
     ).bind(runId).all()).results || [];
     const existingItemBySituationId = new Map(existingItems.map(item => [item.situation_id, item.id]));
     const existingItemIds = new Set(existingItems.map(item => item.id));
-    const clearExistingItemIds = Array.isArray(options.clearExistingItemIds)
-        ? Array.from(new Set(options.clearExistingItemIds.map(id => String(id || "").trim()).filter(id => existingItemIds.has(id))))
-        : [];
-    if (clearExistingItemIds.length) {
-        await clearPlannerV3ItemsForRegeneration(env, clearExistingItemIds);
-    }
     const currentItemIds = [];
     for (const [index, item] of (meta.items || []).entries()) {
         const situationId = String(item.situationId || item.situation_id || "").trim() || makePlannerV3Id("sit");
@@ -1488,8 +1482,9 @@ export async function startPlannerV3Generation(env, body = {}) {
         return item.status !== "confirmed";
     });
     if (body.clearExisting === true) {
-        await clearPlannerV3ItemsForRegeneration(env, targetItems.map(item => item.id));
-        for (const item of targetItems) {
+        const clearItems = meta.items.filter(item => item.status !== "confirmed");
+        await clearPlannerV3ItemsForRegeneration(env, clearItems.map(item => item.id));
+        for (const item of clearItems) {
             item.images = [];
             item.generatedImages = [];
             item.selectedImage = null;

@@ -187,17 +187,13 @@ export async function savePlannerMeta(project, meta, options = {}) {
     const normalized = normalizePlannerStoredMeta(meta || {}, options);
     normalized.projectId = normalized.projectId || project?.id || '';
     normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
-    const clearExistingItemIds = Array.isArray(options.clearExistingItemIds)
-        ? options.clearExistingItemIds.filter(Boolean)
-        : [];
     const res = await fetch('/api/planner/v3/run?_t=' + Date.now(), {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
         },
         body: JSON.stringify({
-            data: normalized,
-            ...(clearExistingItemIds.length ? { clearExistingItemIds } : {})
+            data: normalized
         }),
         cache: 'no-store'
     });
@@ -2755,12 +2751,6 @@ async function clearPlannerItemsImages(project, items = [], meta = null) {
     for (const item of uniqueItems) {
         await clearPlannerItemImages(project, item);
     }
-    const clearExistingItemIds = uniqueItems.map(item => item.id).filter(Boolean);
-    if (meta?.id && clearExistingItemIds.length) {
-        await savePlannerMeta(project, meta, { clearExistingItemIds }).catch(error => {
-            throw new Error(error?.message || '기존 플래너 이미지 정리에 실패했습니다.');
-        });
-    }
 }
 
 export function startPlannerBackgroundPolling(jobId) {
@@ -3211,6 +3201,7 @@ async function startPlannerBackgroundRun(project, meta, targetItems, situationId
             runId: meta.id,
             targetSituationId: situationId || null,
             mode: 'background',
+            clearExisting: batch?.clearExisting === true,
             batchKey: batch?.key || '',
             batchIndex: batch?.index ?? 0
         })
@@ -3443,20 +3434,29 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
     meta.runningSituationIds = targetItems.map(item => item.situationId);
     meta.updatedAt = Date.now();
     window.PROJECT_PLANNER_VIEW = 'run';
-    await savePlannerMeta(project, meta, { preserveActiveStatus: true });
+    const useExistingRunForClear = clearExisting && !!meta.id;
+    if (!useExistingRunForClear) {
+        await savePlannerMeta(project, meta, { preserveActiveStatus: true });
+    }
     window.PROJECT_PLANNER_META = meta;
     renderPlannerSectionByState();
 
+    const startPayload = {
+        projectId: project.id,
+        projectPrefix: project.prefix,
+        targetSituationId: situationId || null,
+        mode: 'background',
+        clearExisting
+    };
+    if (useExistingRunForClear) {
+        startPayload.runId = meta.id;
+    } else {
+        startPayload.plannerMeta = meta;
+    }
     const res = await fetch('/api/planner/v3/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-            projectId: project.id,
-            projectPrefix: project.prefix,
-            targetSituationId: situationId || null,
-            mode: 'background',
-            plannerMeta: meta
-        })
+        body: JSON.stringify(startPayload)
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -3464,7 +3464,9 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
         setPlannerStatus(data.error || '백그라운드 생성 등록에 실패했습니다.');
         meta.status = 'failed';
         meta.updatedAt = Date.now();
-        await savePlannerMeta(project, meta).catch(() => null);
+        if (!useExistingRunForClear) {
+            await savePlannerMeta(project, meta).catch(() => null);
+        }
         window.PROJECT_PLANNER_META = meta;
         renderPlannerSectionByState();
         return;
@@ -3486,7 +3488,9 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
     meta.backgroundJobId = data.jobId;
     meta.status = data.status || 'queued';
     meta.updatedAt = Date.now();
-    await savePlannerMeta(project, meta);
+    if (!useExistingRunForClear) {
+        await savePlannerMeta(project, meta);
+    }
     window.PROJECT_PLANNER_META = meta;
     setPlannerStatus('백그라운드 생성 작업을 등록했습니다.');
     startPlannerBackgroundPolling(data.jobId);
@@ -3516,7 +3520,7 @@ export async function startPlannerResultGeneration(situationId = null) {
     if (!confirm('이 플랜의 기존 후보 이미지를 삭제하고 다시 생성하시겠습니까?')) return;
     try {
         await clearPlannerItemsImages(project, targetItems, meta);
-        const result = await startPlannerBackgroundRun(project, meta, targetItems, situationId);
+        const result = await startPlannerBackgroundRun(project, meta, targetItems, situationId, { clearExisting: true });
         if (result.data?.jobId) startPlannerBackgroundPolling(result.data.jobId);
         setPlannerStatus('백그라운드 생성 작업을 등록했습니다.');
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
@@ -3687,7 +3691,6 @@ export async function selectPlannerImage(key) {
     meta.updatedAt = Date.now();
     setPlannerMetaForCharacter(project, meta);
     syncPlannerResultModalSelection(item);
-    renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
     renderPlannerSectionByState({ preserveScroll: true });
 }
@@ -3703,7 +3706,6 @@ export async function selectPlannerImageFromPreview(key) {
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     setPlannerMetaForCharacter(project, meta);
     syncPlannerResultModalSelection(item);
-    renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
     renderPlannerSectionByState({ preserveScroll: true });
 }
