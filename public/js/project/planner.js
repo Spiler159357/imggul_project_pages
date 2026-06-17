@@ -3041,14 +3041,19 @@ export async function pausePlannerGeneration() {
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     window.PROJECT_PLANNER_PAUSE_REQUESTED = true;
     if (window.PROJECT_PLANNER_GENERATION_MODE !== 'background') {
+        const browserRunIds = new Set(window.PROJECT_PLANNER_BROWSER_RUN?.runningSituationIds || []);
         setPlannerBrowserRunState({ status: 'paused' });
         if (window.IS_GENERATING && window.cancelNaiGeneration) window.cancelNaiGeneration();
         if (meta) {
-            const browserRunIds = new Set(window.PROJECT_PLANNER_BROWSER_RUN?.runningSituationIds || []);
+            meta.status = 'paused';
+            meta.stage = 'paused';
+            meta.stageLabel = getPlannerStageLabel('paused');
+            delete meta.runningSituationIds;
             meta.items = (meta.items || []).map(item => browserRunIds.has(item.situationId) && !isPlannerItemTargetComplete(item, meta)
                 ? { ...item, status: 'paused', stage: '', stageLabel: '' }
                 : item
             );
+            meta.updatedAt = Date.now();
             window.PROJECT_PLANNER_META = meta;
             updatePlannerQueueMetaCache(project, meta);
         }
