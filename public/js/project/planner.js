@@ -3707,7 +3707,6 @@ export async function selectPlannerImageFromPreview(key) {
     setPlannerMetaForCharacter(project, meta);
     syncPlannerResultModalSelection(item);
     renderPlannerPreviewOverlay();
-    renderPlannerSectionByState({ preserveScroll: true });
 }
 
 export function buildPlannerMetadataFallback(item) {
