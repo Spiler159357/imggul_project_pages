@@ -623,6 +623,7 @@ function setPlannerMetaForCharacter(project, meta) {
 
 function getPlannerResultModalCharacterId(project = getActiveProject()) {
     return window.PLANNER_RESULT_MODAL_CHARACTER_ID
+        || window.PLANNER_IMAGE_PREVIEW_CONTEXT?.characterId
         || getSelectedPlannerCharacterId(project)
         || window.PROJECT_PLANNER_META?.characterId
         || '';
@@ -633,6 +634,11 @@ function getPlannerResultModalMeta(project = getActiveProject()) {
 }
 
 function findPlannerMetaByImageKey(project, key = '') {
+    const previewContext = window.PLANNER_IMAGE_PREVIEW_CONTEXT || {};
+    if (previewContext.key === key && previewContext.characterId) {
+        const contextMeta = getPlannerMetaForCharacter(project, previewContext.characterId);
+        if (contextMeta?.items?.some(item => Array.isArray(item.images) && item.images.includes(key))) return contextMeta;
+    }
     const modalMeta = getPlannerResultModalMeta(project);
     if (modalMeta?.items?.some(item => Array.isArray(item.images) && item.images.includes(key))) return modalMeta;
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
@@ -1307,7 +1313,7 @@ export function renderPlannerResultModal(meta) {
                             ${images.map(key => {
                                 const selected = item.selectedImage === key;
                                 return `
-                                    <button type="button" data-planner-image-key="${escapeHtml(key)}" onclick="window.openPlannerImagePreview('${escapeJsString(key)}')" class="relative aspect-square rounded-lg overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-800 hover:border-indigo-400 transition">
+                                    <button type="button" data-planner-image-key="${escapeHtml(key)}" onclick="window.openPlannerImagePreview('${escapeJsString(key)}', '${escapeJsString(meta?.characterId || '')}', '${escapeJsString(item.situationId || '')}')" class="relative aspect-square rounded-lg overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-800 hover:border-indigo-400 transition">
                                         <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="w-full h-full object-cover" loading="lazy">
                                         ${selected ? '<span data-planner-selected-badge class="absolute left-2 top-2 px-2 py-1 rounded bg-indigo-600 text-white text-[10px] font-bold">선택됨</span>' : ''}
                                     </button>
@@ -1330,7 +1336,7 @@ export function renderPlannerResultModal(meta) {
 }
 
 export function renderPlannerImagePreviewModal() {
-    const key = window.PLANNER_IMAGE_PREVIEW_KEY;
+    const key = window.PLANNER_IMAGE_PREVIEW_CONTEXT?.key || window.PLANNER_IMAGE_PREVIEW_KEY;
     if (!key) return '';
 
     return `
@@ -2053,6 +2059,7 @@ export async function loadPlannerForSelectedCharacter() {
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     window.PROJECT_PLANNER_RUN_CONFIRM = false;
     const character = getCharacterById(project, characterId);
@@ -2100,6 +2107,7 @@ export async function openPlannerResultModal(situationId, characterId = '') {
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = targetCharacterId;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = situationId;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     if (project && targetCharacterId && !getPlannerMetaForCharacter(project, targetCharacterId)) {
         const meta = await loadPlannerMeta(project, targetCharacterId, { force: true }).catch(() => null);
         if (meta) setPlannerMetaForCharacter(project, meta);
@@ -2116,18 +2124,25 @@ export function closePlannerResultModal() {
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     renderPlannerResultOverlay();
     renderPlannerPreviewOverlay();
 }
 
-export function openPlannerImagePreview(key) {
+export function openPlannerImagePreview(key, characterId = '', situationId = '') {
     window.PLANNER_IMAGE_PREVIEW_KEY = key;
+    window.PLANNER_IMAGE_PREVIEW_CONTEXT = {
+        key,
+        characterId: characterId || window.PLANNER_RESULT_MODAL_CHARACTER_ID || '',
+        situationId: situationId || window.PLANNER_RESULT_MODAL_SITUATION_ID || ''
+    };
     renderPlannerPreviewOverlay();
 }
 
 export function closePlannerImagePreview(event) {
     if (event && event.target?.id !== 'planner-image-preview-modal') return;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     renderPlannerPreviewOverlay();
 }
 
@@ -2653,6 +2668,7 @@ export async function deletePlannerItem(situationId) {
     if (window.PLANNER_RESULT_MODAL_SITUATION_ID === situationId) {
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
         window.PLANNER_IMAGE_PREVIEW_KEY = null;
+        window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     }
 
     await fetch('/api/manage', {
@@ -2700,6 +2716,7 @@ export async function deleteAllPlannerItems() {
     window.PROJECT_PLANNER_META = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     clearFolderDataCaches(getPlannerPrefix(project));
     updatePlannerQueueMetaCache(project, { ...meta, items: [] });
@@ -3134,14 +3151,13 @@ export async function resumePlannerGeneration() {
             resumeMeta.stageLabel = '';
             delete resumeMeta.runningSituationIds;
             resumeMeta.updatedAt = Date.now();
-            window.PROJECT_PLANNER_META = resumeMeta;
             updatePlannerQueueMetaCache(project, resumeMeta);
             setPlannerBrowserRunState({
                 status: 'running',
                 projectId: project.id,
                 characterId: resumeMeta.characterId || ''
             });
-            await startPlannerGeneration(null, { resume: true });
+            await startPlannerGeneration(null, { resume: true, meta: resumeMeta });
             if (window.PROJECT_PLANNER_BROWSER_RUN?.status === 'paused' || window.PROJECT_PLANNER_CANCEL_REQUESTED) break;
         }
         return;
@@ -3584,6 +3600,7 @@ export async function startPlannerResultGeneration(situationId = null) {
         setPlannerStatus('백그라운드 생성 작업을 등록했습니다.');
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
         window.PLANNER_IMAGE_PREVIEW_KEY = null;
+        window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
         renderPlannerResultOverlay();
         renderPlannerPreviewOverlay();
         renderPlannerSectionByState({ preserveScroll: true });
@@ -3605,14 +3622,17 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         return;
     }
 
-    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const explicitMeta = !!options.meta;
+    let meta = options.meta || window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!meta?.items?.length) {
         setPlannerStatus('먼저 플래너 초안을 생성하세요.');
         return;
     }
 
-    meta = readPlannerEditsFromDom(meta);
-    await persistPlannerGenerationToSituations(project, meta).catch(() => null);
+    if (!explicitMeta) {
+        meta = readPlannerEditsFromDom(meta);
+        await persistPlannerGenerationToSituations(project, meta).catch(() => null);
+    }
     const resumeRun = !!options.resume;
     const clearExisting = options.clearExisting === true && !resumeRun;
     const targetItems = situationId
@@ -3626,8 +3646,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         setPlannerStatus('기존 이미지를 정리하는 중...');
         await clearPlannerItemsImages(project, getPlannerClearableItems(meta), meta);
         meta.updatedAt = Date.now();
-        window.PROJECT_PLANNER_META = meta;
-        updatePlannerQueueMetaCache(project, meta);
+        setPlannerMetaForCharacter(project, meta);
         renderPlannerSectionByState({ preserveScroll: true });
     }
     meta.status = 'running';
@@ -3644,10 +3663,10 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     if (situationId) {
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
         window.PLANNER_IMAGE_PREVIEW_KEY = null;
+        window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     }
     await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-    window.PROJECT_PLANNER_META = meta;
-    updatePlannerQueueMetaCache(project, meta);
+    setPlannerMetaForCharacter(project, meta);
     renderPlannerSectionByState();
 
     const previousSettings = window.readCraftSettings ? window.readCraftSettings() : null;
@@ -3673,8 +3692,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
             applyPlannerSettingsToGeneration(generation, plannerSettings);
             item.generation = generation;
             await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-            window.PROJECT_PLANNER_META = meta;
-            updatePlannerQueueMetaCache(project, meta);
+            setPlannerMetaForCharacter(project, meta);
             renderPlannerSectionByState({ preserveScroll: true });
             setPlannerStatus(`${item.imageNumber}.webp 생성 중...`);
 
@@ -3712,8 +3730,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
                 : (isPlannerItemTargetComplete(item, meta) ? 'done' : 'failed');
             meta.updatedAt = Date.now();
             await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-            window.PROJECT_PLANNER_META = meta;
-            updatePlannerQueueMetaCache(project, meta);
+            setPlannerMetaForCharacter(project, meta);
             renderPlannerSectionByState({ preserveScroll: true });
             if (result.stopped) {
                 meta.status = window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'draft' : 'paused';
@@ -3725,8 +3742,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         delete meta.runningSituationIds;
         meta.updatedAt = Date.now();
         await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-        window.PROJECT_PLANNER_META = meta;
-        updatePlannerQueueMetaCache(project, meta);
+        setPlannerMetaForCharacter(project, meta);
         setPlannerStatus(meta.status);
     } finally {
         const browserRunStatus = window.PROJECT_PLANNER_BROWSER_RUN?.status;
@@ -3756,13 +3772,20 @@ export async function selectPlannerImage(key) {
 
 export async function selectPlannerImageFromPreview(key) {
     const project = getActiveProject();
-    const meta = findPlannerMetaByImageKey(project, key);
+    const previewContext = window.PLANNER_IMAGE_PREVIEW_CONTEXT || {};
+    const meta = previewContext.key === key && previewContext.characterId
+        ? getPlannerMetaForCharacter(project, previewContext.characterId)
+        : findPlannerMetaByImageKey(project, key);
     if (!project || !meta?.items) return;
-    const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
+    const item = previewContext.key === key && previewContext.situationId
+        ? getPlannerItemBySituationId(meta, previewContext.situationId)
+        : meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
+    if (item && (!Array.isArray(item.images) || !item.images.includes(key))) return;
     if (!item) return;
     item.selectedImage = key;
     meta.updatedAt = Date.now();
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     setPlannerMetaForCharacter(project, meta);
     syncPlannerResultModalSelection(item, key);
     renderPlannerPreviewOverlay();
@@ -3918,6 +3941,7 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
+    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     if (meta.items.length) {
         await savePlannerMeta(project, meta);
         setPlannerMetaForCharacter(project, meta);
