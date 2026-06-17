@@ -710,6 +710,26 @@ function isPlannerBrowserRunActive() {
     return ['running', 'paused'].includes(window.PROJECT_PLANNER_BROWSER_RUN?.status);
 }
 
+function getPlannerBrowserResumeEntries(project, fallbackMeta = null) {
+    const queueEntries = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
+    const entries = [...queueEntries];
+    if (fallbackMeta?.items?.length && !entries.some(entry => entry.meta === fallbackMeta || entry.meta?.characterId === fallbackMeta.characterId)) {
+        const character = getCharacterById(project, fallbackMeta.characterId)
+            || getCharacterById(project, fallbackMeta.characterPrefix)
+            || getCharacterById(project, getSelectedPlannerCharacterId(project));
+        entries.push({ character, meta: fallbackMeta });
+    }
+    const hasPausedItem = entry =>
+        entry.meta?.items?.some(item => item.status === 'paused' && !isPlannerItemTargetComplete(item, entry.meta));
+    const hasPausedRunRemainder = entry =>
+        entry.meta?.status === 'paused'
+        && entry.meta?.items?.some(item => isPlannerRunnableItem(item, entry.meta, true));
+    return [
+        ...entries.filter(hasPausedItem),
+        ...entries.filter(entry => !hasPausedItem(entry) && hasPausedRunRemainder(entry))
+    ];
+}
+
 function getPlannerItemGeneratedCount(item) {
     return Array.isArray(item?.images) ? item.images.length : 0;
 }
@@ -749,14 +769,17 @@ function buildPlannerRunGenerations(item, meta = {}, resumeRun = false) {
         : [{ count: clampPlannerImageCount(item.count || meta.defaultCount), generation: item.generation }];
     if (!resumeRun) return runs;
 
-    let remaining = Math.max(0, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item));
+    let generated = Math.max(0, getPlannerItemGeneratedCount(item));
     const resumedRuns = [];
     for (const run of runs) {
-        if (remaining <= 0) break;
         const originalCount = clampPlannerImageCount(run.count || item.count || meta.defaultCount);
-        const count = Math.min(originalCount, remaining);
+        if (generated >= originalCount) {
+            generated -= originalCount;
+            continue;
+        }
+        const count = originalCount - generated;
+        generated = 0;
         if (count > 0) resumedRuns.push({ ...run, count });
-        remaining -= count;
     }
     return resumedRuns;
 }
@@ -3097,15 +3120,30 @@ export async function resumePlannerGeneration() {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (window.PROJECT_PLANNER_GENERATION_MODE !== 'background') {
-        if (!meta?.items?.length) return;
-        meta.items = meta.items.map(item => item.status === 'paused' && !isPlannerItemTargetComplete(item, meta)
-            ? { ...item, status: 'pending', stage: '', stageLabel: '' }
-            : item
-        );
-        window.PROJECT_PLANNER_META = meta;
-        updatePlannerQueueMetaCache(project, meta);
-        setPlannerBrowserRunState({ status: 'running' });
-        await startPlannerGeneration(null, { resume: true });
+        const resumeEntries = getPlannerBrowserResumeEntries(project, meta);
+        if (!resumeEntries.length) return;
+        for (const entry of resumeEntries) {
+            const resumeMeta = entry?.meta;
+            if (!resumeMeta?.items?.some(item => isPlannerRunnableItem(item, resumeMeta, true))) continue;
+            resumeMeta.items = resumeMeta.items.map(item => item.status === 'paused' && !isPlannerItemTargetComplete(item, resumeMeta)
+                ? { ...item, status: 'pending', stage: '', stageLabel: '' }
+                : item
+            );
+            resumeMeta.status = 'draft';
+            resumeMeta.stage = '';
+            resumeMeta.stageLabel = '';
+            delete resumeMeta.runningSituationIds;
+            resumeMeta.updatedAt = Date.now();
+            window.PROJECT_PLANNER_META = resumeMeta;
+            updatePlannerQueueMetaCache(project, resumeMeta);
+            setPlannerBrowserRunState({
+                status: 'running',
+                projectId: project.id,
+                characterId: resumeMeta.characterId || ''
+            });
+            await startPlannerGeneration(null, { resume: true });
+            if (window.PROJECT_PLANNER_BROWSER_RUN?.status === 'paused' || window.PROJECT_PLANNER_CANCEL_REQUESTED) break;
+        }
         return;
     }
     const backgroundEntries = await getPlannerBackgroundControlEntries(project, ['paused']);
