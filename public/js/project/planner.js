@@ -517,9 +517,14 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
     const jobs = store.jobs || {};
     const previous = jobs[jobId] || {};
     let samples = getPlannerBackgroundEtaSamples(store);
+    const canRecordSample = status.status === 'running';
+    const previousCompleted = Number(previous.completedCount);
+    const hasPreviousCompleted = Number.isFinite(previousCompleted);
+    const completedChanged = hasPreviousCompleted && completed !== previousCompleted;
+    const completedIncreased = hasPreviousCompleted && completed > previousCompleted;
 
-    if (Number.isFinite(previous.completedCount) && completed > previous.completedCount && previous.observedAt) {
-        const deltaCount = completed - previous.completedCount;
+    if (canRecordSample && previous.sampleReady && completedIncreased && previous.observedAt) {
+        const deltaCount = completed - previousCompleted;
         const observedMs = Math.max(0, now - Number(previous.observedAt || now));
         const observedAverageMs = observedMs / deltaCount;
         if (Number.isFinite(observedAverageMs) && observedAverageMs >= 1000 && observedAverageMs <= 10 * 60 * 1000) {
@@ -530,10 +535,19 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
     const averageMs = getPlannerBackgroundEtaAverage(samples, store.averageMs);
     const sampleCount = samples.length;
 
-    if (!Number.isFinite(previous.completedCount) || completed > previous.completedCount || completed < previous.completedCount) {
-        jobs[jobId] = { completedCount: completed, observedAt: now };
+    if (!hasPreviousCompleted || completedChanged) {
+        jobs[jobId] = {
+            completedCount: completed,
+            observedAt: canRecordSample ? now : previous.observedAt,
+            sampleReady: canRecordSample && completed > 0,
+            status: status.status
+        };
     } else {
-        jobs[jobId] = previous;
+        jobs[jobId] = {
+            ...previous,
+            status: status.status,
+            sampleReady: Boolean(previous.sampleReady) && canRecordSample && completed > 0
+        };
     }
     writePlannerBackgroundEtaStore({
         ...store,
