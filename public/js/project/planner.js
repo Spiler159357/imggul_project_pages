@@ -1430,17 +1430,19 @@ export function updatePlannerPlanModalDefaults(scope = 'all') {
     if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
 }
 
-export function syncPlannerResultModalSelection(item) {
+export function syncPlannerResultModalSelection(item, selectedKey = item?.selectedImage || '') {
     const modal = document.getElementById('planner-result-modal');
     if (!modal || !item) return;
 
     modal.querySelectorAll('[data-planner-image-key]').forEach(button => {
-        const selected = button.dataset.plannerImageKey === item.selectedImage;
+        const imageKey = button.getAttribute('data-planner-image-key') || button.dataset.plannerImageKey || '';
+        const selected = imageKey === selectedKey;
         button.classList.toggle('border-indigo-500', selected);
         button.classList.toggle('ring-2', selected);
         button.classList.toggle('ring-indigo-500', selected);
         button.classList.toggle('border-gray-200', !selected);
         button.classList.toggle('dark:border-gray-700', !selected);
+        button.setAttribute('aria-pressed', selected ? 'true' : 'false');
 
         let badge = button.querySelector('[data-planner-selected-badge]');
         if (selected && !badge) {
@@ -1455,9 +1457,9 @@ export function syncPlannerResultModalSelection(item) {
     });
 
     const label = document.getElementById('planner-result-selected-label');
-    if (label) label.textContent = item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.';
+    if (label) label.textContent = selectedKey ? `선택 이미지: ${getFileNameFromKey(selectedKey)}` : '이미지를 클릭해 선택하세요.';
     const confirmButton = document.getElementById('planner-result-confirm-button');
-    if (confirmButton) confirmButton.disabled = !item.selectedImage || window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(getPlannerResultModalMeta() || {}, item);
+    if (confirmButton) confirmButton.disabled = !selectedKey || window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(getPlannerResultModalMeta() || {}, item);
 }
 
 export function renderPlannerProgressPanel(meta) {
@@ -3690,7 +3692,7 @@ export async function selectPlannerImage(key) {
     item.selectedImage = key;
     meta.updatedAt = Date.now();
     setPlannerMetaForCharacter(project, meta);
-    syncPlannerResultModalSelection(item);
+    syncPlannerResultModalSelection(item, key);
     renderPlannerPreviewOverlay();
     renderPlannerSectionByState({ preserveScroll: true });
 }
@@ -3705,7 +3707,7 @@ export async function selectPlannerImageFromPreview(key) {
     meta.updatedAt = Date.now();
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     setPlannerMetaForCharacter(project, meta);
-    syncPlannerResultModalSelection(item);
+    syncPlannerResultModalSelection(item, key);
     renderPlannerPreviewOverlay();
 }
 
