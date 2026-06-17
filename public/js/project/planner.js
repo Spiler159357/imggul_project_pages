@@ -427,7 +427,10 @@ function getPlannerQueueSummary(queueMetas = []) {
     const entries = getPlannerQueueItems(queueMetas);
     const totalImages = entries.reduce((sum, entry) => sum + clampPlannerImageCount(entry.item.count), 0);
     const completedImages = entries.reduce((sum, entry) => sum + (Array.isArray(entry.item.images) ? entry.item.images.length : 0), 0);
-    const active = queueMetas.some(entry => isPlannerActiveStatus(entry.meta.status));
+    const active = queueMetas.some(entry =>
+        isPlannerActiveStatus(entry.meta.status)
+        || isPlannerActiveStatus(entry.meta.backgroundStatus?.status)
+    );
     const paused = !active && queueMetas.some(entry => isPlannerResumableStatus(entry.meta.status));
     const failed = entries.reduce((sum, entry) => sum + getPlannerItemFailedCount(entry.item), 0);
     return {
@@ -443,9 +446,24 @@ function getPlannerQueueSummary(queueMetas = []) {
 }
 
 function getPlannerQueueEta(queueMetas = []) {
-    return queueMetas
-        .map(entry => entry.meta?.backgroundStatus?.eta || entry.meta?.eta || null)
-        .find(eta => eta && Number(eta.remainingMs) >= 0 && eta.remainingText);
+    const summary = getPlannerQueueSummary(queueMetas);
+    if (!summary.totalItems || !summary.active) return null;
+    const remainingCount = Math.max(0, summary.totalImages - summary.completedImages - summary.failed);
+    const store = readPlannerBackgroundEtaStore();
+    const samples = getPlannerBackgroundEtaSamples(store);
+    const averageMs = getPlannerBackgroundEtaAverage(samples, store.averageMs);
+    const sampleCount = samples.length;
+    const remainingMs = Math.round(remainingCount * averageMs);
+    return {
+        source: 'browser_observed_background_queue',
+        basis: sampleCount ? 'completed_average' : 'fallback',
+        averageMs,
+        sampleCount,
+        remainingCount,
+        remainingMs,
+        remainingText: formatPlannerDuration(remainingMs),
+        generatedAt: new Date().toISOString()
+    };
 }
 
 function renderPlannerEtaBadge(eta) {
@@ -1994,17 +2012,15 @@ export async function refreshPlannerPanel() {
     window.PROJECT_PLANNER_META = meta;
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, characters, { force: true }).catch(() => meta ? [{ character, meta }] : []);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
-    let refreshedActiveStatus = false;
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
-        (window.PROJECT_PLANNER_QUEUE_METAS || []).forEach(entry => {
-            if (entry.meta?.backgroundJobId && isPlannerActiveStatus(entry.meta.status)) {
-                startPlannerBackgroundPolling(entry.meta.backgroundJobId);
-                if (!refreshedActiveStatus) {
-                    refreshedActiveStatus = true;
-                    refreshPlannerBackgroundStatus(entry.meta.backgroundJobId).catch(() => null);
-                }
-            }
-        });
+        const activeJobIds = (window.PROJECT_PLANNER_QUEUE_METAS || [])
+            .filter(entry => isPlannerActiveStatus(entry.meta?.status) || isPlannerActiveStatus(entry.meta?.backgroundStatus?.status))
+            .map(entry => entry.meta?.backgroundJobId)
+            .filter((jobId, index, jobIds) => jobId && index === jobIds.indexOf(jobId));
+        if (activeJobIds.length) {
+            startPlannerBackgroundPolling(activeJobIds);
+            refreshPlannerBackgroundStatus(activeJobIds[0]).catch(() => null);
+        }
     }
     renderPlannerSectionByState({ preserveScroll: true });
 }
