@@ -14,6 +14,7 @@ const DEFAULT_PLANNER_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic,
 const plannerMetaMemoryCache = new Map();
 const plannerBackgroundPollInFlight = new Map();
 let plannerBackgroundPollScheduleId = 0;
+let plannerScrollRestoreId = 0;
 
 function clonePlannerMetaValue(meta) {
     if (!meta) return meta;
@@ -871,23 +872,66 @@ function getPlannerScrollElement() {
 }
 
 function capturePlannerScrollState() {
-    const main = getPlannerScrollElement();
-    const shell = document.querySelector('#main-project-content .overflow-y-auto');
+    const scrollPositions = {};
+    document.querySelectorAll('#main-project-content [data-planner-scroll]').forEach(element => {
+        const key = element.getAttribute('data-planner-scroll');
+        if (!key) return;
+        scrollPositions[key] = {
+            top: element.scrollTop || 0,
+            left: element.scrollLeft || 0
+        };
+    });
+    const activeElement = document.activeElement;
+    const activeElementId = activeElement?.id || '';
+    const selection = activeElementId && typeof activeElement.selectionStart === 'number'
+        ? {
+            start: activeElement.selectionStart,
+            end: activeElement.selectionEnd,
+            direction: activeElement.selectionDirection
+        }
+        : null;
     return {
-        mainTop: main?.scrollTop || 0,
-        shellTop: shell?.scrollTop || 0,
+        scrollPositions,
+        activeElementId,
+        selection,
         view: window.PROJECT_PLANNER_VIEW || 'plan'
     };
 }
 
 function restorePlannerScrollState(state) {
     if (!state || state.view !== (window.PROJECT_PLANNER_VIEW || 'plan')) return;
+    const restoreId = ++plannerScrollRestoreId;
+    const apply = () => {
+        if (
+            restoreId !== plannerScrollRestoreId
+            || state.view !== (window.PROJECT_PLANNER_VIEW || 'plan')
+        ) return;
+        Object.entries(state.scrollPositions || {}).forEach(([key, position]) => {
+            const element = document.querySelector(`#main-project-content [data-planner-scroll="${key}"]`);
+            if (!element) return;
+            element.scrollTop = Number(position?.top || 0);
+            element.scrollLeft = Number(position?.left || 0);
+        });
+        if (state.activeElementId) {
+            const activeElement = document.getElementById(state.activeElementId);
+            if (activeElement && document.activeElement !== activeElement) {
+                activeElement.focus({ preventScroll: true });
+                if (state.selection && typeof activeElement.setSelectionRange === 'function') {
+                    activeElement.setSelectionRange(
+                        state.selection.start,
+                        state.selection.end,
+                        state.selection.direction || 'none'
+                    );
+                }
+            }
+        }
+    };
+    apply();
     requestAnimationFrame(() => {
-        const main = getPlannerScrollElement();
-        const shell = document.querySelector('#main-project-content .overflow-y-auto');
-        if (main) main.scrollTop = state.mainTop || 0;
-        if (shell) shell.scrollTop = state.shellTop || 0;
+        apply();
+        requestAnimationFrame(apply);
     });
+    setTimeout(apply, 100);
 }
 
 export function readPlannerEditsFromDom(meta) {
@@ -1888,7 +1932,7 @@ export function renderPlannerPanel(project, situations) {
     `;
 
     const planRows = meta?.items?.length ? `
-        <div class="space-y-3 overflow-y-auto pr-1">
+        <div class="space-y-3 pr-1">
             ${meta.items.map(item => `
                 <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
                     <div class="flex items-center justify-between gap-3 mb-3">
@@ -2001,7 +2045,7 @@ export function renderPlannerPanel(project, situations) {
                 ${modeButton('run', '실행 화면', 'play')}
                 ${modeButton('result', '결과 확인', 'images')}
             </div>
-            <div data-planner-scroll="main" class="min-h-0 flex-1 overflow-y-auto pr-1">
+            <div data-planner-scroll="main" class="min-h-0 flex-1 overflow-y-auto pr-1" style="overflow-anchor: none;">
                 ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
             </div>
             ${renderPlannerSettingsModal(settings)}
@@ -2013,10 +2057,11 @@ export function renderPlannerSection(section, state = {}) {
     const project = getActiveProject();
     const situations = getProjectItems(project, 'situations');
     const scrollState = state.preserveScroll ? capturePlannerScrollState() : null;
+    if (!scrollState) plannerScrollRestoreId += 1;
 
     renderProjectShell(`
         ${renderSectionHeader(section.title)}
-        <div class="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0">
+        <div data-planner-scroll="shell" class="flex-1 overflow-y-auto p-4 sm:p-6 min-h-0" style="overflow-anchor: none;">
             <section class="h-full min-h-0">
                 ${state.loading ? renderEmptyState('플래너 데이터를 불러오는 중입니다.') : ''}
                 ${state.error ? renderEmptyState(state.error) : ''}
