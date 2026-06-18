@@ -1929,7 +1929,7 @@ export async function onRequest(context) {
             });
             return jsonResponse({ success: true, data });
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return jsonResponse({ error: e.message, code: e.code || undefined }, { status: e.status || 500 });
         }
     }
 
@@ -1952,7 +1952,7 @@ export async function onRequest(context) {
             const data = await putPlannerV3RunFromMeta(env, { ...(body?.data || body || {}), id: decodeURIComponent(plannerV3RunMatch[1]) });
             return jsonResponse({ success: true, data });
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return jsonResponse({ error: e.message, code: e.code || undefined }, { status: e.status || 500 });
         }
     }
 
@@ -1996,7 +1996,7 @@ export async function onRequest(context) {
             return jsonResponse(data);
         } catch (e) {
             await writeBackgroundErrorLog(env, e, { route: path, method, stage: "planner_v3_start_api" });
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return jsonResponse({ error: e.message, code: e.code || undefined }, { status: e.status || 500 });
         }
     }
 

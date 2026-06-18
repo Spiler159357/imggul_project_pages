@@ -31,6 +31,9 @@ const STAGE_LABELS = {
 export function jsonResponse(data, init = {}) {
     const headers = new Headers(init.headers || {});
     headers.set("Content-Type", "application/json; charset=utf-8");
+    headers.set("Cache-Control", "no-store, no-cache, must-revalidate");
+    headers.set("Pragma", "no-cache");
+    headers.set("Expires", "0");
     return new Response(JSON.stringify(data), { ...init, headers });
 }
 
@@ -888,6 +891,25 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
     const runId = existing?.id || makePlannerV3Id("prun");
     const defaultCount = Math.max(1, asInt(meta.defaultCount, 20));
 
+    if (existing?.id) {
+        const activeGenerationRow = await env.DB.prepare(`
+            SELECT id FROM planner_v3_jobs
+            WHERE run_id = ?
+              AND status IN ('queued', 'running', 'paused', 'cancel_requested')
+            LIMIT 1
+        `).bind(runId).first();
+        if (activeGenerationRow?.id) {
+            return getPlannerV3RunById(env, runId);
+        }
+        const expectedUpdatedAt = String(meta.serverUpdatedAt || "").trim();
+        if (expectedUpdatedAt && expectedUpdatedAt !== existing.updated_at) {
+            const error = new Error("Planner run was updated by another process. Reload and try again.");
+            error.status = 409;
+            error.code = "PLANNER_VERSION_CONFLICT";
+            throw error;
+        }
+    }
+
     await bindPlannerV3(env.DB.prepare(`
         INSERT INTO planner_v3_runs (
             id, project_id, project_prefix, character_id, character_prefix, status, mode,
@@ -924,16 +946,6 @@ export async function putPlannerV3RunFromMeta(env, meta = {}) {
         existing?.started_at || null,
         existing?.completed_at || null
     ).run();
-
-    const activeGenerationRow = await env.DB.prepare(`
-        SELECT id FROM planner_v3_jobs
-        WHERE run_id = ?
-          AND status IN ('queued', 'running', 'paused', 'cancel_requested')
-        LIMIT 1
-    `).bind(runId).first();
-    if (activeGenerationRow?.id) {
-        return getPlannerV3RunById(env, runId);
-    }
 
     await deletePlannerV3SnapshotsForRun(env, runId);
 
@@ -1079,6 +1091,28 @@ export async function putPlannerV3ItemFromMeta(env, input = {}) {
     ).bind(projectId, characterId).first();
     const runId = existing?.id || makePlannerV3Id("prun");
     const defaultCount = Math.max(1, asInt(meta.defaultCount || item.count, 20));
+
+    if (existing?.id) {
+        const activeGenerationRow = await env.DB.prepare(`
+            SELECT id FROM planner_v3_jobs
+            WHERE run_id = ?
+              AND status IN ('queued', 'running', 'paused', 'cancel_requested')
+            LIMIT 1
+        `).bind(runId).first();
+        if (activeGenerationRow?.id) {
+            const error = new Error("Cannot update planner item while a generation job is active");
+            error.status = 409;
+            throw error;
+        }
+        const expectedUpdatedAt = String(meta.serverUpdatedAt || "").trim();
+        if (expectedUpdatedAt && expectedUpdatedAt !== existing.updated_at) {
+            const error = new Error("Planner run was updated by another process. Reload and try again.");
+            error.status = 409;
+            error.code = "PLANNER_VERSION_CONFLICT";
+            throw error;
+        }
+    }
+
     await bindPlannerV3(env.DB.prepare(`
         INSERT INTO planner_v3_runs (
             id, project_id, project_prefix, character_id, character_prefix, status, mode,
@@ -1111,16 +1145,6 @@ export async function putPlannerV3ItemFromMeta(env, input = {}) {
         existing?.started_at || null,
         existing?.completed_at || null
     ).run();
-
-    const activeGenerationRow = await env.DB.prepare(`
-        SELECT id FROM planner_v3_jobs
-        WHERE run_id = ?
-          AND status IN ('queued', 'running', 'paused', 'cancel_requested')
-        LIMIT 1
-    `).bind(runId).first();
-    if (activeGenerationRow?.id) {
-        throw new Error("Cannot update planner item while a generation job is active");
-    }
 
     const situationId = String(item.situationId || item.situation_id || "").trim() || makePlannerV3Id("sit");
     const existingItem = await env.DB.prepare(
@@ -1232,7 +1256,8 @@ export async function putPlannerV3ItemFromMeta(env, input = {}) {
     return {
         success: true,
         runId,
-        itemId
+        itemId,
+        run: await getPlannerV3RunById(env, runId)
     };
 }
 
@@ -1337,11 +1362,15 @@ export async function getPlannerV3RunById(env, runId) {
         status: run.status,
         mode: run.mode,
         defaultCount: run.default_count,
-        backgroundJobId: run.active_job_id || undefined,
+        backgroundJobId: ["queued", "running", "paused"].includes(run.status)
+            ? (run.active_job_id || undefined)
+            : undefined,
         runningSituationIds: parseJson(run.running_situation_ids_json, []),
         stage: run.stage || "",
         stageLabel: run.stage_label || "",
         errorMessage: run.error_message || "",
+        updatedAt: run.updated_at || "",
+        serverUpdatedAt: run.updated_at || "",
         items: await Promise.all(items.map(item => plannerV3ItemToClient(env, item, assetsByItem.get(item.id) || [])))
     };
 }
@@ -1371,6 +1400,7 @@ async function plannerV3ItemToClient(env, row, assets = []) {
         stage: row.stage || "",
         stageLabel: row.stage_label || "",
         errorMessage: row.error_message || "",
+        updatedAt: row.updated_at || "",
         generation,
         images: assets.length ? assets.map(asset => asset.r2_key) : fallbackImages,
         generatedImages: assets.length ? assets.map(asset => ({
@@ -1629,6 +1659,7 @@ export async function getPlannerV3Status(env, jobId) {
         stage: job.stage || "",
         stageLabel: job.stage_label || "",
         errorMessage: job.error_message || "",
+        updatedAt: job.updated_at || "",
         items: tasks.map(task => {
             const itemAssets = assetsByItem.get(task.item_id) || [];
             return {
@@ -1644,6 +1675,7 @@ export async function getPlannerV3Status(env, jobId) {
                 stage: task.stage || "",
                 stageLabel: task.stage_label || "",
                 errorMessage: task.error_message || "",
+                updatedAt: task.updated_at || "",
                 resultKeys: itemAssets.map(asset => asset.r2_key),
                 generatedImages: itemAssets.map(asset => ({
                     id: asset.id,
@@ -1846,7 +1878,15 @@ async function rollupPlannerV3Job(env, jobId) {
         env.DB.prepare("UPDATE planner_v3_jobs SET status = ?, stage = ?, stage_label = ?, completed_at = ?, updated_at = ? WHERE id = ?").bind(status, status, status === "completed" ? "Completed" : "Partial failed", timestamp, timestamp, jobId),
         env.DB.prepare("UPDATE planner_v3_job_tasks SET status = CASE WHEN failed_count > 0 THEN 'partial_failed' ELSE 'completed' END, completed_at = ?, updated_at = ? WHERE job_id = ?").bind(timestamp, timestamp, jobId),
         env.DB.prepare("UPDATE planner_v3_items SET status = CASE WHEN failed_count > 0 THEN 'partial_failed' ELSE 'complete' END, completed_at = ?, updated_at = ? WHERE id IN (SELECT item_id FROM planner_v3_job_tasks WHERE job_id = ?)").bind(timestamp, timestamp, jobId),
-        env.DB.prepare("UPDATE planner_v3_runs SET status = ?, completed_at = ?, updated_at = ? WHERE id = ?").bind(failed ? "partial_failed" : "complete", timestamp, timestamp, job.run_id)
+        env.DB.prepare(`
+            UPDATE planner_v3_runs
+            SET status = ?,
+                active_job_id = NULL,
+                running_situation_ids_json = '[]',
+                completed_at = ?,
+                updated_at = ?
+            WHERE id = ?
+        `).bind(failed ? "partial_failed" : "complete", timestamp, timestamp, job.run_id)
     ]);
     await enqueueNextPlannerV3BatchJob(env, { ...job, status });
 }
