@@ -6,6 +6,7 @@ const MAX_ATTEMPTS = 5;
 const NAI_MIN_REQUEST_INTERVAL_MS = 10000;
 const MAX_INLINE_COOLDOWN_MS = 30000;
 const R2_PUT_MAX_ATTEMPTS = 4;
+const NOVELAI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000;
 const TERMINAL_JOB_RETENTION_MS = 10 * 60 * 1000;
 const TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "paused"];
 const ACTIVE_JOB_STATUSES = ["queued", "running", "cancel_requested"];
@@ -342,27 +343,41 @@ async function queryFirst(db, sql, ...params) {
 }
 
 async function callNovelAi(env, payload) {
-    const res = await fetch(NAI_ENDPOINT, {
-        method: "POST",
-        headers: {
-            "Authorization": `Bearer ${env.NOVELAI_TOKEN}`,
-            "Content-Type": "application/json",
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-            "Accept": "application/x-zip-compressed",
-            "Origin": "https://novelai.net",
-            "Referer": "https://novelai.net/"
-        },
-        body: JSON.stringify(payload)
-    });
-    if (!res.ok) {
-        const text = await res.text();
-        const error = new Error(`[NovelAI ${res.status}] ${text}`);
-        error.status = res.status;
-        const retryAfter = Number.parseInt(res.headers.get("Retry-After") || "", 10);
-        if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfterSeconds = retryAfter;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), NOVELAI_REQUEST_TIMEOUT_MS);
+    try {
+        const res = await fetch(NAI_ENDPOINT, {
+            method: "POST",
+            headers: {
+                "Authorization": `Bearer ${env.NOVELAI_TOKEN}`,
+                "Content-Type": "application/json",
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+                "Accept": "application/x-zip-compressed",
+                "Origin": "https://novelai.net",
+                "Referer": "https://novelai.net/"
+            },
+            body: JSON.stringify(payload),
+            signal: controller.signal
+        });
+        if (!res.ok) {
+            const text = await res.text();
+            const error = new Error(`[NovelAI ${res.status}] ${text}`);
+            error.status = res.status;
+            const retryAfter = Number.parseInt(res.headers.get("Retry-After") || "", 10);
+            if (Number.isFinite(retryAfter) && retryAfter > 0) error.retryAfterSeconds = retryAfter;
+            throw error;
+        }
+        return await res.arrayBuffer();
+    } catch (error) {
+        if (error?.name === "AbortError") {
+            const timeoutError = new Error(`NovelAI request timed out after ${Math.round(NOVELAI_REQUEST_TIMEOUT_MS / 1000)} seconds`);
+            timeoutError.code = "NOVELAI_REQUEST_TIMEOUT";
+            throw timeoutError;
+        }
         throw error;
+    } finally {
+        clearTimeout(timeoutId);
     }
-    return await res.arrayBuffer();
 }
 
 function isNovelAiRateLimitError(error) {
@@ -544,8 +559,7 @@ export async function resumePlannerBackgroundJob(env, jobId) {
 
 export async function processPlannerQueueMessage(env, message) {
     if (message?.plannerV3) {
-        await processPlannerV3QueueMessage(env, message);
-        return;
+        return await processPlannerV3QueueMessage(env, message);
     }
     throw new Error("Legacy planner background queue is disabled. Use Planner V3 queue messages.");
 }
@@ -555,6 +569,9 @@ const PLANNER_V3_ACTIVE_JOB_STATUSES = ["queued", "running", "paused", "cancel_r
 const PLANNER_V3_TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "cancelled"];
 const CONFIRM_RETENTION_MS = 24 * 60 * 60 * 1000;
 const BROWSER_QUEUE_LEASE_MS = 5 * 60 * 1000;
+const PLANNER_V3_BACKGROUND_LEASE_MS = 3 * 60 * 1000;
+const PLANNER_V3_HEARTBEAT_MS = 30 * 1000;
+const PLANNER_V3_RECOVERY_LIMIT = 50;
 const PLANNER_V3_BATCH_KEY_PREFIX = "batch:";
 
 function nowPlannerV3Iso() {
@@ -778,6 +795,12 @@ export async function ensurePlannerV3Schema(env) {
     ).first();
     if (!snapshotRow?.name) {
         throw new Error("Planner V3 generation snapshot schema is not installed. Run migrations/0016_planner_v3_simplify_generation_snapshots.sql first.");
+    }
+    const queueStageColumn = await env.DB.prepare(
+        "SELECT name FROM pragma_table_info('planner_v3_queue') WHERE name = 'stage'"
+    ).first();
+    if (!queueStageColumn?.name) {
+        throw new Error("Planner V3 queue recovery schema is not installed. Run migrations/0017_planner_v3_queue_recovery.sql first.");
     }
 }
 
@@ -1971,6 +1994,135 @@ async function enqueueNextPlannerV3QueueMessage(env, jobId) {
     return true;
 }
 
+function getPlannerV3LeaseRetryDelaySeconds(leaseExpiresAt = "") {
+    const leaseTime = Date.parse(String(leaseExpiresAt || ""));
+    if (!Number.isFinite(leaseTime)) return 15;
+    return Math.max(1, Math.min(300, Math.ceil((leaseTime - Date.now()) / 1000) + 1));
+}
+
+function makePlannerV3LeaseLostError(queue, stage, cause = null) {
+    const error = new Error(`Planner queue lease lost during ${stage}`);
+    error.code = "PLANNER_V3_LEASE_LOST";
+    error.stage = stage;
+    error.queueId = queue?.id || "";
+    error.cause = cause || undefined;
+    return error;
+}
+
+async function insertPlannerV3Event(env, queue, eventType, status, stage, message, data = {}) {
+    await env.DB.prepare(`
+        INSERT INTO planner_v3_events (
+            id, run_id, item_id, job_id, task_id, queue_id,
+            event_type, status, stage, message, data_json, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).bind(
+        makePlannerV3Id("pevent"),
+        queue?.run_id || null,
+        queue?.item_id || null,
+        queue?.job_id || null,
+        queue?.task_id || null,
+        queue?.id || null,
+        eventType,
+        status || "",
+        stage || "",
+        message || "",
+        JSON.stringify(data || {}),
+        nowPlannerV3Iso()
+    ).run();
+}
+
+async function updatePlannerV3QueueStage(env, queue, stage, stageLabel) {
+    const timestamp = nowPlannerV3Iso();
+    const result = await env.DB.prepare(`
+        UPDATE planner_v3_queue
+        SET stage = ?,
+            stage_label = ?,
+            stage_started_at = ?,
+            lease_expires_at = ?,
+            last_heartbeat_at = ?,
+            updated_at = ?
+        WHERE id = ?
+          AND status = 'running'
+          AND claim_token = ?
+    `).bind(
+        stage,
+        stageLabel,
+        timestamp,
+        futurePlannerV3Iso(PLANNER_V3_BACKGROUND_LEASE_MS),
+        timestamp,
+        timestamp,
+        queue.id,
+        queue.claim_token
+    ).run();
+    if (Number(result.meta?.changes || 0) !== 1) {
+        throw makePlannerV3LeaseLostError(queue, stage);
+    }
+    await env.DB.batch([
+        env.DB.prepare("UPDATE planner_v3_jobs SET stage = ?, stage_label = ?, updated_at = ? WHERE id = ? AND status = 'running'")
+            .bind(stage, stageLabel, timestamp, queue.job_id),
+        env.DB.prepare("UPDATE planner_v3_job_tasks SET stage = ?, stage_label = ?, updated_at = ? WHERE id = ? AND status = 'running'")
+            .bind(stage, stageLabel, timestamp, queue.task_id),
+        env.DB.prepare("UPDATE planner_v3_items SET stage = ?, stage_label = ?, updated_at = ? WHERE id = ? AND status = 'running'")
+            .bind(stage, stageLabel, timestamp, queue.item_id),
+        env.DB.prepare("UPDATE planner_v3_runs SET stage = ?, stage_label = ?, updated_at = ? WHERE id = ? AND status = 'running'")
+            .bind(stage, stageLabel, timestamp, queue.run_id)
+    ]);
+    await insertPlannerV3Event(env, queue, "stage_changed", "running", stage, stageLabel).catch(() => null);
+}
+
+async function renewPlannerV3QueueLease(env, queue) {
+    const timestamp = nowPlannerV3Iso();
+    const result = await env.DB.prepare(`
+        UPDATE planner_v3_queue
+        SET lease_expires_at = ?,
+            last_heartbeat_at = ?,
+            updated_at = ?
+        WHERE id = ?
+          AND status = 'running'
+          AND claim_token = ?
+    `).bind(
+        futurePlannerV3Iso(PLANNER_V3_BACKGROUND_LEASE_MS),
+        timestamp,
+        timestamp,
+        queue.id,
+        queue.claim_token
+    ).run();
+    return Number(result.meta?.changes || 0) === 1;
+}
+
+function startPlannerV3LeaseHeartbeat(env, queue) {
+    let stopped = false;
+    let renewing = false;
+    let heartbeatError = null;
+    const renew = async () => {
+        if (stopped || renewing || heartbeatError) return;
+        renewing = true;
+        try {
+            if (!await renewPlannerV3QueueLease(env, queue)) {
+                heartbeatError = makePlannerV3LeaseLostError(queue, "heartbeat");
+            }
+        } catch (error) {
+            heartbeatError = makePlannerV3LeaseLostError(queue, "heartbeat", error);
+        } finally {
+            renewing = false;
+        }
+    };
+    const timerId = setInterval(() => {
+        void renew();
+    }, PLANNER_V3_HEARTBEAT_MS);
+    return {
+        assert(stage) {
+            if (!heartbeatError) return;
+            heartbeatError.stage = stage || heartbeatError.stage;
+            throw heartbeatError;
+        },
+        stop() {
+            stopped = true;
+            clearInterval(timerId);
+        }
+    };
+}
+
 async function getPlannerV3QueueContext(env, queueId) {
     return await env.DB.prepare(`
         SELECT
@@ -1998,13 +2150,17 @@ async function claimPlannerV3Queue(env, queueId) {
     const timestamp = nowPlannerV3Iso();
     const claimToken = makePlannerV3Id("claim");
     const row = await getPlannerV3QueueContext(env, queueId);
-    if (!row) return null;
-    if (row.status === "completed" || row.status === "failed" || row.status === "cancelled") return null;
-    if (row.job_status === "paused" || row.task_status === "paused" || row.item_status === "paused" || row.status === "paused") return null;
+    if (!row) return { disposition: "ack", queue: null };
+    if (row.status === "completed" || row.status === "failed" || row.status === "cancelled") {
+        return { disposition: "ack", queue: null };
+    }
+    if (row.job_status === "paused" || row.task_status === "paused" || row.item_status === "paused" || row.status === "paused") {
+        return { disposition: "ack", queue: null };
+    }
     if (row.job_status === "cancel_requested" || row.status === "cancel_requested") {
         await env.DB.prepare("UPDATE planner_v3_queue SET status = 'cancelled', updated_at = ? WHERE id = ?")
             .bind(timestamp, queueId).run();
-        return null;
+        return { disposition: "ack", queue: null };
     }
     const result = await env.DB.prepare(`
         UPDATE planner_v3_queue
@@ -2014,6 +2170,10 @@ async function claimPlannerV3Queue(env, queueId) {
             claim_token = ?,
             claimed_at = ?,
             lease_expires_at = ?,
+            last_heartbeat_at = ?,
+            stage = 'claimed',
+            stage_label = 'Queue claimed',
+            stage_started_at = ?,
             started_at = COALESCE(started_at, ?),
             updated_at = ?
         WHERE id = ?
@@ -2021,10 +2181,33 @@ async function claimPlannerV3Queue(env, queueId) {
               status = 'queued'
               OR (status = 'running' AND (lease_expires_at IS NULL OR lease_expires_at <= ?))
           )
-    `).bind(claimToken, timestamp, futurePlannerV3Iso(BROWSER_QUEUE_LEASE_MS), timestamp, timestamp, queueId, timestamp).run();
-    if (!result.success) return null;
+    `).bind(
+        claimToken,
+        timestamp,
+        futurePlannerV3Iso(PLANNER_V3_BACKGROUND_LEASE_MS),
+        timestamp,
+        timestamp,
+        timestamp,
+        timestamp,
+        queueId,
+        timestamp
+    ).run();
+    if (!result.success) throw new Error(`Failed to claim planner queue ${queueId}`);
+    if (Number(result.meta?.changes || 0) !== 1) {
+        const current = await getPlannerV3QueueContext(env, queueId);
+        if (!current || ["completed", "failed", "cancelled", "paused"].includes(current.status)) {
+            return { disposition: "ack", queue: null };
+        }
+        return {
+            disposition: "retry",
+            delaySeconds: getPlannerV3LeaseRetryDelaySeconds(current.lease_expires_at),
+            queue: null
+        };
+    }
     const claimed = await getPlannerV3QueueContext(env, queueId);
-    if (!claimed || claimed.claim_token !== claimToken) return null;
+    if (!claimed || claimed.claim_token !== claimToken) {
+        return { disposition: "retry", delaySeconds: 5, queue: null };
+    }
     await env.DB.batch([
         env.DB.prepare("UPDATE planner_v3_jobs SET status = 'running', stage = 'running', stage_label = 'Preparing generation', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status IN ('queued', 'running')")
             .bind(timestamp, timestamp, claimed.job_id),
@@ -2035,35 +2218,137 @@ async function claimPlannerV3Queue(env, queueId) {
         env.DB.prepare("UPDATE planner_v3_runs SET status = 'running', stage = 'running', stage_label = 'Preparing generation', started_at = COALESCE(started_at, ?), updated_at = ? WHERE id = ? AND status IN ('queued', 'running')")
             .bind(timestamp, timestamp, claimed.run_id)
     ]);
-    return claimed;
+    await insertPlannerV3Event(env, claimed, "queue_claimed", "running", "claimed", "Queue claimed", {
+        attempt: claimed.attempts,
+        leaseExpiresAt: claimed.lease_expires_at
+    }).catch(() => null);
+    return { disposition: "process", queue: claimed };
 }
 
-async function validatePlannerV3Claim(env, queueId, claimToken) {
+async function completePlannerV3Queue(env, queue, claimToken = queue.claim_token) {
     const timestamp = nowPlannerV3Iso();
-    const row = await env.DB.prepare(`
-        SELECT status, claim_token, lease_expires_at
-        FROM planner_v3_queue
-        WHERE id = ?
-    `).bind(queueId).first();
-    return !!row
-        && row.status === "running"
-        && row.claim_token === claimToken
-        && (!row.lease_expires_at || row.lease_expires_at > timestamp);
+    const results = await env.DB.batch([
+        env.DB.prepare(`
+            UPDATE planner_v3_queue
+            SET status = 'completed',
+                stage = 'completed',
+                stage_label = 'Completed',
+                completed_at = ?,
+                lease_expires_at = NULL,
+                last_heartbeat_at = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'running'
+              AND claim_token = ?
+        `).bind(timestamp, timestamp, timestamp, queue.id, claimToken),
+        env.DB.prepare(`
+            UPDATE planner_v3_job_tasks
+            SET completed_count = completed_count + 1,
+                stage = 'running',
+                stage_label = 'Preparing next image',
+                updated_at = ?
+            WHERE id = ?
+              AND EXISTS (
+                  SELECT 1 FROM planner_v3_queue
+                  WHERE id = ? AND status = 'completed'
+                    AND claim_token = ? AND completed_at = ?
+              )
+        `).bind(timestamp, queue.task_id, queue.id, claimToken, timestamp),
+        env.DB.prepare(`
+            UPDATE planner_v3_items
+            SET completed_count = completed_count + 1,
+                stage = 'running',
+                stage_label = 'Preparing next image',
+                updated_at = ?
+            WHERE id = ?
+              AND EXISTS (
+                  SELECT 1 FROM planner_v3_queue
+                  WHERE id = ? AND status = 'completed'
+                    AND claim_token = ? AND completed_at = ?
+              )
+        `).bind(timestamp, queue.item_id, queue.id, claimToken, timestamp),
+        env.DB.prepare(`
+            UPDATE planner_v3_jobs
+            SET completed_count = completed_count + 1,
+                stage = 'running',
+                stage_label = 'Preparing next image',
+                updated_at = ?
+            WHERE id = ?
+              AND EXISTS (
+                  SELECT 1 FROM planner_v3_queue
+                  WHERE id = ? AND status = 'completed'
+                    AND claim_token = ? AND completed_at = ?
+              )
+        `).bind(timestamp, queue.job_id, queue.id, claimToken, timestamp)
+    ]);
+    const completed = Number(results[0]?.meta?.changes || 0) === 1;
+    if (!completed) return false;
+    await insertPlannerV3Event(env, queue, "queue_completed", "completed", "completed", "Queue completed").catch(() => null);
+    await rollupPlannerV3Job(env, queue.job_id);
+    await enqueueNextPlannerV3QueueMessage(env, queue.job_id);
+    return true;
 }
 
 async function markPlannerV3QueueFailure(env, queue, message) {
     const timestamp = nowPlannerV3Iso();
-    await env.DB.batch([
-        env.DB.prepare("UPDATE planner_v3_queue SET status = 'failed', error_message = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status <> 'failed'")
-            .bind(message, timestamp, timestamp, queue.id),
-        env.DB.prepare("UPDATE planner_v3_job_tasks SET failed_count = failed_count + 1, status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END, error_message = ?, updated_at = ? WHERE id = ?")
-            .bind(message, timestamp, queue.task_id),
-        env.DB.prepare("UPDATE planner_v3_items SET failed_count = failed_count + 1, status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END, error_message = ?, updated_at = ? WHERE id = ?")
-            .bind(message, timestamp, queue.item_id),
-        env.DB.prepare("UPDATE planner_v3_jobs SET failed_count = failed_count + 1, status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END, error_message = ?, updated_at = ? WHERE id = ?")
-            .bind(message, timestamp, queue.job_id)
+    const results = await env.DB.batch([
+        env.DB.prepare(`
+            UPDATE planner_v3_queue
+            SET status = 'failed',
+                stage = 'failed',
+                stage_label = 'Failed',
+                error_message = ?,
+                completed_at = ?,
+                lease_expires_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'running'
+              AND claim_token = ?
+        `).bind(message, timestamp, timestamp, queue.id, queue.claim_token),
+        env.DB.prepare(`
+            UPDATE planner_v3_job_tasks
+            SET failed_count = failed_count + 1,
+                status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END,
+                error_message = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND EXISTS (
+                  SELECT 1 FROM planner_v3_queue
+                  WHERE id = ? AND status = 'failed'
+                    AND claim_token = ? AND completed_at = ?
+              )
+        `).bind(message, timestamp, queue.task_id, queue.id, queue.claim_token, timestamp),
+        env.DB.prepare(`
+            UPDATE planner_v3_items
+            SET failed_count = failed_count + 1,
+                status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END,
+                error_message = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND EXISTS (
+                  SELECT 1 FROM planner_v3_queue
+                  WHERE id = ? AND status = 'failed'
+                    AND claim_token = ? AND completed_at = ?
+              )
+        `).bind(message, timestamp, queue.item_id, queue.id, queue.claim_token, timestamp),
+        env.DB.prepare(`
+            UPDATE planner_v3_jobs
+            SET failed_count = failed_count + 1,
+                status = CASE WHEN completed_count > 0 THEN 'partial_failed' ELSE 'failed' END,
+                error_message = ?,
+                updated_at = ?
+            WHERE id = ?
+              AND EXISTS (
+                  SELECT 1 FROM planner_v3_queue
+                  WHERE id = ? AND status = 'failed'
+                    AND claim_token = ? AND completed_at = ?
+              )
+        `).bind(message, timestamp, queue.job_id, queue.id, queue.claim_token, timestamp)
     ]);
+    if (Number(results[0]?.meta?.changes || 0) !== 1) return false;
+    await insertPlannerV3Event(env, queue, "queue_failed", "failed", "failed", message).catch(() => null);
     await rollupPlannerV3Job(env, queue.job_id);
+    return true;
 }
 
 async function registerPlannerV3GeneratedAsset(env, queue, request, r2Key, fileName, webpBuffer) {
@@ -2097,28 +2382,53 @@ export async function processPlannerV3QueueMessage(env, body = {}) {
     await ensurePlannerV3Schema(env);
     const queueId = String(body.queueId || "").trim();
     if (!queueId) throw new Error("queueId is required");
-    const queue = await claimPlannerV3Queue(env, queueId);
-    if (!queue) return;
+    const claim = await claimPlannerV3Queue(env, queueId);
+    if (claim.disposition !== "process") return claim;
+    const queue = claim.queue;
     const attempt = Number(queue.attempts || 1);
+    const existingAsset = await env.DB.prepare(
+        "SELECT id, r2_key FROM planner_v3_assets WHERE queue_id = ? LIMIT 1"
+    ).bind(queue.id).first();
+    if (existingAsset) {
+        await updatePlannerV3QueueStage(env, queue, "asset_recovery", "Recovering saved asset");
+        if (!await completePlannerV3Queue(env, queue)) {
+            return { disposition: "retry", delaySeconds: 15 };
+        }
+        return { disposition: "ack" };
+    }
     const generation = parseJson(queue.generation_json, {});
     const baseSeed = Number.parseInt(generation.seed, 10);
     const seed = Number.isFinite(baseSeed)
         ? (baseSeed + Number(queue.image_index || 0)) % 4294967296
         : Math.floor(Math.random() * 4294967296);
     let uploadedKey = "";
+    let assetRegistered = false;
+    let currentStage = "claimed";
+    const heartbeat = startPlannerV3LeaseHeartbeat(env, queue);
+    const advanceStage = async (stage, stageLabel) => {
+        currentStage = stage;
+        await updatePlannerV3QueueStage(env, queue, stage, stageLabel);
+    };
     try {
         const request = buildNovelAiPayload(generation, seed);
+        await advanceStage("rate_limit_wait", "Waiting for NovelAI slot");
         await waitForNovelAiSlot(env);
-        if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) return;
+        heartbeat.assert("rate_limit_wait");
+        await advanceStage("novelai_request", "Calling NovelAI");
         const zipBuffer = await callNovelAi(env, request.payload);
-        if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) return;
+        heartbeat.assert("novelai_request");
+        await advanceStage("novelai_response", "NovelAI response received");
+        await advanceStage("zip_extract", "Extracting generated image");
         const extracted = await extractFirstZipFile(zipBuffer);
+        heartbeat.assert("zip_extract");
+        await advanceStage("webp_encode", "Encoding WebP");
         const webpBuffer = await encodeWebP(env, extracted.data);
-        if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) return;
+        heartbeat.assert("webp_encode");
 
         const assetId = makePlannerV3Id("passet");
         const fileName = `${assetId}.webp`;
         uploadedKey = `planner-v3/${queue.project_id}/${queue.run_id}/${queue.item_id}/${fileName}`;
+        await advanceStage("r2_put", "Saving image to R2");
         await putR2WithRetry(env.imgBucket, uploadedKey, webpBuffer, {
             httpMetadata: { contentType: "image/webp" },
             customMetadata: {
@@ -2127,46 +2437,28 @@ export async function processPlannerV3QueueMessage(env, body = {}) {
                 plannerV3QueueId: queue.id
             }
         });
-        if (!await validatePlannerV3Claim(env, queue.id, queue.claim_token)) {
-            await env.imgBucket.delete(uploadedKey);
-            return;
-        }
+        heartbeat.assert("r2_put");
+        await advanceStage("asset_insert", "Saving asset record");
         await registerPlannerV3GeneratedAsset(env, queue, request, uploadedKey, fileName, webpBuffer);
-        const timestamp = nowPlannerV3Iso();
-        await env.DB.batch([
-            env.DB.prepare("UPDATE planner_v3_queue SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ? AND status = 'running' AND claim_token = ?")
-                .bind(timestamp, timestamp, queue.id, queue.claim_token),
-            env.DB.prepare("UPDATE planner_v3_job_tasks SET completed_count = completed_count + 1, stage = 'running', updated_at = ? WHERE id = ?")
-                .bind(timestamp, queue.task_id),
-            env.DB.prepare("UPDATE planner_v3_items SET completed_count = completed_count + 1, stage = 'running', updated_at = ? WHERE id = ?")
-                .bind(timestamp, queue.item_id),
-            env.DB.prepare("UPDATE planner_v3_jobs SET completed_count = completed_count + 1, stage = 'running', updated_at = ? WHERE id = ?")
-                .bind(timestamp, queue.job_id)
-        ]);
-        await rollupPlannerV3Job(env, queue.job_id);
-        await enqueueNextPlannerV3QueueMessage(env, queue.job_id);
+        assetRegistered = true;
+        heartbeat.assert("asset_insert");
+        await advanceStage("rollup", "Updating job progress");
+        if (!await completePlannerV3Queue(env, queue)) {
+            throw makePlannerV3LeaseLostError(queue, "rollup");
+        }
+        return { disposition: "ack" };
     } catch (error) {
         const message = error?.message || String(error);
-        if (uploadedKey) {
+        if (uploadedKey && !assetRegistered) {
             await env.imgBucket.delete(uploadedKey).catch(() => null);
         }
-        const retryDelaySeconds = getRetryDelaySeconds(error, attempt);
-        const isRateLimited = isNovelAiRateLimitError(error) || isNovelAiCooldownError(error);
-        if (isRateLimited) await setNovelAiCooldown(env, retryDelaySeconds);
-        if (!isNovelAiCooldownError(error)) {
-            await writeBackgroundErrorLog(env, error, {
-                jobId: queue.job_id,
-                itemId: queue.item_id,
-                queueId: queue.id,
-                imageIndex: queue.image_index,
-                attempt,
-                stage: "planner_v3_queue"
-            });
-        }
-        if (!isR2PutRetryExhausted(error) && attempt < MAX_ATTEMPTS && env.GENERATION_QUEUE) {
-            await env.DB.prepare(`
+        if (error?.code === "PLANNER_V3_LEASE_LOST") {
+            const timestamp = nowPlannerV3Iso();
+            const result = await env.DB.prepare(`
                 UPDATE planner_v3_queue
                 SET status = 'queued',
+                    stage = 'retry_scheduled',
+                    stage_label = 'Retry scheduled after lease loss',
                     error_message = ?,
                     claim_token = '',
                     claimed_by = '',
@@ -2174,26 +2466,176 @@ export async function processPlannerV3QueueMessage(env, body = {}) {
                     lease_expires_at = NULL,
                     updated_at = ?
                 WHERE id = ?
-            `).bind(message.slice(0, 1000), nowPlannerV3Iso(), queue.id).run();
-            await env.GENERATION_QUEUE.send({ plannerV3: true, queueId: queue.id, jobId: queue.job_id }, { delaySeconds: retryDelaySeconds });
-            return;
+                  AND status = 'running'
+                  AND claim_token = ?
+            `).bind(message.slice(0, 1000), timestamp, queue.id, queue.claim_token).run();
+            await writeBackgroundErrorLog(env, error, {
+                jobId: queue.job_id,
+                itemId: queue.item_id,
+                queueId: queue.id,
+                imageIndex: queue.image_index,
+                attempt,
+                stage: error.stage || "lease_lost",
+                leaseExpiresAt: queue.lease_expires_at,
+                assetRegistered
+            });
+            await insertPlannerV3Event(env, queue, "lease_lost", "queued", error.stage || "lease_lost", message, {
+                attempt,
+                assetRegistered
+            }).catch(() => null);
+            if (Number(result.meta?.changes || 0) === 1) {
+                return { disposition: "retry", delaySeconds: 15 };
+            }
+            return { disposition: "ack" };
         }
-        await markPlannerV3QueueFailure(env, queue, message.slice(0, 1000));
-        await enqueueNextPlannerV3QueueMessage(env, queue.job_id);
+        const retryDelaySeconds = getRetryDelaySeconds(error, attempt);
+        const isRateLimited = isNovelAiRateLimitError(error) || isNovelAiCooldownError(error);
+        if (isRateLimited) await setNovelAiCooldown(env, retryDelaySeconds);
+        await insertPlannerV3Event(env, queue, "queue_error", "running", currentStage, message, {
+            attempt,
+            retryDelaySeconds,
+            assetRegistered
+        }).catch(() => null);
+        if (!isNovelAiCooldownError(error)) {
+            await writeBackgroundErrorLog(env, error, {
+                jobId: queue.job_id,
+                itemId: queue.item_id,
+                queueId: queue.id,
+                imageIndex: queue.image_index,
+                attempt,
+                stage: currentStage,
+                assetRegistered
+            });
+        }
+        if (!isR2PutRetryExhausted(error) && attempt < MAX_ATTEMPTS && env.GENERATION_QUEUE) {
+            const result = await env.DB.prepare(`
+                UPDATE planner_v3_queue
+                SET status = 'queued',
+                    stage = 'retry_scheduled',
+                    stage_label = 'Retry scheduled after error',
+                    error_message = ?,
+                    claim_token = '',
+                    claimed_by = '',
+                    claimed_at = NULL,
+                    lease_expires_at = NULL,
+                    updated_at = ?
+                WHERE id = ?
+                  AND status = 'running'
+                  AND claim_token = ?
+            `).bind(message.slice(0, 1000), nowPlannerV3Iso(), queue.id, queue.claim_token).run();
+            if (Number(result.meta?.changes || 0) !== 1) {
+                return { disposition: "ack" };
+            }
+            await env.GENERATION_QUEUE.send({ plannerV3: true, queueId: queue.id, jobId: queue.job_id }, { delaySeconds: retryDelaySeconds });
+            return { disposition: "ack" };
+        }
+        if (await markPlannerV3QueueFailure(env, queue, message.slice(0, 1000))) {
+            await enqueueNextPlannerV3QueueMessage(env, queue.job_id);
+        }
+        return { disposition: "ack" };
+    } finally {
+        heartbeat.stop();
     }
+}
+
+async function recoverExpiredPlannerV3Queues(env, limit = PLANNER_V3_RECOVERY_LIMIT) {
+    if (!env?.DB || !env?.GENERATION_QUEUE) return { checked: 0, completed: 0, requeued: 0 };
+    await ensurePlannerV3Schema(env);
+    const timestamp = nowPlannerV3Iso();
+    const rows = (await env.DB.prepare(`
+        SELECT q.id, q.job_id, q.claim_token, q.lease_expires_at
+        FROM planner_v3_queue q
+        JOIN planner_v3_jobs j ON j.id = q.job_id
+        WHERE q.executor = 'background'
+          AND q.status = 'running'
+          AND q.lease_expires_at IS NOT NULL
+          AND q.lease_expires_at <= ?
+          AND j.status IN ('queued', 'running')
+        ORDER BY q.lease_expires_at
+        LIMIT ?
+    `).bind(timestamp, Math.max(1, Math.min(200, asInt(limit, PLANNER_V3_RECOVERY_LIMIT)))).all()).results || [];
+    let completed = 0;
+    let requeued = 0;
+    for (const row of rows) {
+        const queue = await getPlannerV3QueueContext(env, row.id);
+        if (!queue || queue.status !== "running" || queue.claim_token !== row.claim_token) continue;
+        const asset = await env.DB.prepare(
+            "SELECT id, r2_key FROM planner_v3_assets WHERE queue_id = ? LIMIT 1"
+        ).bind(queue.id).first();
+        if (asset) {
+            if (await completePlannerV3Queue(env, queue, row.claim_token)) {
+                completed += 1;
+                await insertPlannerV3Event(
+                    env,
+                    queue,
+                    "expired_queue_completed",
+                    "completed",
+                    "asset_recovery",
+                    "Recovered completed queue from existing asset",
+                    { assetId: asset.id, r2Key: asset.r2_key }
+                ).catch(() => null);
+            }
+            continue;
+        }
+        const result = await env.DB.prepare(`
+            UPDATE planner_v3_queue
+            SET status = 'queued',
+                stage = 'retry_scheduled',
+                stage_label = 'Recovered expired queue',
+                error_message = 'Expired lease recovered by watchdog',
+                claim_token = '',
+                claimed_by = '',
+                claimed_at = NULL,
+                lease_expires_at = NULL,
+                updated_at = ?
+            WHERE id = ?
+              AND status = 'running'
+              AND claim_token = ?
+              AND lease_expires_at IS NOT NULL
+              AND lease_expires_at <= ?
+        `).bind(timestamp, queue.id, row.claim_token, timestamp).run();
+        if (Number(result.meta?.changes || 0) !== 1) continue;
+        await insertPlannerV3Event(
+            env,
+            queue,
+            "expired_queue_requeued",
+            "queued",
+            "retry_scheduled",
+            "Expired queue was requeued by watchdog",
+            { leaseExpiresAt: row.lease_expires_at }
+        ).catch(() => null);
+        await env.GENERATION_QUEUE.send({
+            plannerV3: true,
+            queueId: queue.id,
+            jobId: queue.job_id
+        });
+        requeued += 1;
+    }
+    return { checked: rows.length, completed, requeued };
 }
 
 
 export default {
-    async scheduled(_event, env) {
-        await cleanupDeletedAssets(env).catch(error => writeBackgroundErrorLog(env, error, {
-            stage: "scheduled_asset_cleanup"
+    async scheduled(event, env) {
+        await recoverExpiredPlannerV3Queues(env).catch(error => writeBackgroundErrorLog(env, error, {
+            stage: "scheduled_planner_v3_queue_recovery",
+            cron: event?.cron || ""
         }));
+        if (event?.cron === "17 */6 * * *") {
+            await cleanupDeletedAssets(env).catch(error => writeBackgroundErrorLog(env, error, {
+                stage: "scheduled_asset_cleanup"
+            }));
+        }
     },
     async queue(batch, env) {
         for (const message of batch.messages) {
             try {
-                await processPlannerQueueMessage(env, message.body);
+                const result = await processPlannerQueueMessage(env, message.body);
+                if (result?.disposition === "retry") {
+                    message.retry({ delaySeconds: result.delaySeconds || 15 });
+                } else {
+                    message.ack();
+                }
             } catch (error) {
                 await writeBackgroundErrorLog(env, error, {
                     jobId: message.body?.jobId || "",
@@ -2204,7 +2646,7 @@ export default {
                     stage: "queue_handler_uncaught",
                     messageBody: message.body
                 });
-                throw error;
+                message.retry({ delaySeconds: 30 });
             }
         }
     }
