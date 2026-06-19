@@ -39,7 +39,6 @@ window.PROJECT_PLANNER_META = null;
 window.PROJECT_PLANNER_VIEW = 'plan';
 window.PROJECT_PLANNER_GENERATION_MODE = localStorage.getItem('imggul_planner_generation_mode') || 'browser';
 window.PROJECT_PLANNER_BROWSER_RUN = null;
-window.PLANNER_BACKGROUND_POLL_TIMER = null;
 
 window.TEMP_FOLDER = '_temp_craft/';
 window.PROMPT_IDS = ['prompt-style', 'prompt-composition', 'prompt-character', 'prompt-clothing', 'prompt-expression', 'prompt-action', 'prompt-background'];

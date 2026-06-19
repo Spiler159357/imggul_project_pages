@@ -7,6 +7,7 @@ import { renderImageEditor } from '../image_editor.js';
 export async function renderProjectManage(skipHistory = true) {
     window.PROJECT_VIEW = 'manage';
     window.PROJECT_ACTIVE_SECTION = null;
+    window.syncPlannerBackgroundPolling?.();
     renderProjectManageShell(getProjects(), { loading: !Array.isArray(window.PROJECTS) });
 
     try {
@@ -185,6 +186,7 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
     window.PROJECT_VIEW = 'detail';
     window.PROJECT_ACTIVE_PROJECT_ID = project.id;
     window.PROJECT_ACTIVE_SECTION = null;
+    window.syncPlannerBackgroundPolling?.();
 
     renderProjectShell(`
         <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
@@ -382,6 +384,7 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
     const section = PROJECT_SECTIONS.find(item => item.key === sectionKey) || PROJECT_SECTIONS[0];
     window.PROJECT_VIEW = 'section';
     window.PROJECT_ACTIVE_SECTION = section.key;
+    window.syncPlannerBackgroundPolling?.();
 
     if (section.key === 'prompt') renderPromptSection(section);
     else if (section.key === 'character') {
@@ -415,13 +418,18 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = characterId;
         const character = getCharacterById(project, characterId);
         await Promise.all([
-            loadPlannerMeta(project, characterId).then(meta => { window.PROJECT_PLANNER_META = meta; }).catch(() => { window.PROJECT_PLANNER_META = null; }),
+            loadPlannerMeta(project, characterId, { force: true }).then(meta => { window.PROJECT_PLANNER_META = meta; }).catch(() => { window.PROJECT_PLANNER_META = null; }),
             loadProjectStylePrompt(project).then(style => { window.PROJECT_PLANNER_PROJECT_STYLE = style || ''; }).catch(() => { window.PROJECT_PLANNER_PROJECT_STYLE = ''; }),
             character ? loadCharacterFiles(character).catch(() => []) : Promise.resolve([]),
             character ? loadCharacterMeta(character).catch(() => ({})) : Promise.resolve({})
         ]);
         window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, getProjectItems(project, 'characters'), { force: true }).catch(() => []);
-        if (window.PROJECT_ACTIVE_SECTION === 'planner') renderPlannerSection(section);
+        if (window.PROJECT_ACTIVE_SECTION === 'planner') {
+            renderPlannerSection(section);
+            window.syncPlannerBackgroundPolling?.({
+                immediate: window.PROJECT_PLANNER_VIEW === 'run'
+            });
+        }
     }
     else if (section.key === 'image-editor') {
         const project = getActiveProject();

@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js';
 
@@ -108,7 +108,7 @@ export function getSituationCharacterRows(project, situation) {
         return {
             character,
             image,
-            imageUrl: image ? `${getAssetUrl(image.key)}?t=${image.uploaded ? new Date(image.uploaded).getTime() : Date.now()}` : ''
+            imageUrl: image ? getVersionedAssetUrl(image) : ''
         };
     });
 }
@@ -375,6 +375,7 @@ export async function openSituationDetail(projectId = window.PROJECT_ACTIVE_PROJ
     window.PROJECT_VIEW = 'situation-detail';
     window.PROJECT_ACTIVE_PROJECT_ID = project.id;
     window.PROJECT_ACTIVE_SECTION = 'situation';
+    window.syncPlannerBackgroundPolling?.();
     window.PROJECT_ACTIVE_SITUATION_ID = situation.id;
 
     renderSituationDetailShell(project, situation, { loading: getProjectItems(project, 'characters').some(character => !character.filesLoaded) });

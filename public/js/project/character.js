@@ -1,4 +1,4 @@
-import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js';
+import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js';
 import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js';
 import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js';
 
@@ -24,7 +24,7 @@ export function getSituationRows(character, situations, files) {
             index,
             situation,
             image,
-            imageUrl: image ? `${getAssetUrl(image.key)}?t=${image.uploaded ? new Date(image.uploaded).getTime() : Date.now()}` : '',
+            imageUrl: image ? getVersionedAssetUrl(image) : '',
             label: getItemLabel(situation, `상황 ${index + 1}`),
             characterName: character?.name || character?.folderName || '캐릭터'
         };
@@ -351,6 +351,7 @@ export async function openCharacterDetail(projectId = window.PROJECT_ACTIVE_PROJ
     window.PROJECT_VIEW = 'character-detail';
     window.PROJECT_ACTIVE_PROJECT_ID = project.id;
     window.PROJECT_ACTIVE_SECTION = 'character';
+    window.syncPlannerBackgroundPolling?.();
     window.PROJECT_ACTIVE_CHARACTER_ID = character.id;
 
     renderCharacterDetailShell(project, character, { loading: !character.filesLoaded || !character.metaLoaded });

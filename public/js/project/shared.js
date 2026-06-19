@@ -625,11 +625,19 @@ export function isImageFile(file) {
     return CHARACTER_IMAGE_EXTENSIONS.has(getFileExtension(getFileNameFromKey(file?.key)));
 }
 
-export async function loadCharacterFiles(character, force = false) {
+export function normalizeLoadOptions(options = {}) {
+    return typeof options === 'boolean' ? { force: options } : (options || {});
+}
+
+export async function loadCharacterFiles(character, options = {}) {
+    const { force = false, signal } = normalizeLoadOptions(options);
     if (!character?.prefix) return [];
     if (!force && character.filesLoaded) return Array.isArray(character.files) ? character.files : [];
 
-    const res = await fetch(`/api/list?prefix=${encodeURIComponent(character.prefix)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/list?prefix=${encodeURIComponent(character.prefix)}&_t=${Date.now()}`, {
+        cache: 'no-store',
+        signal
+    });
     if (!res.ok) throw new Error('캐릭터 이미지 목록을 불러오지 못했습니다.');
 
     const data = await res.json();
@@ -640,12 +648,16 @@ export async function loadCharacterFiles(character, force = false) {
     return character.files;
 }
 
-export async function loadCharacterMeta(character, force = false) {
+export async function loadCharacterMeta(character, options = {}) {
+    const { force = false, signal } = normalizeLoadOptions(options);
     if (!character?.prefix) return {};
     if (!force && character.metaLoaded) return character.meta || {};
 
     const metaKey = getCharacterMetaKey(character);
-    const res = await fetch(`/api/db/json-document?type=character_meta&key=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/db/json-document?type=character_meta&key=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, {
+        cache: 'no-store',
+        signal
+    });
     if (res.status === 404) {
         character.meta = {};
         character.metaLoaded = true;
@@ -829,12 +841,16 @@ export async function saveProjectSituations(project) {
     }
 }
 
-export async function loadProjectBackgroundPrompts(project, force = false) {
+export async function loadProjectBackgroundPrompts(project, options = {}) {
+    const { force = false, signal } = normalizeLoadOptions(options);
     if (!project?.prefix) return normalizeProjectBackgroundPrompts();
     if (!force && project.backgroundPromptsLoaded) return getProjectBackgroundPromptData(project);
 
     const key = getProjectBackgroundPromptsKey(project);
-    const res = await fetch(`/api/db/json-document?type=background_prompts&key=${encodeURIComponent(key)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/db/json-document?type=background_prompts&key=${encodeURIComponent(key)}&_t=${Date.now()}`, {
+        cache: 'no-store',
+        signal
+    });
 
     if (res.status === 404) {
         const data = normalizeProjectBackgroundPrompts();
@@ -915,6 +931,22 @@ export function getAssetUrl(key) {
     return `/${encodeURI(key)}`;
 }
 
+export function getAssetVersion(file) {
+    if (file?.etag) return String(file.etag).replaceAll('"', '');
+    if (file?.uploaded) {
+        const timestamp = new Date(file.uploaded).getTime();
+        if (Number.isFinite(timestamp)) return String(timestamp);
+    }
+    return '';
+}
+
+export function getVersionedAssetUrl(file) {
+    if (!file?.key) return '';
+    const baseUrl = getAssetUrl(file.key);
+    const version = getAssetVersion(file);
+    return version ? `${baseUrl}?v=${encodeURIComponent(version)}` : baseUrl;
+}
+
 export function getSituationDisplayName(situation) {
     return situation?.alias || situation?.name || situation?.id || '상황 이름';
 }
@@ -993,15 +1025,19 @@ export async function loadProjectPromptMarkdown(project) {
     return await loadProjectMarkdownFile(project, 'prompt.md');
 }
 
-export async function loadProjectStylePrompt(project) {
-    return await loadProjectMarkdownFile(project, 'style_prompt.md');
+export async function loadProjectStylePrompt(project, options = {}) {
+    return await loadProjectMarkdownFile(project, 'style_prompt.md', options);
 }
 
-export async function loadProjectMarkdownFile(project, fileName) {
+export async function loadProjectMarkdownFile(project, fileName, options = {}) {
+    const { signal } = normalizeLoadOptions(options);
     if (!project?.prefix) return '';
 
     const key = `${project.prefix}${fileName}`;
-    const res = await fetch(`${getAssetUrl(key)}?_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`${getAssetUrl(key)}?_t=${Date.now()}`, {
+        cache: 'no-store',
+        signal
+    });
     if (res.status === 404) return '';
     if (!res.ok) throw new Error(`${fileName}를 불러오지 못했습니다.`);
 
