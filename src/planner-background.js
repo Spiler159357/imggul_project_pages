@@ -772,13 +772,11 @@ function clientExtraForItem(item = {}) {
         images,
         generatedImages,
         selectedImage,
+        legacyImages,
+        legacyGeneratedImages,
         ...extra
     } = item;
-    return {
-        ...extra,
-        legacyImages: Array.isArray(images) ? images : [],
-        legacyGeneratedImages: Array.isArray(generatedImages) ? generatedImages : []
-    };
+    return extra;
 }
 
 function validatePlannerV3Binding(env) {
@@ -1382,9 +1380,11 @@ async function plannerV3ItemToClient(env, row, assets = []) {
         LIMIT 1
     `).bind(row.id).first();
     const generation = parseJson(setting?.generation_json, {});
-    const extra = parseJson(row.extra_json, {});
-    const fallbackImages = Array.isArray(extra.legacyImages) ? extra.legacyImages : [];
-    const fallbackGeneratedImages = Array.isArray(extra.legacyGeneratedImages) ? extra.legacyGeneratedImages : [];
+    const {
+        legacyImages,
+        legacyGeneratedImages,
+        ...extra
+    } = parseJson(row.extra_json, {});
     return {
         ...extra,
         id: row.id,
@@ -1402,14 +1402,14 @@ async function plannerV3ItemToClient(env, row, assets = []) {
         errorMessage: row.error_message || "",
         updatedAt: row.updated_at || "",
         generation,
-        images: assets.length ? assets.map(asset => asset.r2_key) : fallbackImages,
-        generatedImages: assets.length ? assets.map(asset => ({
+        images: assets.map(asset => asset.r2_key),
+        generatedImages: assets.map(asset => ({
             id: asset.id,
             key: asset.r2_key,
             r2Key: asset.r2_key,
             imageIndex: asset.image_index,
             createdAt: asset.created_at
-        })) : fallbackGeneratedImages
+        }))
     };
 }
 
@@ -1472,6 +1472,12 @@ async function clearPlannerV3ItemsForRegeneration(env, itemIds = []) {
             error_message = '',
             started_at = NULL,
             completed_at = NULL,
+            extra_json = json_remove(
+                extra_json,
+                '$.legacyImages',
+                '$.legacyGeneratedImages',
+                '$.imagePromptSnapshots'
+            ),
             updated_at = ?
         WHERE id IN (${placeholders})
     `).bind(timestamp, ...ids).run();
