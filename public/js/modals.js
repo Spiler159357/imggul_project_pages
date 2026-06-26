@@ -1175,12 +1175,19 @@ window.importProjectPromptData = async function() {
         const characterParts = characterVariant.parts || characterMeta.parts || {};
         const situationPrompt = situationVariant.prompt || (window.getSituationPrompt ? window.getSituationPrompt(situation) : {});
         const situationGeneration = situationVariant.generation || (window.getSituationGeneration ? window.getSituationGeneration(situation) : {});
+        const isNsfwSituation = window.getSituationRating
+            ? window.getSituationRating(situation) === 'nsfw'
+            : false;
         const promptValues = {};
 
         if (options.optStyle) promptValues['prompt-style'] = projectStyle || '';
         if (options.optComp) promptValues['prompt-composition'] = situationPrompt.composition || '';
         if (options.optChar) promptValues['prompt-character'] = characterParts.character || characterMeta.prompt || '';
-        if (options.optCloth) promptValues['prompt-clothing'] = characterParts.clothing || '';
+        if (options.optCloth) {
+            promptValues['prompt-clothing'] = isNsfwSituation
+                ? (situationPrompt.clothing || '')
+                : (characterParts.clothing || '');
+        }
         if (options.optExp) promptValues['prompt-expression'] = situationPrompt.expression || '';
         if (options.optAct) promptValues['prompt-action'] = situationPrompt.action || '';
         if (options.optBg) promptValues['prompt-background'] = background?.prompt || situationPrompt.background || '';
