@@ -14,9 +14,6 @@ database_id = "cbc3c7dd-9028-4190-94a1-eee82216cd8b"
 binding = "imgBucket"
 bucket_name = "imggul-storage"
 
-[images]
-binding = "IMAGES"
-
 [triggers]
 crons = ["*/5 * * * *", "17 */6 * * *"]
 

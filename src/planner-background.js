@@ -52,7 +52,6 @@ function requireWorkerBindings(env) {
     if (!env.DB) missing.push("DB");
     if (!env.imgBucket) missing.push("imgBucket");
     if (!env.NOVELAI_TOKEN) missing.push("NOVELAI_TOKEN");
-    if (!env.IMAGES) missing.push("IMAGES");
     if (missing.length) {
         throw new Error(`Missing Cloudflare binding(s): ${missing.join(", ")}`);
     }
@@ -501,15 +500,75 @@ async function extractFirstZipFile(zipBuffer) {
     throw new Error("Invalid zip: no files found");
 }
 
-async function encodeWebP(env, imageBuffer) {
-    const imageStream = new Blob([imageBuffer]).stream();
-    const output = await env.IMAGES.input(imageStream)
-        .output({ format: "image/webp", quality: 80 });
-    const transformed = output.response();
-    if (!transformed.ok) {
-        throw new Error(`WebP conversion failed: ${transformed.status}`);
+let imageCodecsPromise;
+
+function detectImageFormat(buffer) {
+    const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 16));
+    if (bytes.length >= 8
+        && bytes[0] === 0x89
+        && bytes[1] === 0x50
+        && bytes[2] === 0x4E
+        && bytes[3] === 0x47
+        && bytes[4] === 0x0D
+        && bytes[5] === 0x0A
+        && bytes[6] === 0x1A
+        && bytes[7] === 0x0A) {
+        return "png";
     }
-    return await transformed.arrayBuffer();
+    if (bytes.length >= 3
+        && bytes[0] === 0xFF
+        && bytes[1] === 0xD8
+        && bytes[2] === 0xFF) {
+        return "jpeg";
+    }
+    if (bytes.length >= 12
+        && bytes[0] === 0x52
+        && bytes[1] === 0x49
+        && bytes[2] === 0x46
+        && bytes[3] === 0x46
+        && bytes[8] === 0x57
+        && bytes[9] === 0x45
+        && bytes[10] === 0x42
+        && bytes[11] === 0x50) {
+        return "webp";
+    }
+    return "";
+}
+
+async function loadImageCodecs() {
+    if (!imageCodecsPromise) {
+        imageCodecsPromise = Promise.all([
+            import("@jsquash/png"),
+            import("@jsquash/jpeg"),
+            import("@jsquash/webp")
+        ]).then(([png, jpeg, webp]) => ({ png, jpeg, webp }));
+    }
+    return await imageCodecsPromise;
+}
+
+async function decodeGeneratedImage(imageBuffer, format) {
+    const { png, jpeg, webp } = await loadImageCodecs();
+    if (format === "png") return await png.decode(imageBuffer);
+    if (format === "jpeg") return await jpeg.decode(imageBuffer);
+    if (format === "webp") return await webp.decode(imageBuffer);
+    throw new Error(`Unsupported image format for WebP conversion: ${format || "unknown"}`);
+}
+
+async function encodeWebP(env, imageBuffer) {
+    if (!(imageBuffer instanceof ArrayBuffer) || imageBuffer.byteLength === 0) {
+        throw new Error("WebP conversion failed: empty image buffer");
+    }
+    const format = detectImageFormat(imageBuffer);
+    const decoded = await decodeGeneratedImage(imageBuffer, format);
+    if (!decoded?.data || !decoded.width || !decoded.height) {
+        throw new Error(`WebP conversion failed: decoded ${format || "unknown"} image is invalid`);
+    }
+    const maxPixels = 2048 * 2048;
+    if (decoded.width * decoded.height > maxPixels) {
+        throw new Error(`WebP conversion failed: image is too large (${decoded.width}x${decoded.height})`);
+    }
+    const { webp } = await loadImageCodecs();
+    return await webp.encode(decoded, { quality: 80 });
 }
 
 async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
