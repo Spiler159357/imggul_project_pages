@@ -1,3 +1,12 @@
+import { decode as decodePng, init as initPngDecode } from "@jsquash/png/decode.js";
+import decodeJpeg, { init as initJpegDecode } from "@jsquash/jpeg/decode.js";
+import decodeWebP, { init as initWebPDecode } from "@jsquash/webp/decode.js";
+import encodeWebPImage, { init as initWebPEncode } from "@jsquash/webp/encode.js";
+import pngDecodeWasm from "@jsquash/png/codec/pkg/squoosh_png_bg.wasm";
+import jpegDecodeWasm from "@jsquash/jpeg/codec/dec/mozjpeg_dec.wasm";
+import webpDecodeWasm from "@jsquash/webp/codec/dec/webp_dec.wasm";
+import webpEncodeWasm from "@jsquash/webp/codec/enc/webp_enc.wasm";
+
 const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
 const DEFAULT_NEGATIVE_PROMPT = "";
@@ -8,6 +17,7 @@ const MAX_INLINE_COOLDOWN_MS = 30000;
 const R2_PUT_MAX_ATTEMPTS = 4;
 const NOVELAI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000;
 const TERMINAL_JOB_RETENTION_MS = 10 * 60 * 1000;
+const D1_BIND_CHUNK_SIZE = 90;
 const TERMINAL_JOB_STATUSES = ["completed", "partial_failed", "failed", "paused"];
 const ACTIVE_JOB_STATUSES = ["queued", "running", "cancel_requested"];
 const PAUSED_JOB_STATUS = "paused";
@@ -208,7 +218,7 @@ function parsePositiveInt(value, fallback = 1) {
 
 
 
-function chunkArray(items, size) {
+function chunkArray(items, size = D1_BIND_CHUNK_SIZE) {
     const chunks = [];
     for (let i = 0; i < items.length; i += size) {
         chunks.push(items.slice(i, i + size));
@@ -500,7 +510,7 @@ async function extractFirstZipFile(zipBuffer) {
     throw new Error("Invalid zip: no files found");
 }
 
-let imageCodecsPromise;
+let imageCodecsReadyPromise;
 
 function detectImageFormat(buffer) {
     const bytes = new Uint8Array(buffer, 0, Math.min(buffer.byteLength, 16));
@@ -535,22 +545,23 @@ function detectImageFormat(buffer) {
     return "";
 }
 
-async function loadImageCodecs() {
-    if (!imageCodecsPromise) {
-        imageCodecsPromise = Promise.all([
-            import("@jsquash/png"),
-            import("@jsquash/jpeg"),
-            import("@jsquash/webp")
-        ]).then(([png, jpeg, webp]) => ({ png, jpeg, webp }));
+async function initImageCodecs() {
+    if (!imageCodecsReadyPromise) {
+        imageCodecsReadyPromise = Promise.all([
+            initPngDecode(pngDecodeWasm),
+            initJpegDecode(jpegDecodeWasm),
+            initWebPDecode(webpDecodeWasm),
+            initWebPEncode(webpEncodeWasm)
+        ]);
     }
-    return await imageCodecsPromise;
+    await imageCodecsReadyPromise;
 }
 
 async function decodeGeneratedImage(imageBuffer, format) {
-    const { png, jpeg, webp } = await loadImageCodecs();
-    if (format === "png") return await png.decode(imageBuffer);
-    if (format === "jpeg") return await jpeg.decode(imageBuffer);
-    if (format === "webp") return await webp.decode(imageBuffer);
+    await initImageCodecs();
+    if (format === "png") return await decodePng(imageBuffer);
+    if (format === "jpeg") return await decodeJpeg(imageBuffer);
+    if (format === "webp") return await decodeWebP(imageBuffer);
     throw new Error(`Unsupported image format for WebP conversion: ${format || "unknown"}`);
 }
 
@@ -567,8 +578,8 @@ async function encodeWebP(env, imageBuffer) {
     if (decoded.width * decoded.height > maxPixels) {
         throw new Error(`WebP conversion failed: image is too large (${decoded.width}x${decoded.height})`);
     }
-    const { webp } = await loadImageCodecs();
-    return await webp.encode(decoded, { quality: 80 });
+    await initImageCodecs();
+    return await encodeWebPImage(decoded, { quality: 80 });
 }
 
 async function cleanupDeletedAssets(env, olderThanHours = 24, limit = 100) {
@@ -1520,49 +1531,57 @@ async function clearPlannerV3ItemsForRegeneration(env, itemIds = []) {
     if (!ids.length) return;
     const timestamp = nowPlannerV3Iso();
     await deletePlannerV3AssetsForItems(env, ids);
-    const placeholders = ids.map(() => "?").join(",");
-    await env.DB.prepare(`
-        UPDATE planner_v3_items
-        SET status = 'pending',
-            completed_count = 0,
-            failed_count = 0,
-            stage = '',
-            stage_label = '',
-            error_message = '',
-            started_at = NULL,
-            completed_at = NULL,
-            extra_json = json_remove(
-                extra_json,
-                '$.legacyImages',
-                '$.legacyGeneratedImages',
-                '$.imagePromptSnapshots'
-            ),
-            updated_at = ?
-        WHERE id IN (${placeholders})
-    `).bind(timestamp, ...ids).run();
+    for (const chunk of chunkArray(ids)) {
+        const placeholders = chunk.map(() => "?").join(",");
+        await env.DB.prepare(`
+            UPDATE planner_v3_items
+            SET status = 'pending',
+                completed_count = 0,
+                failed_count = 0,
+                stage = '',
+                stage_label = '',
+                error_message = '',
+                started_at = NULL,
+                completed_at = NULL,
+                extra_json = json_remove(
+                    extra_json,
+                    '$.legacyImages',
+                    '$.legacyGeneratedImages',
+                    '$.imagePromptSnapshots'
+                ),
+                updated_at = ?
+            WHERE id IN (${placeholders})
+        `).bind(timestamp, ...chunk).run();
+    }
 }
 
 async function deletePlannerV3AssetsForItems(env, itemIds = []) {
     const ids = Array.from(new Set(itemIds.map(id => String(id || "").trim()).filter(Boolean)));
     if (!ids.length) return { deletedCount: 0 };
     if (!env.imgBucket) throw new Error("imgBucket binding is not configured");
-    const placeholders = ids.map(() => "?").join(",");
-    const assets = (await env.DB.prepare(`
-        SELECT id, r2_key
-        FROM planner_v3_assets
-        WHERE item_id IN (${placeholders})
-    `).bind(...ids).all()).results || [];
+    const assets = [];
+    for (const chunk of chunkArray(ids)) {
+        const placeholders = chunk.map(() => "?").join(",");
+        const rows = (await env.DB.prepare(`
+            SELECT id, r2_key
+            FROM planner_v3_assets
+            WHERE item_id IN (${placeholders})
+        `).bind(...chunk).all()).results || [];
+        assets.push(...rows);
+    }
     if (!assets.length) return { deletedCount: 0 };
     const deletedAssetIds = [];
     for (const asset of assets) {
         await env.imgBucket.delete(asset.r2_key);
         deletedAssetIds.push(asset.id);
     }
-    const assetPlaceholders = deletedAssetIds.map(() => "?").join(",");
-    await env.DB.prepare(`
-        DELETE FROM planner_v3_assets
-        WHERE id IN (${assetPlaceholders})
-    `).bind(...deletedAssetIds).run();
+    for (const chunk of chunkArray(deletedAssetIds)) {
+        const assetPlaceholders = chunk.map(() => "?").join(",");
+        await env.DB.prepare(`
+            DELETE FROM planner_v3_assets
+            WHERE id IN (${assetPlaceholders})
+        `).bind(...chunk).run();
+    }
     return { deletedCount: deletedAssetIds.length };
 }
 
