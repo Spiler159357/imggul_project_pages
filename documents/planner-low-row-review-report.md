@@ -262,7 +262,7 @@ planner_v3_assets cascade delete
 | reference 변경 | ID가 projectId/characterId/situationId에 의존하므로 source reference가 바뀌면 다른 record처럼 보일 수 있음 | 표시명 변경과 안정 ID 변경을 분리하고, 기존 ID는 생성 후 유지 |
 | migration 순서 | 기존 `0015`/`0016` 순서 주석 불일치 | 신규 migration 추가 전 실제 적용 이력 확인 필요 |
 
-## 8. 최종 판정
+## 8. 최종 판정 
 
 작성된 신규 스키마와 코드 수정 계획은 사용자가 제시한 기준에 부합한다.
 
