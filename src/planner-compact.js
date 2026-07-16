@@ -743,16 +743,22 @@ export async function updatePlannerCompactItem(env, itemId, patch = {}) {
 }
 
 export async function deletePlannerCompactItem(env, itemId, lookup = {}) {
+    let candidateKeys = [];
     const updated = await mutateRunWithRetry(env, lookup, payload => {
         if (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status)) {
             throw plannerError("PLANNER_RUN_ACTIVE", 409, "Planner run is active.");
         }
+        const targetItem = payload.items.find(item => item.itemId === itemId);
         const items = payload.items.filter(item => item.itemId !== itemId);
         if (items.length === payload.items.length) {
             throw plannerError("PLANNER_ITEM_NOT_FOUND", 404, "Planner item not found.");
         }
+        candidateKeys = asArray(targetItem?.candidates).map(candidate => asString(candidate.r2Key)).filter(Boolean);
         return { ...payload, items, status: "draft", activeJob: null };
     }, "run:item:delete");
+    if (candidateKeys.length) {
+        await cleanupPlannerCompactAssets(env, { keys: candidateKeys });
+    }
     return plannerCompactRunToClient(updated.record);
 }
 
@@ -763,8 +769,15 @@ export async function deletePlannerCompactRun(env, lookup = {}) {
         if (ACTIVE_JOB_STATUSES.has(current.payload.activeJob?.status)) {
             throw plannerError("PLANNER_RUN_ACTIVE", 409, "Planner run is active.");
         }
+        const candidateKeys = current.payload.items
+            .flatMap(item => asArray(item.candidates))
+            .map(candidate => asString(candidate.r2Key))
+            .filter(Boolean);
         if (await deletePlannerCompactRecord(env, current.recordKey, current.revision)) {
-            return { deleted: true, runKey: current.recordKey };
+            const cleanup = candidateKeys.length
+                ? await cleanupPlannerCompactAssets(env, { keys: candidateKeys })
+                : { scanned: 0, deletedCount: 0, failedCount: 0, failedKeys: [] };
+            return { deleted: true, runKey: current.recordKey, cleanup };
         }
     }
     throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Planner revision conflict.");
@@ -1006,6 +1019,14 @@ async function controlPlannerCompactGeneration(env, lookup, action) {
     }, `run:generation:${action}`);
     const record = updated.record;
     if (action === "resume" && record.payload.activeJob?.status === "queued" && record.payload.activeJob.mode === "background" && env.GENERATION_QUEUE) {
+        await env.GENERATION_QUEUE.send({
+            plannerCompact: true,
+            runKey: record.recordKey,
+            jobId: record.payload.activeJob.jobId,
+            expectedGlobalImageIndex: record.payload.activeJob.next?.globalImageIndex || 0
+        });
+    }
+    if (action === "cancel" && record.payload.activeJob?.status === "cancel_requested" && record.payload.activeJob.mode === "background" && env.GENERATION_QUEUE) {
         await env.GENERATION_QUEUE.send({
             plannerCompact: true,
             runKey: record.recordKey,

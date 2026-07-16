@@ -103,6 +103,9 @@ function derivePlannerStoredMetaStatus(meta) {
 
 function normalizePlannerStoredMeta(meta = {}, options = {}) {
     const normalized = normalizePlannerMeta(meta || {});
+    if (normalized.status === 'cancelled' || normalized.backgroundStatus?.status === 'cancelled') {
+        return resetPlannerMetaAfterCancel(normalized);
+    }
     const hasBackgroundJob = !!normalized.backgroundJobId;
     const staleActiveMeta = isPlannerActiveStatus(normalized.status) && !hasBackgroundJob;
     const staleActiveBackground = isPlannerActiveStatus(normalized.backgroundStatus?.status) && !hasBackgroundJob;
@@ -415,6 +418,7 @@ export function getPlannerStatusLabel(status) {
         completed: '생성 완료',
         partial_failed: '일부 실패',
         cancel_requested: '취소 요청됨',
+        cancelled: '취소됨',
         expired: '만료됨',
         confirmed: '확정 완료',
         failed: '실패',
@@ -447,7 +451,7 @@ function isPlannerActiveStatus(status) {
 }
 
 function isPlannerTerminalStatus(status) {
-    return ['completed', 'done', 'failed', 'partial_failed', 'confirmed'].includes(status);
+    return ['completed', 'done', 'failed', 'partial_failed', 'cancelled', 'confirmed'].includes(status);
 }
 
 function isPlannerConfirmBlocked(meta = {}, item = null) {
@@ -2886,11 +2890,7 @@ export async function deletePlannerItem(situationId) {
         window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     }
 
-    await fetch('/api/manage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'delete_folder', key: getPlannerImagePrefix(project, item.imageNumber) })
-    }).catch(() => null);
+    await clearPlannerItemImages(project, item);
 
     meta.items = meta.items.filter(entry => entry.situationId !== situationId);
     meta.updatedAt = Date.now();
@@ -2921,11 +2921,7 @@ export async function deleteAllPlannerItems() {
     if (!confirm(`현재 캐릭터의 플랜 ${meta.items.length}개를 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
 
     const items = [...meta.items];
-    await Promise.all(items.map(item => fetch('/api/manage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'delete_folder', key: getPlannerImagePrefix(project, item.imageNumber) })
-    }).catch(() => null)));
+    await clearPlannerItemsImages(project, items, meta);
 
     await deletePlannerMeta(project, meta.characterId);
     window.PROJECT_PLANNER_META = null;
@@ -3001,6 +2997,26 @@ export async function waitForPlannerQueueComplete() {
 export async function clearPlannerItemImages(project, item) {
     const prefix = getPlannerImagePrefix(project, item.imageNumber);
     const imageKeys = Array.isArray(item.images) ? [...item.images] : [];
+    const compactCandidateKeys = Array.from(new Set([
+        ...imageKeys,
+        ...(Array.isArray(item.generatedImages) ? item.generatedImages : []).map(image =>
+            typeof image === 'string' ? image : (image?.r2Key || image?.key || '')
+        )
+    ].filter(Boolean)));
+    if (compactCandidateKeys.length) {
+        const cleanupRes = await fetch('/api/planner/v3/cleanup-assets', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ keys: compactCandidateKeys })
+        });
+        const cleanupData = await cleanupRes.json().catch(() => ({}));
+        if (!cleanupRes.ok) {
+            throw new Error(cleanupData.error || '플래너 임시 이미지를 삭제하지 못했습니다.');
+        }
+        if (Number(cleanupData.failedCount || 0) > 0) {
+            throw new Error(`플래너 임시 이미지 ${cleanupData.failedCount}개를 삭제하지 못했습니다. 다시 시도하세요.`);
+        }
+    }
     await Promise.all(imageKeys.map(key =>
         window.removeMetadataFromDB(prefix, getFileNameFromKey(key)).catch(() => null)
     ));
@@ -3205,10 +3221,10 @@ function applyPlannerBackgroundStatus(meta, status, statusForStorage) {
     const nextMeta = clonePlannerMetaValue(meta);
     nextMeta.runKey = status.runKey || nextMeta.runKey || '';
     const cancelled = status.status === 'cancelled';
-    if (cancelled) resetPlannerMetaAfterCancel(nextMeta);
-
-    nextMeta.backgroundStatus = statusForStorage;
-    if (!cancelled) {
+    if (cancelled) {
+        resetPlannerMetaAfterCancel(nextMeta);
+    } else {
+        nextMeta.backgroundStatus = statusForStorage;
         nextMeta.status = status.status === 'completed' ? 'completed' : (status.status || nextMeta.status);
         nextMeta.stage = status.stage || nextMeta.stage || '';
         nextMeta.stageLabel = status.stageLabel || nextMeta.stageLabel || '';
@@ -3289,10 +3305,14 @@ async function refreshPlannerBackgroundStatusInternal(jobId = null) {
         : null;
     const nextMeta = applyPlannerBackgroundStatus(serverMeta || meta, status, statusForStorage);
     if (nextMeta) {
-        nextMeta.backgroundStatus = statusForView;
+        if (status.status === 'cancelled') delete nextMeta.backgroundStatus;
+        else nextMeta.backgroundStatus = statusForView;
         writePlannerMetaCache(getPlannerMetaCacheKey(project, nextMeta.characterId), nextMeta);
         setPlannerActiveMetaIfSelected(project, nextMeta);
         updatePlannerQueueMetaCache(project, nextMeta);
+    }
+    if (status.status === 'cancelled') {
+        setPlannerStatus('취소되었습니다. 다시 실행할 수 있습니다.');
     }
     if (!['queued', 'running', 'cancel_requested'].includes(status.status)) removePlannerBackgroundPollingJob(targetJobId);
     return statusForView;
@@ -3351,9 +3371,9 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
         return;
     }
     setPlannerStatus('백그라운드 취소를 요청했습니다.');
-    await refreshPlannerBackgroundStatus(targetJobId).catch(() => null);
-    setPlannerStatus('취소되었습니다. 다시 실행할 수 있습니다.');
-    stopPlannerBackgroundPolling();
+    startPlannerBackgroundPolling(targetJobId);
+    const status = await refreshPlannerBackgroundStatus(targetJobId).catch(() => null);
+    if (status?.status !== 'cancelled') setPlannerStatus('취소 요청을 처리하고 있습니다.');
     renderPlannerIfVisible();
 }
 
@@ -3596,7 +3616,12 @@ export async function cancelPlannerGeneration() {
     const backgroundEntries = await getPlannerBackgroundControlEntries(project, ['queued', 'running', 'cancel_requested', 'paused']);
     if (backgroundEntries.length) {
         await controlPlannerBackgroundEntries(project, backgroundEntries, 'cancel');
-        setPlannerStatus('백그라운드 작업을 취소했습니다. 다시 실행할 수 있습니다.');
+        const stillCancelling = (window.PROJECT_PLANNER_QUEUE_METAS || []).some(entry =>
+            entry.meta?.status === 'cancel_requested' || entry.meta?.backgroundStatus?.status === 'cancel_requested'
+        );
+        setPlannerStatus(stillCancelling
+            ? '백그라운드 취소 요청을 처리하고 있습니다.'
+            : '취소되었습니다. 다시 실행할 수 있습니다.');
         return;
     }
     if (meta?.backgroundJobId && ['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) {
@@ -3833,8 +3858,14 @@ async function controlPlannerBackgroundEntries(project, entries, action) {
             );
             nextPollingJobIds.push(runKey);
         } else if (action === 'cancel') {
-            resetPlannerMetaAfterCancel(meta);
-            removePlannerBackgroundPollingJob(runKey);
+            meta.status = 'cancel_requested';
+            meta.stage = 'cancel_requested';
+            meta.stageLabel = getPlannerStatusLabel('cancel_requested');
+            meta.items = (meta.items || []).map(item => ['queued', 'running', 'paused', 'cancel_requested'].includes(item.status)
+                ? { ...item, status: 'cancel_requested', stage: '', stageLabel: '' }
+                : item
+            );
+            nextPollingJobIds.push(runKey);
         }
         meta.updatedAt = Date.now();
         updatePlannerQueueMetaCache(project, meta);
@@ -4330,11 +4361,7 @@ async function confirmLegacyPlannerItem(project, character, item, metadata) {
             throw new Error(data.error || `${item.imageNumber}.webp 플래너 정리에 실패했습니다.`);
         }
     }
-    await fetch('/api/manage', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'delete_folder', key: getPlannerImagePrefix(project, item.imageNumber) })
-    }).catch(() => null);
+    await clearPlannerItemImages(project, item);
     return { targetKey: newKey };
 }
 
