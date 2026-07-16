@@ -2,7 +2,7 @@
 import {
     jsonResponse,
     writeBackgroundErrorLog
-} from "../src/planner-background.js";
+} from "../src/worker-utils.js";
 import {
     cancelPlannerCompactGeneration,
     cleanupPlannerCompactAssets,
