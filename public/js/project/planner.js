@@ -494,11 +494,15 @@ function getPlannerQueueSummary(queueMetas = []) {
     const entries = getPlannerQueueItems(queueMetas);
     const totalImages = entries.reduce((sum, entry) => sum + clampPlannerImageCount(entry.item.count), 0);
     const completedImages = entries.reduce((sum, entry) => sum + (Array.isArray(entry.item.images) ? entry.item.images.length : 0), 0);
-    const active = queueMetas.some(entry =>
-        isPlannerActiveStatus(entry.meta.status)
-        || isPlannerActiveStatus(entry.meta.backgroundStatus?.status)
+    const cancelling = queueMetas.some(entry =>
+        entry.meta.status === 'cancel_requested'
+        || entry.meta.backgroundStatus?.status === 'cancel_requested'
     );
-    const paused = !active && queueMetas.some(entry => isPlannerResumableStatus(entry.meta.status));
+    const active = queueMetas.some(entry =>
+        ['queued', 'running'].includes(entry.meta.status)
+        || ['queued', 'running'].includes(entry.meta.backgroundStatus?.status)
+    );
+    const paused = !active && !cancelling && queueMetas.some(entry => isPlannerResumableStatus(entry.meta.status));
     const failed = entries.reduce((sum, entry) => sum + getPlannerItemFailedCount(entry.item), 0);
     return {
         entries,
@@ -507,8 +511,9 @@ function getPlannerQueueSummary(queueMetas = []) {
         completedImages,
         failed,
         active,
+        cancelling,
         paused,
-        status: active ? 'running' : paused ? 'paused' : (queueMetas[0]?.meta?.status || 'draft')
+        status: cancelling ? 'cancel_requested' : active ? 'running' : paused ? 'paused' : (queueMetas[0]?.meta?.status || 'draft')
     };
 }
 
@@ -1654,14 +1659,14 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
     if (!summary.totalItems) return '';
     const percent = summary.totalImages ? Math.round((summary.completedImages / summary.totalImages) * 100) : 0;
     const activeEntry = summary.entries.find(entry => isPlannerActiveStatus(entry.item.status) || isPlannerActiveStatus(entry.meta.status));
-    const statusText = summary.active ? '생성 진행 중' : summary.paused ? '일시정지됨' : '대기열';
+    const statusText = summary.cancelling ? '취소 처리 중' : summary.active ? '생성 진행 중' : summary.paused ? '일시정지됨' : '대기열';
     const eta = getPlannerQueueEta(queueMetas);
     return `
         <div class="mb-4 rounded-lg border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div class="min-w-0">
                     <p class="inline-flex items-center gap-2 text-sm font-bold text-indigo-800 dark:text-indigo-200">
-                        <i data-lucide="${summary.paused ? 'pause' : 'loader-2'}" class="w-4 h-4 ${summary.active ? 'animate-spin' : ''}"></i>
+                        <i data-lucide="${summary.paused ? 'pause' : 'loader-2'}" class="w-4 h-4 ${(summary.active || summary.cancelling) ? 'animate-spin' : ''}"></i>
                         ${statusText}
                     </p>
                     <p class="mt-1 text-xs text-indigo-700/80 dark:text-indigo-300/80 truncate">
@@ -1687,7 +1692,7 @@ function renderPlannerRunControls(summary) {
     const isPending = !!pendingAction;
     const pendingAttrs = isPending ? 'disabled aria-busy="true"' : '';
     const pendingClass = 'disabled:opacity-60 disabled:cursor-wait';
-    const canStart = !summary.active && !summary.paused;
+    const canStart = !summary.active && !summary.paused && !summary.cancelling;
     return `
         ${canStart ? `
             <button type="button" onclick="window.openPlannerRunConfirmModal()" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 ${pendingClass}">
@@ -1702,6 +1707,11 @@ function renderPlannerRunControls(summary) {
         ${summary.paused ? `
             <button type="button" onclick="window.resumePlannerGeneration()" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 ${pendingClass}">
                 <i data-lucide="rotate-cw" class="w-4 h-4"></i> 재개하기
+            </button>
+        ` : ''}
+        ${summary.cancelling ? `
+            <button type="button" disabled aria-busy="true" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 text-xs font-bold cursor-wait opacity-70">
+                <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i> 취소 처리 중
             </button>
         ` : ''}
         ${(summary.active || summary.paused) ? `
