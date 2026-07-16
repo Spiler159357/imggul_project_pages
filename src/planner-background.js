@@ -6,6 +6,12 @@ import pngDecodeWasm from "@jsquash/png/codec/pkg/squoosh_png_bg.wasm";
 import jpegDecodeWasm from "@jsquash/jpeg/codec/dec/mozjpeg_dec.wasm";
 import webpDecodeWasm from "@jsquash/webp/codec/dec/webp_dec.wasm";
 import webpEncodeWasm from "@jsquash/webp/codec/enc/webp_enc.wasm";
+import {
+    commitPlannerCompactQueueSlot,
+    getPlannerCompactRateLimit,
+    preparePlannerCompactQueueSlot,
+    putPlannerCompactRateLimit
+} from "./planner-compact.js";
 
 const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
@@ -15,6 +21,7 @@ const MAX_ATTEMPTS = 5;
 const NAI_MIN_REQUEST_INTERVAL_MS = 10000;
 const MAX_INLINE_COOLDOWN_MS = 30000;
 const R2_PUT_MAX_ATTEMPTS = 4;
+const PLANNER_COMPACT_MAX_ATTEMPTS = 3;
 const NOVELAI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000;
 const TERMINAL_JOB_RETENTION_MS = 10 * 60 * 1000;
 const D1_BIND_CHUNK_SIZE = 90;
@@ -630,11 +637,133 @@ export async function resumePlannerBackgroundJob(env, jobId) {
     return await resumePlannerV3Generation(env, jobId);
 }
 
-export async function processPlannerQueueMessage(env, message) {
+export async function processPlannerQueueMessage(env, message, options = {}) {
+    if (message?.plannerCompact) {
+        return await processPlannerCompactQueueMessage(env, message, options);
+    }
     if (message?.plannerV3) {
         return await processPlannerV3QueueMessage(env, message);
     }
-    throw new Error("Legacy planner background queue is disabled. Use Planner V3 queue messages.");
+    throw new Error("Unknown planner queue message.");
+}
+
+function makePlannerCompactSeed(generation, imageIndex) {
+    const configured = Number.parseInt(generation?.seed, 10);
+    if (Number.isFinite(configured)) return (configured + Number(imageIndex || 0)) % 4294967296;
+    const values = new Uint32Array(1);
+    crypto.getRandomValues(values);
+    return values[0];
+}
+
+async function getPlannerCompactCooldownDelay(env) {
+    const rate = await getPlannerCompactRateLimit(env, "novelai");
+    const waitMs = Math.max(0, Number(rate?.availableAt || 0) - Date.now());
+    return waitMs > 0 ? Math.max(1, Math.ceil(waitMs / 1000)) : 0;
+}
+
+export async function processPlannerCompactQueueMessage(env, body = {}, options = {}) {
+    requireWorkerBindings(env);
+    const prepared = await preparePlannerCompactQueueSlot(env, body);
+    if (prepared.disposition !== "process") return prepared;
+
+    const attempt = Math.max(1, Number(options.attempts || body.attempt || 1));
+    const slot = prepared.slot;
+    const request = buildNovelAiPayload(
+        prepared.generation,
+        makePlannerCompactSeed(prepared.generation, slot.globalImageIndex)
+    );
+    let object = await env.imgBucket.head(slot.r2Key);
+
+    try {
+        if (!object) {
+            const cooldownDelay = await getPlannerCompactCooldownDelay(env);
+            if (cooldownDelay > 0) return { disposition: "retry", delaySeconds: cooldownDelay };
+
+            const zipBuffer = await callNovelAi(env, request.payload);
+            const extracted = await extractFirstZipFile(zipBuffer);
+            const webpBuffer = await encodeWebP(env, extracted.data);
+            await putR2WithRetry(env.imgBucket, slot.r2Key, webpBuffer, {
+                httpMetadata: { contentType: "image/webp" },
+                customMetadata: {
+                    ispublic: "false",
+                    plannerCompact: "true",
+                    assetId: slot.assetId,
+                    width: String(request.width || 0),
+                    height: String(request.height || 0)
+                }
+            });
+            object = {
+                size: webpBuffer.byteLength,
+                httpMetadata: { contentType: "image/webp" },
+                customMetadata: {
+                    width: String(request.width || 0),
+                    height: String(request.height || 0)
+                }
+            };
+        }
+
+        const committed = await commitPlannerCompactQueueSlot(env, {
+            runKey: prepared.runKey,
+            jobId: prepared.jobId,
+            assetId: slot.assetId
+        }, {
+            r2Key: slot.r2Key,
+            width: Number(object.customMetadata?.width || request.width || 0),
+            height: Number(object.customMetadata?.height || request.height || 0),
+            byteSize: Number(object.size || 0),
+            mimeType: object.httpMetadata?.contentType || "image/webp"
+        });
+        if (committed.nextMessage && env.GENERATION_QUEUE) {
+            await env.GENERATION_QUEUE.send(committed.nextMessage);
+        }
+        return { disposition: "ack", status: committed.status };
+    } catch (error) {
+        const message = error?.message || String(error);
+        const retryDelaySeconds = getRetryDelaySeconds(error, attempt);
+        if (error?.code === "PLANNER_REVISION_CONFLICT"
+            || error?.code === "PLANNER_COMPACT_SCHEMA_MISSING"
+            || error?.code === "PLANNER_COMPACT_RECORD_CORRUPT") {
+            await writeBackgroundErrorLog(env, error, {
+                runKey: prepared.runKey,
+                jobId: prepared.jobId,
+                assetId: slot.assetId,
+                attempt,
+                stage: "planner_compact_state_commit"
+            });
+            if (attempt < PLANNER_COMPACT_MAX_ATTEMPTS) {
+                return { disposition: "retry", delaySeconds: 15 };
+            }
+            throw error;
+        }
+        if (isNovelAiRateLimitError(error)) {
+            await putPlannerCompactRateLimit(env, {
+                key: "novelai",
+                availableAt: Date.now() + retryDelaySeconds * 1000,
+                reason: "cooldown"
+            });
+        }
+        await writeBackgroundErrorLog(env, error, {
+            runKey: prepared.runKey,
+            jobId: prepared.jobId,
+            itemId: slot.itemId,
+            assetId: slot.assetId,
+            imageIndex: slot.globalImageIndex,
+            attempt,
+            stage: "planner_compact_generation"
+        });
+        if (!isR2PutRetryExhausted(error) && attempt < PLANNER_COMPACT_MAX_ATTEMPTS) {
+            return { disposition: "retry", delaySeconds: retryDelaySeconds };
+        }
+        const committed = await commitPlannerCompactQueueSlot(env, {
+            runKey: prepared.runKey,
+            jobId: prepared.jobId,
+            assetId: slot.assetId
+        }, { errorMessage: message.slice(0, 1000) });
+        if (committed.nextMessage && env.GENERATION_QUEUE) {
+            await env.GENERATION_QUEUE.send(committed.nextMessage);
+        }
+        return { disposition: "ack", status: committed.status };
+    }
 }
 
 // Planner V3 DB-backed planner implementation.
@@ -2754,7 +2883,9 @@ export default {
     async queue(batch, env) {
         for (const message of batch.messages) {
             try {
-                const result = await processPlannerQueueMessage(env, message.body);
+                const result = await processPlannerQueueMessage(env, message.body, {
+                    attempts: message.attempts
+                });
                 if (result?.disposition === "retry") {
                     message.retry({ delaySeconds: result.delaySeconds || 15 });
                 } else {

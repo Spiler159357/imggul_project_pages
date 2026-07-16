@@ -1,26 +1,35 @@
 // functions/[[path]].js
 import {
-    cancelPlannerV3Generation,
-    claimNextPlannerV3BrowserQueue,
-    cleanupPlannerV3Assets,
-    completePlannerV3BrowserQueue,
-    confirmPlannerV3Asset,
-    deletePlannerV3Item,
-    deletePlannerV3Run,
-    getPlannerV3Run,
-    getPlannerV3Settings,
-    getPlannerV3Status,
     jsonResponse,
-    pausePlannerV3Generation,
-    putPlannerV3ItemFromMeta,
-    putPlannerV3RunFromMeta,
-    putPlannerV3Settings,
-    resumePlannerV3Generation,
-    startPlannerV3Generation,
-    updatePlannerV3Item,
     writeBackgroundErrorLog
 } from "../src/planner-background.js";
+import {
+    cancelPlannerCompactGeneration,
+    cleanupPlannerCompactAssets,
+    completePlannerCompactBrowserQueue,
+    confirmPlannerCompactAsset,
+    deletePlannerCompactItem,
+    deletePlannerCompactRun,
+    getPlannerCompactBrowserQueue,
+    getPlannerCompactRun,
+    getPlannerCompactSettings,
+    getPlannerCompactStatus,
+    pausePlannerCompactGeneration,
+    putPlannerCompactItemFromMeta,
+    putPlannerCompactRunFromMeta,
+    putPlannerCompactSettings,
+    resumePlannerCompactGeneration,
+    startPlannerCompactGeneration,
+    updatePlannerCompactItem
+} from "../src/planner-compact.js";
 // Cloudflare Pages Functions - Catch-all 라우터 및 API 서버리스 핸들러
+
+function plannerApiErrorResponse(error) {
+    return jsonResponse({
+        error: error?.message || String(error || "Planner request failed"),
+        code: error?.code || undefined
+    }, { status: error?.status || 500 });
+}
 
 /**
  * 역할: R2 object key가 텍스트 메모 파일인지 판별한다.
@@ -1887,11 +1896,11 @@ export async function onRequest(context) {
         try {
             const projectId = url.searchParams.get('projectId') || '';
             if (!projectId) return jsonResponse({ error: 'projectId is required' }, { status: 400 });
-            const data = await getPlannerV3Settings(env, projectId);
+            const data = await getPlannerCompactSettings(env, projectId);
             if (!data) return jsonResponse({ data: null }, { status: 404 });
             return jsonResponse({ data });
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -1899,10 +1908,10 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await putPlannerV3Settings(env, body || {});
+            const data = await putPlannerCompactSettings(env, body || {});
             return jsonResponse({ success: true, data });
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -1912,11 +1921,11 @@ export async function onRequest(context) {
             const projectId = url.searchParams.get('projectId') || '';
             const characterId = url.searchParams.get('characterId') || '';
             if (!projectId || !characterId) return jsonResponse({ error: 'projectId and characterId are required' }, { status: 400 });
-            const data = await getPlannerV3Run(env, { projectId, characterId });
+            const data = await getPlannerCompactRun(env, { projectId, characterId });
             if (!data) return jsonResponse({ data: null });
             return jsonResponse({ data });
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -1924,12 +1933,12 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await putPlannerV3RunFromMeta(env, body?.data || body || {}, {
+            const data = await putPlannerCompactRunFromMeta(env, body?.data || body || {}, {
                 clearExistingItemIds: Array.isArray(body?.clearExistingItemIds) ? body.clearExistingItemIds : []
             });
             return jsonResponse({ success: true, data });
         } catch (e) {
-            return jsonResponse({ error: e.message, code: e.code || undefined }, { status: e.status || 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -1937,10 +1946,10 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await putPlannerV3ItemFromMeta(env, body || {});
+            const data = await putPlannerCompactItemFromMeta(env, body || {});
             return jsonResponse({ success: true, data });
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: e.status || 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -1949,20 +1958,20 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await putPlannerV3RunFromMeta(env, { ...(body?.data || body || {}), id: decodeURIComponent(plannerV3RunMatch[1]) });
+            const data = await putPlannerCompactRunFromMeta(env, { ...(body?.data || body || {}), runId: decodeURIComponent(plannerV3RunMatch[1]) });
             return jsonResponse({ success: true, data });
         } catch (e) {
-            return jsonResponse({ error: e.message, code: e.code || undefined }, { status: e.status || 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
     if (plannerV3RunMatch && method === "DELETE") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
-            const data = await deletePlannerV3Run(env, decodeURIComponent(plannerV3RunMatch[1]));
+            const data = await deletePlannerCompactRun(env, decodeURIComponent(plannerV3RunMatch[1]));
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -1971,20 +1980,23 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await updatePlannerV3Item(env, decodeURIComponent(plannerV3ItemMatch[1]), body || {});
+            const data = await updatePlannerCompactItem(env, decodeURIComponent(plannerV3ItemMatch[1]), body || {});
             return jsonResponse({ success: true, data });
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
     if (plannerV3ItemMatch && method === "DELETE") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
-            const data = await deletePlannerV3Item(env, decodeURIComponent(plannerV3ItemMatch[1]));
+            const runKey = url.searchParams.get('runKey') || '';
+            const projectId = url.searchParams.get('projectId') || '';
+            const characterId = url.searchParams.get('characterId') || '';
+            const data = await deletePlannerCompactItem(env, decodeURIComponent(plannerV3ItemMatch[1]), { runKey, projectId, characterId });
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -1992,35 +2004,37 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await startPlannerV3Generation(env, body || {});
+            const data = await startPlannerCompactGeneration(env, body || {});
             return jsonResponse(data);
         } catch (e) {
-            await writeBackgroundErrorLog(env, e, { route: path, method, stage: "planner_v3_start_api" });
-            return jsonResponse({ error: e.message, code: e.code || undefined }, { status: e.status || 500 });
+            await writeBackgroundErrorLog(env, e, { route: path, method, stage: "planner_compact_start_api" });
+            return plannerApiErrorResponse(e);
         }
     }
 
     if (path === "/api/planner/v3/generate/status" && method === "GET") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
-            const jobId = url.searchParams.get('jobId') || '';
-            if (!jobId) return jsonResponse({ error: 'jobId is required' }, { status: 400 });
-            const data = await getPlannerV3Status(env, jobId);
+            const runKey = url.searchParams.get('runKey') || '';
+            const projectId = url.searchParams.get('projectId') || '';
+            const characterId = url.searchParams.get('characterId') || '';
+            if (!runKey && (!projectId || !characterId)) return jsonResponse({ error: 'runKey is required' }, { status: 400 });
+            const data = await getPlannerCompactStatus(env, { runKey, projectId, characterId });
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
     if (path === "/api/planner/v3/generate/next-browser-queue" && method === "GET") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
-            const jobId = url.searchParams.get('jobId') || '';
-            if (!jobId) return jsonResponse({ error: 'jobId is required' }, { status: 400 });
-            const data = await claimNextPlannerV3BrowserQueue(env, jobId);
+            const runKey = url.searchParams.get('runKey') || '';
+            if (!runKey) return jsonResponse({ error: 'runKey is required' }, { status: 400 });
+            const data = await getPlannerCompactBrowserQueue(env, { runKey });
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -2028,10 +2042,10 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await completePlannerV3BrowserQueue(env, body || {});
+            const data = await completePlannerCompactBrowserQueue(env, body || {});
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -2039,11 +2053,11 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            if (!body?.jobId) return jsonResponse({ error: 'jobId is required' }, { status: 400 });
-            const data = await pausePlannerV3Generation(env, body.jobId);
+            if (!body?.runKey) return jsonResponse({ error: 'runKey is required' }, { status: 400 });
+            const data = await pausePlannerCompactGeneration(env, { runKey: body.runKey });
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -2051,11 +2065,11 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            if (!body?.jobId) return jsonResponse({ error: 'jobId is required' }, { status: 400 });
-            const data = await resumePlannerV3Generation(env, body.jobId);
+            if (!body?.runKey) return jsonResponse({ error: 'runKey is required' }, { status: 400 });
+            const data = await resumePlannerCompactGeneration(env, { runKey: body.runKey });
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -2063,11 +2077,11 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            if (!body?.jobId) return jsonResponse({ error: 'jobId is required' }, { status: 400 });
-            const data = await cancelPlannerV3Generation(env, body.jobId);
+            if (!body?.runKey) return jsonResponse({ error: 'runKey is required' }, { status: 400 });
+            const data = await cancelPlannerCompactGeneration(env, { runKey: body.runKey });
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -2075,10 +2089,10 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await confirmPlannerV3Asset(env, body || {});
+            const data = await confirmPlannerCompactAsset(env, body || {});
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: e.status || 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 
@@ -2086,10 +2100,10 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json().catch(() => ({}));
-            const data = await cleanupPlannerV3Assets(env, body.limit ?? 50);
+            const data = await cleanupPlannerCompactAssets(env, body || {});
             return jsonResponse(data);
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return plannerApiErrorResponse(e);
         }
     }
 

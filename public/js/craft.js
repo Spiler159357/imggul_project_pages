@@ -876,7 +876,7 @@ export async function generateNaiImage(options = {}) {
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < batchCount; i++) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
-        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, planner: options.planner || null, estimatedDurationMs });
+        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, outputFileName: options.outputFileName || '', planner: options.planner || null, estimatedDurationMs });
     }
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }
@@ -1021,13 +1021,21 @@ export async function processNextQueueItem() {
             if (uploadFile.name !== uploadFileName) uploadFile = new File([uploadFile], uploadFileName, { type: 'image/webp', lastModified: Date.now() });
             uploadContentType = 'image/webp';
         }
+        if (task.planner?.compact && task.outputFileName) {
+            uploadFileName = task.outputFileName;
+            if (uploadFile.name !== uploadFileName) {
+                uploadFile = new File([uploadFile], uploadFileName, { type: uploadContentType, lastModified: Date.now() });
+            }
+        }
         const tempKey = outputPrefix + uploadFileName;
         const uploadHeaders = { 'X-File-Name': encodeURIComponent(uploadFileName), 'Content-Type': uploadContentType, 'X-Absolute-Path': encodeURIComponent(tempKey) };
         const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(uploadFile); });
         const uploadRes = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: uploadHeaders, body: buffer, cache: 'no-store' });
         if (!uploadRes.ok) throw new Error("서버 임시 저장소 동기화에 실패했습니다.");
 
-        if (extractedMetadata) await window.saveMetadataToDB(outputPrefix, uploadFileName, extractedMetadata);
+        if (extractedMetadata && !task.planner?.compact) {
+            await window.saveMetadataToDB(outputPrefix, uploadFileName, extractedMetadata);
+        }
 
         updateProgress('완료!', 100);
         if (outputPrefix === window.TEMP_FOLDER) window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString(), inpaintSourceKey: task.inpaintSource?.key || '' });

@@ -2,6 +2,9 @@ name = "imggul-background-worker"
 main = "src/planner-background.js"
 compatibility_date = "2024-09-23"
 
+[vars]
+PLANNER_D1_METRICS = "0"
+
 [limits]
 cpu_ms = 300_000
 

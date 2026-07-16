@@ -280,11 +280,11 @@ export async function savePlannerItem(project, meta, item) {
         throw new Error(data.error || '플래너 항목 저장에 실패했습니다.');
     }
     const payload = await res.json().catch(() => ({}));
-    if (payload?.data?.runId) normalized.id = payload.data.runId;
-    if (payload?.data?.itemId && item) item.id = payload.data.itemId;
-    const savedMeta = payload?.data?.run
-        ? normalizePlannerStoredMeta(payload.data.run)
+    const savedMeta = payload?.data
+        ? normalizePlannerStoredMeta(payload.data)
         : normalized;
+    const savedItem = savedMeta?.items?.find(entry => entry.situationId === item?.situationId);
+    if (savedItem?.id && item) item.id = savedItem.id;
     const currentMeta = replacePlannerMetaValue(meta, savedMeta);
     writePlannerMetaCache(key, currentMeta);
     return payload.data || {};
@@ -757,35 +757,6 @@ function getPlannerStoredItemStatus(item, meta = {}) {
     return isPlannerItemTargetComplete(item, meta) ? 'done' : 'pending';
 }
 
-function buildPlannerBrowserStoredMeta(meta) {
-    const stored = {
-        ...(meta || {}),
-        status: 'draft',
-        stage: '',
-        stageLabel: '',
-        updatedAt: Date.now()
-    };
-    delete stored.backgroundJobId;
-    delete stored.backgroundStatus;
-    delete stored.runningSituationIds;
-    stored.items = (stored.items || []).map(item => ({
-        ...item,
-        status: getPlannerStoredItemStatus(item, stored),
-        stage: '',
-        stageLabel: ''
-    }));
-    if (stored.items.length && stored.items.every(item => item.status === 'done' || item.status === 'confirmed')) {
-        stored.status = 'completed';
-    }
-    return stored;
-}
-
-async function savePlannerBrowserStoredMeta(project, meta) {
-    const stored = buildPlannerBrowserStoredMeta(meta);
-    await savePlannerMeta(project, stored);
-    return stored;
-}
-
 function setPlannerBrowserRunState(patch = null) {
     window.PROJECT_PLANNER_BROWSER_RUN = patch
         ? { ...(window.PROJECT_PLANNER_BROWSER_RUN || {}), ...patch, updatedAt: Date.now() }
@@ -848,27 +819,6 @@ function hasPlannerGeneratedImages(item = {}) {
         || (Array.isArray(item.generatedImages) && item.generatedImages.length > 0)
         || !!item.selectedImage
         || Number(item.completedCount || 0) > 0;
-}
-
-function buildPlannerRunGenerations(item, meta = {}, resumeRun = false) {
-    const runs = Array.isArray(item.variantGenerations) && item.variantGenerations.length
-        ? item.variantGenerations
-        : [{ count: clampPlannerImageCount(item.count || meta.defaultCount), generation: item.generation }];
-    if (!resumeRun) return runs;
-
-    let generated = Math.max(0, getPlannerItemGeneratedCount(item));
-    const resumedRuns = [];
-    for (const run of runs) {
-        const originalCount = clampPlannerImageCount(run.count || item.count || meta.defaultCount);
-        if (generated >= originalCount) {
-            generated -= originalCount;
-            continue;
-        }
-        const count = originalCount - generated;
-        generated = 0;
-        if (count > 0) resumedRuns.push({ ...run, count });
-    }
-    return resumedRuns;
 }
 
 export function setPlannerStatus(message) {
@@ -2695,7 +2645,8 @@ export async function savePlannerSituationPlan() {
         variantGenerations,
         generation: variantGenerations[0]?.generation || {},
         images: getPlannerSituationItem(window.PROJECT_PLANNER_META, situation.id)?.images || [],
-        selectedImage: getPlannerSituationItem(window.PROJECT_PLANNER_META, situation.id)?.selectedImage || null
+        selectedImage: getPlannerSituationItem(window.PROJECT_PLANNER_META, situation.id)?.selectedImage || null,
+        selectedAssetId: getPlannerSituationItem(window.PROJECT_PLANNER_META, situation.id)?.selectedAssetId || ''
     };
 
     let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project, character.id).catch(() => null);
@@ -2810,7 +2761,8 @@ function buildPlannerPlanItemFromSituation({
         variantGenerations,
         generation: variantGenerations[0]?.generation || {},
         images: existingItem?.images || [],
-        selectedImage: existingItem?.selectedImage || null
+        selectedImage: existingItem?.selectedImage || null,
+        selectedAssetId: existingItem?.selectedAssetId || ''
     };
 }
 
@@ -3021,8 +2973,14 @@ export async function deletePlannerImage(key) {
     const prefix = key.slice(0, key.lastIndexOf('/') + 1);
     await window.removeMetadataFromDB(prefix, getFileNameFromKey(key)).catch(() => null);
     item.images = item.images.filter(imageKey => imageKey !== key);
+    item.generatedImages = (item.generatedImages || []).filter(asset =>
+        asset?.key !== key && asset?.r2Key !== key
+    );
     if (item.imagePromptSnapshots) delete item.imagePromptSnapshots[key];
-    if (item.selectedImage === key) item.selectedImage = null;
+    if (item.selectedImage === key) {
+        item.selectedImage = null;
+        item.selectedAssetId = '';
+    }
     item.status = item.images.length ? item.status : 'pending';
     meta.updatedAt = Date.now();
     await savePlannerMeta(project, meta);
@@ -3055,6 +3013,7 @@ export async function clearPlannerItemImages(project, item) {
     item.generatedImages = [];
     item.imagePromptSnapshots = {};
     item.selectedImage = null;
+    item.selectedAssetId = '';
     item.completedCount = 0;
     item.failedCount = 0;
     item.stage = '';
@@ -3087,7 +3046,19 @@ function suspendPlannerBackgroundPolling() {
 }
 
 function trackPlannerBackgroundJobs(jobIds = []) {
-    jobIds.filter(Boolean).forEach(jobId => plannerPollingState.trackedJobIds.add(jobId));
+    jobIds.filter(Boolean).forEach(runKey => plannerPollingState.trackedJobIds.add(runKey));
+}
+
+function resolvePlannerRunKey(value = '', meta = null) {
+    if (String(value || '').startsWith('run:')) return String(value);
+    if (meta?.runKey) return meta.runKey;
+    if (window.PROJECT_PLANNER_META?.runKey && (
+        !value || window.PROJECT_PLANNER_META.backgroundJobId === value
+    )) return window.PROJECT_PLANNER_META.runKey;
+    const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
+    return queueMetas.find(entry => entry.meta?.runKey && (
+        entry.meta.runKey === value || entry.meta.backgroundJobId === value
+    ))?.meta?.runKey || '';
 }
 
 function rebuildTrackedPlannerBackgroundJobs() {
@@ -3102,7 +3073,7 @@ function rebuildTrackedPlannerBackgroundJobs() {
                 || isPlannerActiveStatus(meta.backgroundStatus?.status)
             )
         ) {
-            plannerPollingState.trackedJobIds.add(meta.backgroundJobId);
+            if (meta.runKey) plannerPollingState.trackedJobIds.add(meta.runKey);
         }
     });
 }
@@ -3181,9 +3152,10 @@ function installPlannerVisibilityHandler() {
 }
 
 export function startPlannerBackgroundPolling(jobId) {
-    const jobIds = Array.isArray(jobId) ? jobId.filter(Boolean) : [jobId].filter(Boolean);
-    if (!jobIds.length) return;
-    trackPlannerBackgroundJobs(jobIds);
+    const values = Array.isArray(jobId) ? jobId : [jobId];
+    const runKeys = values.map(value => resolvePlannerRunKey(value)).filter(Boolean);
+    if (!runKeys.length) return;
+    trackPlannerBackgroundJobs(runKeys);
     startPlannerPollingLoop();
 }
 
@@ -3201,7 +3173,8 @@ function removePlannerBackgroundPollingJob(jobId) {
 function findPlannerQueueEntryByJob(jobId, status = {}) {
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
     return queueMetas.find(entry =>
-        entry.meta?.backgroundJobId === jobId
+        entry.meta?.runKey === jobId
+        || entry.meta?.backgroundJobId === jobId
         || (status.runId && entry.meta?.id === status.runId)
         || (status.characterId && entry.meta?.characterId === status.characterId)
     ) || null;
@@ -3230,6 +3203,7 @@ function mergePlannerGeneratedImages(current = [], incoming = []) {
 function applyPlannerBackgroundStatus(meta, status, statusForStorage) {
     if (!meta) return null;
     const nextMeta = clonePlannerMetaValue(meta);
+    nextMeta.runKey = status.runKey || nextMeta.runKey || '';
     const cancelled = status.status === 'cancelled';
     if (cancelled) resetPlannerMetaAfterCancel(nextMeta);
 
@@ -3255,7 +3229,9 @@ function applyPlannerBackgroundStatus(meta, status, statusForStorage) {
             const incomingStatus = statusItem.status === 'completed'
                 ? 'done'
                 : (statusItem.status === 'cancelled' ? getPlannerStoredItemStatus(item, nextMeta) : statusItem.status);
-            const incomingImages = Array.isArray(statusItem.resultKeys) ? statusItem.resultKeys : [];
+            const incomingImages = Array.isArray(statusItem.images)
+                ? statusItem.images
+                : (Array.isArray(statusItem.resultKeys) ? statusItem.resultKeys : []);
             const incomingGeneratedImages = Array.isArray(statusItem.generatedImages) ? statusItem.generatedImages : [];
             return {
                 ...item,
@@ -3281,10 +3257,10 @@ function applyPlannerBackgroundStatus(meta, status, statusForStorage) {
 async function refreshPlannerBackgroundStatusInternal(jobId = null) {
     const project = getActiveProject();
     const currentMeta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    const targetJobId = jobId || currentMeta?.backgroundJobId;
+    const targetJobId = resolvePlannerRunKey(jobId, currentMeta);
     if (!project || !targetJobId) return null;
 
-    const res = await fetch(`/api/planner/v3/generate/status?jobId=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/planner/v3/generate/status?runKey=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setPlannerStatus(data.error || '백그라운드 상태 조회에 실패했습니다.');
@@ -3324,7 +3300,7 @@ async function refreshPlannerBackgroundStatusInternal(jobId = null) {
 
 export function refreshPlannerBackgroundStatus(jobId = null, options = {}) {
     const { render = true } = options || {};
-    const targetJobId = jobId || window.PROJECT_PLANNER_META?.backgroundJobId || '';
+    const targetJobId = resolvePlannerRunKey(jobId, window.PROJECT_PLANNER_META) || '';
     if (!targetJobId) return Promise.resolve(null);
     const existing = plannerBackgroundPollInFlight.get(targetJobId);
     const request = existing || refreshPlannerBackgroundStatusInternal(targetJobId);
@@ -3345,7 +3321,7 @@ export function refreshPlannerBackgroundStatus(jobId = null, options = {}) {
 export async function cancelPlannerBackgroundGeneration(jobId = null) {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    const targetJobId = jobId || meta?.backgroundJobId;
+    const targetJobId = resolvePlannerRunKey(jobId, meta);
     if (!targetJobId) return;
 
     if (meta) {
@@ -3366,7 +3342,7 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
     const res = await fetch('/api/planner/v3/generate/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: targetJobId })
+        body: JSON.stringify({ runKey: targetJobId })
     });
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -3384,7 +3360,7 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
 export async function pausePlannerBackgroundGeneration(jobId = null) {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    const targetJobId = jobId || meta?.backgroundJobId;
+    const targetJobId = resolvePlannerRunKey(jobId, meta);
     if (!targetJobId) return;
 
     if (meta) {
@@ -3407,7 +3383,7 @@ export async function pausePlannerBackgroundGeneration(jobId = null) {
     const res = await fetch('/api/planner/v3/generate/pause', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: targetJobId })
+        body: JSON.stringify({ runKey: targetJobId })
     });
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
@@ -3424,13 +3400,13 @@ export async function pausePlannerBackgroundGeneration(jobId = null) {
 export async function resumePlannerBackgroundGeneration(jobId = null) {
     const project = getActiveProject();
     const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    const targetJobId = jobId || meta?.backgroundJobId;
+    const targetJobId = resolvePlannerRunKey(jobId, meta);
     if (!targetJobId) return;
 
     const res = await fetch('/api/planner/v3/generate/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ jobId: targetJobId })
+        body: JSON.stringify({ runKey: targetJobId })
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) {
@@ -3556,6 +3532,17 @@ export async function resumePlannerGeneration() {
                 projectId: project.id,
                 characterId: resumeMeta.characterId || ''
             });
+            if (resumeMeta.runKey) {
+                const resumeRes = await fetch('/api/planner/v3/generate/resume', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ runKey: resumeMeta.runKey })
+                });
+                if (!resumeRes.ok) {
+                    const data = await resumeRes.json().catch(() => ({}));
+                    throw new Error(data.error || '브라우저 작업을 재개하지 못했습니다.');
+                }
+            }
             await startPlannerGeneration(null, { resume: true, meta: resumeMeta });
             if (window.PROJECT_PLANNER_BROWSER_RUN?.status === 'paused' || window.PROJECT_PLANNER_CANCEL_REQUESTED) break;
         }
@@ -3599,9 +3586,8 @@ export async function cancelPlannerGeneration() {
         setPlannerBrowserRunState(null);
         if (meta) {
             resetPlannerMetaAfterCancel(meta);
-            const storedMeta = await savePlannerBrowserStoredMeta(project, meta).catch(() => meta);
-            window.PROJECT_PLANNER_META = storedMeta;
-            updatePlannerQueueMetaCache(project, storedMeta);
+            window.PROJECT_PLANNER_META = meta;
+            updatePlannerQueueMetaCache(project, meta);
         }
         setPlannerStatus('취소했습니다. 다시 실행할 수 있습니다.');
         renderPlannerIfVisible();
@@ -3672,6 +3658,8 @@ async function startPlannerBackgroundRun(project, meta, targetItems, situationId
         body: JSON.stringify({
             projectId: project.id,
             projectPrefix: project.prefix,
+            characterId: meta.characterId,
+            runKey: meta.runKey,
             runId: meta.id,
             targetSituationId: situationId || null,
             mode: 'background',
@@ -3687,6 +3675,7 @@ async function startPlannerBackgroundRun(project, meta, targetItems, situationId
 
     const nextMeta = {
         ...meta,
+        runKey: data.runKey || meta.runKey,
         backgroundJobId: data.jobId || meta.backgroundJobId,
         status: data.status || 'queued',
         runningSituationIds: targetItems.map(item => item.situationId),
@@ -3734,7 +3723,7 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
     const failed = [];
     let existingCount = 0;
     let startedCount = 0;
-    const batchKey = `planner_${project.id || project.prefix || 'project'}_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`.replace(/[^a-zA-Z0-9_-]+/g, '_');
+    const batchKey = '';
     let batchIndex = 0;
 
     if (options.clearExisting === true) {
@@ -3813,10 +3802,12 @@ async function controlPlannerBackgroundEntries(project, entries, action) {
     for (const entry of entries) {
         const meta = entry.meta;
         const jobId = meta.backgroundJobId;
+        const runKey = meta.runKey;
+        if (!runKey) throw new Error('플래너 runKey를 찾을 수 없습니다. 플랜을 다시 저장하세요.');
         const res = await fetch(endpoint, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ jobId })
+            body: JSON.stringify({ runKey })
         });
         if (!res.ok) {
             const data = await res.json().catch(() => ({}));
@@ -3831,7 +3822,7 @@ async function controlPlannerBackgroundEntries(project, entries, action) {
                 ? { ...item, status: 'paused', stage: 'paused', stageLabel: getPlannerStageLabel('paused') }
                 : item
             );
-            removePlannerBackgroundPollingJob(jobId);
+            removePlannerBackgroundPollingJob(runKey);
         } else if (action === 'resume') {
             meta.status = 'running';
             meta.stage = 'running';
@@ -3840,10 +3831,10 @@ async function controlPlannerBackgroundEntries(project, entries, action) {
                 ? { ...item, status: 'queued', stage: 'queued', stageLabel: getPlannerStageLabel('queued') }
                 : item
             );
-            nextPollingJobIds.push(jobId);
+            nextPollingJobIds.push(runKey);
         } else if (action === 'cancel') {
             resetPlannerMetaAfterCancel(meta);
-            removePlannerBackgroundPollingJob(jobId);
+            removePlannerBackgroundPollingJob(runKey);
         }
         meta.updatedAt = Date.now();
         updatePlannerQueueMetaCache(project, meta);
@@ -3918,15 +3909,13 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
     const startPayload = {
         projectId: project.id,
         projectPrefix: project.prefix,
+        characterId: meta.characterId,
+        runKey: meta.runKey,
         targetSituationId: situationId || null,
         mode: 'background',
         clearExisting
     };
-    if (useExistingRunForClear) {
-        startPayload.runId = meta.id;
-    } else {
-        startPayload.plannerMeta = meta;
-    }
+    startPayload.runId = meta.id;
     const res = await fetch('/api/planner/v3/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3959,6 +3948,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
         return;
     }
 
+    meta.runKey = data.runKey || meta.runKey;
     meta.backgroundJobId = data.jobId;
     meta.status = data.status || 'queued';
     meta.updatedAt = Date.now();
@@ -4008,6 +3998,123 @@ export async function startPlannerResultGeneration(situationId = null) {
     }
 }
 
+function splitPlannerCompactR2Key(key = '') {
+    const normalized = String(key || '');
+    const slashIndex = normalized.lastIndexOf('/');
+    return {
+        prefix: slashIndex >= 0 ? normalized.slice(0, slashIndex + 1) : '',
+        fileName: slashIndex >= 0 ? normalized.slice(slashIndex + 1) : normalized
+    };
+}
+
+async function runPlannerCompactBrowserGeneration(project, meta, situationId = null, clearExisting = false, resume = false) {
+    const savedMeta = resume ? meta : await savePlannerMeta(project, meta);
+    const startRes = await fetch('/api/planner/v3/generate/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            projectId: project.id,
+            characterId: savedMeta.characterId,
+            runKey: savedMeta.runKey,
+            targetSituationId: situationId || '',
+            mode: 'browser',
+            clearExisting
+        })
+    });
+    const startData = await startRes.json().catch(() => ({}));
+    if (!startRes.ok) throw new Error(startData.error || '브라우저 생성 작업을 시작하지 못했습니다.');
+
+    savedMeta.runKey = startData.runKey || savedMeta.runKey;
+    savedMeta.backgroundJobId = startData.jobId || savedMeta.backgroundJobId;
+    savedMeta.status = startData.status || 'queued';
+    setPlannerMetaForCharacter(project, savedMeta);
+    setPlannerBrowserRunState({
+        status: 'running',
+        projectId: project.id,
+        characterId: savedMeta.characterId,
+        runKey: savedMeta.runKey,
+        jobId: savedMeta.backgroundJobId,
+        runningSituationIds: situationId ? [situationId] : savedMeta.items.map(item => item.situationId)
+    });
+
+    const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
+    while (!window.PROJECT_PLANNER_CANCEL_REQUESTED && !window.PROJECT_PLANNER_PAUSE_REQUESTED) {
+        const nextRes = await fetch(`/api/planner/v3/generate/next-browser-queue?runKey=${encodeURIComponent(savedMeta.runKey)}&_t=${Date.now()}`, {
+            cache: 'no-store'
+        });
+        const next = await nextRes.json().catch(() => ({}));
+        if (!nextRes.ok) throw new Error(next.error || '다음 브라우저 생성 슬롯을 불러오지 못했습니다.');
+        if (next.done) break;
+
+        const generation = { ...(next.generation || {}), batchCount: '1' };
+        applyPlannerSettingsToGeneration(generation, plannerSettings);
+        generation.batchCount = '1';
+        if (window.applyCraftSettings) window.applyCraftSettings(generation);
+        await applyPlannerReferenceFiles(generation);
+
+        const target = splitPlannerCompactR2Key(next.slot.r2Key);
+        setPlannerStatus(`${next.slot.globalImageIndex + 1}번째 이미지 생성 중...`);
+        window.generateNaiImage({
+            outputPrefix: target.prefix,
+            outputFileName: target.fileName,
+            v4PromptCharacters: generation.v4PromptCharacters || [],
+            planner: {
+                compact: true,
+                runKey: next.runKey,
+                jobId: next.jobId,
+                assetId: next.slot.assetId,
+                situationId: next.slot.itemId
+            }
+        });
+        const result = await waitForPlannerQueueComplete();
+        if (result.stopped) break;
+
+        const [width, height] = String(generation.res || '832x1216').split('x').map(Number);
+        const completeRes = await fetch('/api/planner/v3/generate/complete-browser-queue', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                runKey: next.runKey,
+                jobId: next.jobId,
+                assetId: next.slot.assetId,
+                r2Key: next.slot.r2Key,
+                width: width || 0,
+                height: height || 0,
+                byteSize: 0,
+                mimeType: 'image/webp',
+                expectedRevision: next.expectedRevision
+            })
+        });
+        const complete = await completeRes.json().catch(() => ({}));
+        if (!completeRes.ok) throw new Error(complete.error || '브라우저 생성 완료 상태를 저장하지 못했습니다.');
+
+        const latestMeta = await loadPlannerMeta(project, savedMeta.characterId, { force: true }).catch(() => null);
+        if (latestMeta) {
+            replacePlannerMetaValue(savedMeta, latestMeta);
+            setPlannerMetaForCharacter(project, savedMeta);
+        }
+        renderPlannerSectionByState({ preserveScroll: true });
+    }
+
+    if (window.PROJECT_PLANNER_PAUSE_REQUESTED) {
+        await fetch('/api/planner/v3/generate/pause', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ runKey: savedMeta.runKey })
+        });
+    } else if (window.PROJECT_PLANNER_CANCEL_REQUESTED) {
+        await fetch('/api/planner/v3/generate/cancel', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ runKey: savedMeta.runKey })
+        });
+    }
+
+    const latestMeta = await loadPlannerMeta(project, savedMeta.characterId, { force: true }).catch(() => savedMeta);
+    setPlannerMetaForCharacter(project, latestMeta || savedMeta);
+    return latestMeta || savedMeta;
+}
+
 export async function startPlannerGeneration(situationId = null, options = {}) {
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background') {
         await startPlannerBackgroundGeneration(situationId, options);
@@ -4040,116 +4147,24 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
         return;
     }
-    if (clearExisting) {
-        setPlannerStatus('기존 이미지를 정리하는 중...');
-        await clearPlannerItemsImages(project, getPlannerClearableItems(meta), meta);
-        meta.updatedAt = Date.now();
-        setPlannerMetaForCharacter(project, meta);
-        renderPlannerSectionByState({ preserveScroll: true });
-    }
-    meta.status = 'running';
-    meta.runningSituationIds = targetItems.map(item => item.situationId);
-    setPlannerBrowserRunState({
-        status: 'running',
-        projectId: project.id,
-        characterId: meta.characterId || '',
-        runningSituationIds: targetItems.map(item => item.situationId)
-    });
     window.PROJECT_PLANNER_PAUSE_REQUESTED = false;
     window.PROJECT_PLANNER_CANCEL_REQUESTED = false;
     window.PROJECT_PLANNER_VIEW = 'run';
-    if (situationId) {
-        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-        window.PLANNER_IMAGE_PREVIEW_KEY = null;
-        window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
-    }
-    await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-    setPlannerMetaForCharacter(project, meta);
-    renderPlannerSectionByState();
-
     const previousSettings = window.readCraftSettings ? window.readCraftSettings() : null;
     const previousVibeFile = window.VIBE_IMAGE_FILE || null;
     const previousPreciseFile = window.PRECISE_IMAGE_FILE || null;
-    const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     try {
-        for (const item of targetItems) {
-            item.status = 'running';
-            const runGenerations = buildPlannerRunGenerations(item, meta, resumeRun);
-            if (!runGenerations.length) {
-                item.status = 'done';
-                continue;
-            }
-            let result = {};
-            for (const variantRun of runGenerations) {
-            if (window.PROJECT_PLANNER_PAUSE_REQUESTED || window.PROJECT_PLANNER_CANCEL_REQUESTED) {
-                result = { stopped: true };
-                break;
-            }
-            const generation = variantRun.generation || item.generation;
-            generation.batchCount = String(clampPlannerImageCount(variantRun.count || item.count || meta.defaultCount));
-            applyPlannerSettingsToGeneration(generation, plannerSettings);
-            item.generation = generation;
-            await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-            setPlannerMetaForCharacter(project, meta);
-            renderPlannerSectionByState({ preserveScroll: true });
-            setPlannerStatus(`${item.imageNumber}.webp 생성 중...`);
-
-            if (window.applyCraftSettings) window.applyCraftSettings(generation);
-            await applyPlannerReferenceFiles(generation);
-            const beforeImages = new Set(await listPlannerImages(project, item.imageNumber));
-            window.generateNaiImage({
-                outputPrefix: getPlannerImagePrefix(project, item.imageNumber),
-                v4PromptCharacters: generation.v4PromptCharacters || [],
-                planner: {
-                    projectId: project.id,
-                    situationId: item.situationId,
-                    imageNumber: item.imageNumber,
-                    situationPromptVariantId: variantRun.situationPromptVariantId || ''
-                }
-            });
-
-            result = await waitForPlannerQueueComplete();
-            if (result.stopped) break;
-            const afterImages = await listPlannerImages(project, item.imageNumber);
-            const metadataSnapshot = buildPlannerMetadataFallback({ generation });
-            item.imagePromptSnapshots = item.imagePromptSnapshots || {};
-            afterImages
-                .filter(key => !beforeImages.has(key))
-                .forEach(key => {
-                    item.imagePromptSnapshots[key] = metadataSnapshot;
-                });
-            item.images = afterImages;
-            meta.updatedAt = Date.now();
-            await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-            }
-            item.images = await listPlannerImages(project, item.imageNumber);
-            item.status = result.stopped
-                ? (window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'pending' : 'paused')
-                : (isPlannerItemTargetComplete(item, meta) ? 'done' : 'failed');
-            meta.updatedAt = Date.now();
-            await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-            setPlannerMetaForCharacter(project, meta);
-            renderPlannerSectionByState({ preserveScroll: true });
-            if (result.stopped) {
-                meta.status = window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'draft' : 'paused';
-                break;
-            }
-        }
-
-        if (!['draft', 'paused'].includes(meta.status)) meta.status = targetItems.every(item => item.status === 'done') ? 'completed' : 'failed';
-        delete meta.runningSituationIds;
-        meta.updatedAt = Date.now();
-        await savePlannerBrowserStoredMeta(project, meta).catch(() => null);
-        setPlannerMetaForCharacter(project, meta);
-        setPlannerStatus(meta.status);
+        await runPlannerCompactBrowserGeneration(project, meta, situationId, clearExisting, resumeRun);
+        setPlannerStatus(window.PROJECT_PLANNER_PAUSE_REQUESTED ? 'paused' : (window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'cancelled' : 'completed'));
+    } catch (error) {
+        setPlannerStatus(error?.message || '브라우저 생성에 실패했습니다.');
     } finally {
-        const browserRunStatus = window.PROJECT_PLANNER_BROWSER_RUN?.status;
         window.VIBE_IMAGE_FILE = previousVibeFile;
         window.PRECISE_IMAGE_FILE = previousPreciseFile;
+        if (previousSettings && window.applyCraftSettings) window.applyCraftSettings(previousSettings);
+        if (!window.PROJECT_PLANNER_PAUSE_REQUESTED) setPlannerBrowserRunState(null);
         window.PROJECT_PLANNER_PAUSE_REQUESTED = false;
         window.PROJECT_PLANNER_CANCEL_REQUESTED = false;
-        if (browserRunStatus !== 'paused') setPlannerBrowserRunState(null);
-        if (previousSettings && window.applyCraftSettings) window.applyCraftSettings(previousSettings);
         renderPlannerSectionByState({ preserveScroll: true });
     }
 }
@@ -4161,6 +4176,9 @@ export async function selectPlannerImage(key) {
     const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
     if (!item) return;
     item.selectedImage = key;
+    item.selectedAssetId = (item.generatedImages || []).find(asset =>
+        asset?.key === key || asset?.r2Key === key
+    )?.id || '';
     meta.updatedAt = Date.now();
     setPlannerMetaForCharacter(project, meta);
     syncPlannerResultModalSelection(item, key);
@@ -4181,6 +4199,9 @@ export async function selectPlannerImageFromPreview(key) {
     if (item && (!Array.isArray(item.images) || !item.images.includes(key))) return;
     if (!item) return;
     item.selectedImage = key;
+    item.selectedAssetId = (item.generatedImages || []).find(asset =>
+        asset?.key === key || asset?.r2Key === key
+    )?.id || '';
     meta.updatedAt = Date.now();
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
@@ -4241,15 +4262,20 @@ async function loadPlannerConfirmationMetadata(item) {
 
 function findSelectedPlannerAsset(item) {
     return (item?.generatedImages || []).find(asset =>
-        asset?.id && (asset.key === item.selectedImage || asset.r2Key === item.selectedImage)
+        asset?.id && (
+            asset.id === item.selectedAssetId
+            || asset.key === item.selectedImage
+            || asset.r2Key === item.selectedImage
+        )
     ) || null;
 }
 
-async function confirmPlannerV3Item(character, item, asset, metadata) {
+async function confirmPlannerV3Item(character, item, asset, metadata, runKey = '') {
     const res = await fetch('/api/planner/v3/confirm?_t=' + Date.now(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body: JSON.stringify({
+            runKey,
             itemId: item.id,
             assetId: asset.id,
             idempotencyKey: `confirm:${item.id}:${asset.id}`,
@@ -4295,7 +4321,7 @@ async function confirmLegacyPlannerItem(project, character, item, metadata) {
         await window.saveMetadataToDB(character.prefix, `${item.imageNumber}.webp`, metadata);
     }
     if (item.id) {
-        const deleteRes = await fetch(`/api/planner/v3/item/${encodeURIComponent(item.id)}`, {
+        const deleteRes = await fetch(`/api/planner/v3/item/${encodeURIComponent(item.id)}?runKey=${encodeURIComponent(window.PROJECT_PLANNER_META?.runKey || '')}`, {
             method: 'DELETE',
             cache: 'no-store'
         });
@@ -4318,7 +4344,7 @@ async function confirmSinglePlannerItem(project, character, item) {
     if (selectedAsset) {
         return {
             mode: 'v3',
-            data: await confirmPlannerV3Item(character, item, selectedAsset, metadata)
+            data: await confirmPlannerV3Item(character, item, selectedAsset, metadata, getPlannerMetaForCharacter(project, character.id)?.runKey || '')
         };
     }
     return {
