@@ -1828,6 +1828,36 @@ async function saveImageEditorOutput(env, { sourceKey, outputKey, documentId, do
     return { outputKey, backupKey: originalBackupKey, metadataBackupKey, revisionId };
 }
 
+const FULL_GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
+let cachedAppVersion;
+
+async function getAppVersion(env, request) {
+    const runtimeCommitSha = env.CF_PAGES_COMMIT_SHA?.trim();
+    if (FULL_GIT_SHA_PATTERN.test(runtimeCommitSha || '')) {
+        return runtimeCommitSha.slice(0, 7).toLowerCase();
+    }
+
+    if (cachedAppVersion) return cachedAppVersion;
+
+    try {
+        const versionResponse = await env.ASSETS.fetch(new URL('/build-version.json', request.url));
+        if (!versionResponse.ok) {
+            cachedAppVersion = 'unknown';
+            return cachedAppVersion;
+        }
+
+        const buildMetadata = await versionResponse.json();
+        const commitSha = buildMetadata?.commitSha?.trim();
+        cachedAppVersion = FULL_GIT_SHA_PATTERN.test(commitSha || '')
+            ? commitSha.slice(0, 7).toLowerCase()
+            : 'unknown';
+    } catch {
+        cachedAppVersion = 'unknown';
+    }
+
+    return cachedAppVersion;
+}
+
 // Pages Functions의 Entry Point (모든 Method 요청을 처리하는 Catch-all 핸들러)
 /**
  * 역할: Cloudflare Pages catch-all 요청을 라우팅하고 인증, API, 정적/R2 파일 응답을 처리한다.
@@ -1841,7 +1871,6 @@ export async function onRequest(context) {
     const path = url.pathname;
     const method = request.method;
     const secret = env.secretKey;
-    const commitVersion = (env.CF_PAGES_COMMIT_SHA || 'ccff5c7').slice(0, 7);
 
     /**
      * 역할: Cookie 헤더 문자열을 key-value 객체로 변환한다.
@@ -2951,6 +2980,7 @@ export async function onRequest(context) {
     const templatePath = isAdmin ? '/app.html' : '/guest.html';
     const templateRes = await env.ASSETS.fetch(new URL(templatePath, request.url));
     let htmlContent = await templateRes.text();
+    const commitVersion = await getAppVersion(env, request);
 
     htmlContent = htmlContent.replace('{{IS_ADMIN}}', isAdmin ? 'true' : 'false');
     htmlContent = htmlContent.replace('{{INITIAL_PATH}}', initialPath);

@@ -1,6 +1,9 @@
 {
   "type": "module",
   "scripts": {
+    "build": "npm run build:version",
+    "build:version": "node scripts/generate-build-version.mjs",
+    "postinstall": "npm run build:version",
     "deploy:background": "wrangler deploy -c wrangler.background.toml"
   },
   "devDependencies": {
