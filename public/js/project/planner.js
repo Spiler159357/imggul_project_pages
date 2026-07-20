@@ -8,6 +8,7 @@ const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
 const PLANNER_META_CACHE_TTL_MS = 3000;
 const PLANNER_BACKGROUND_ETA_STORAGE_KEY = 'imggul_planner_background_eta';
+const PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 2;
 const PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS = 10000;
 const PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT = 100;
 const DEFAULT_PLANNER_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
@@ -527,8 +528,8 @@ function getPlannerQueueEta(queueMetas = []) {
     const sampleCount = samples.length;
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'browser_observed_background_queue',
-        basis: sampleCount ? 'completed_average' : 'fallback',
+        source: 'server_candidate_completed_intervals',
+        basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
         remainingCount,
@@ -540,8 +541,8 @@ function getPlannerQueueEta(queueMetas = []) {
 
 function renderPlannerEtaBadge(eta) {
     if (!eta?.remainingText) return '';
-    const basisLabel = eta.basis === 'completed_average'
-        ? `최근 ${eta.sampleCount || 0}장 기준`
+    const basisLabel = eta.basis === 'server_completed_average'
+        ? `서버 완료 간격 최근 ${eta.sampleCount || 0}장 기준`
         : '기본 추정';
     return `
         <span class="inline-flex items-center gap-1 rounded-full border border-indigo-200 dark:border-indigo-800 bg-white/80 dark:bg-indigo-950/40 px-2 py-1 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
@@ -561,23 +562,113 @@ function formatPlannerDuration(ms) {
 
 function readPlannerBackgroundEtaStore() {
     try {
-        return JSON.parse(localStorage.getItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY) || '{}') || {};
+        const store = JSON.parse(localStorage.getItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY) || '{}') || {};
+        if (Number(store.version) !== PLANNER_BACKGROUND_ETA_STORAGE_VERSION) {
+            return {
+                version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
+                source: 'server_candidate_created_at',
+                samples: [],
+                jobs: {}
+            };
+        }
+        return store;
     } catch {
-        return {};
+        return {
+            version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
+            source: 'server_candidate_created_at',
+            samples: [],
+            jobs: {}
+        };
     }
 }
 
 function writePlannerBackgroundEtaStore(store) {
     try {
-        localStorage.setItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY, JSON.stringify(store || {}));
+        localStorage.setItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY, JSON.stringify({
+            ...(store || {}),
+            version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
+            source: 'server_candidate_created_at'
+        }));
     } catch {}
 }
 
 function getPlannerBackgroundEtaSamples(store) {
     return (Array.isArray(store.samples) ? store.samples : [])
         .map(value => Number(value))
-        .filter(value => Number.isFinite(value) && value >= 1000 && value <= 10 * 60 * 1000)
+        .filter(value => Number.isFinite(value) && value > 0)
         .slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
+}
+
+function getPlannerCandidateTimingEvents(source = {}) {
+    const events = (Array.isArray(source?.items) ? source.items : []).flatMap(item => {
+        const candidates = Array.isArray(item.generatedImages) && item.generatedImages.length
+            ? item.generatedImages
+            : (Array.isArray(item.candidates) ? item.candidates : []);
+        return candidates.map((candidate, index) => {
+            if (!candidate || typeof candidate === 'string') return null;
+            const assetId = String(candidate.assetId || candidate.id || candidate.r2Key || candidate.key || '').trim();
+            const createdAt = String(candidate.createdAt || '').trim();
+            const createdAtMs = Date.parse(createdAt);
+            if (!assetId || !Number.isFinite(createdAtMs)) return null;
+            const globalImageIndex = Number(candidate.globalImageIndex);
+            return {
+                assetId,
+                createdAt,
+                createdAtMs,
+                globalImageIndex: Number.isFinite(globalImageIndex) ? globalImageIndex : index,
+                key: `${assetId}@${createdAt}`
+            };
+        }).filter(Boolean);
+    });
+    const unique = [...new Map(events.map(event => [event.key, event])).values()];
+    return unique.sort((a, b) =>
+        a.createdAtMs - b.createdAtMs
+        || a.globalImageIndex - b.globalImageIndex
+        || a.assetId.localeCompare(b.assetId)
+    );
+}
+
+function getPlannerCandidateTimingPairs(events = []) {
+    const pairs = [];
+    for (let index = 1; index < events.length; index += 1) {
+        const from = events[index - 1];
+        const to = events[index];
+        const durationMs = Math.round(to.createdAtMs - from.createdAtMs);
+        if (!Number.isFinite(durationMs) || durationMs <= 0) continue;
+        pairs.push({
+            key: `${from.key}>${to.key}`,
+            fromKey: from.key,
+            toKey: to.key,
+            durationMs
+        });
+    }
+    return pairs;
+}
+
+function resetPlannerBackgroundEtaJob(jobId, source = {}) {
+    if (!jobId) return;
+    const now = Date.now();
+    const store = readPlannerBackgroundEtaStore();
+    const events = getPlannerCandidateTimingEvents(source);
+    const pairs = getPlannerCandidateTimingPairs(events);
+    const samples = getPlannerBackgroundEtaSamples(store);
+    const latestEvent = events[events.length - 1];
+    const jobs = prunePlannerBackgroundEtaJobs({
+        ...(store.jobs || {}),
+        [jobId]: {
+            pairKeys: pairs.map(pair => pair.key),
+            skipAfterEventKey: latestEvent?.key || '',
+            observedAt: now,
+            status: 'queued'
+        }
+    });
+    writePlannerBackgroundEtaStore({
+        ...store,
+        samples,
+        sampleCount: samples.length,
+        updatedAt: new Date(now).toISOString(),
+        jobs
+    });
 }
 
 function getPlannerBackgroundEtaAverage(samples, fallbackAverageMs = 0) {
@@ -607,51 +698,59 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
     const jobs = store.jobs || {};
     const previous = jobs[jobId] || {};
     let samples = getPlannerBackgroundEtaSamples(store);
-    const canRecordSample = status.status === 'running';
-    const previousCompleted = Number(previous.completedCount);
-    const hasPreviousCompleted = Number.isFinite(previousCompleted);
-    const completedChanged = hasPreviousCompleted && completed !== previousCompleted;
-    const completedIncreased = hasPreviousCompleted && completed > previousCompleted;
+    const events = getPlannerCandidateTimingEvents(status);
+    const eventKeys = new Set(events.map(event => event.key));
+    const pairs = getPlannerCandidateTimingPairs(events);
+    const previousPairKeys = new Set(Array.isArray(previous.pairKeys) ? previous.pairKeys : []);
+    const initialized = Array.isArray(previous.pairKeys);
+    let skipAfterEventKey = String(previous.skipAfterEventKey || '');
+    if (skipAfterEventKey && !eventKeys.has(skipAfterEventKey)) skipAfterEventKey = '';
+    const newSamples = [];
 
-    if (canRecordSample && previous.sampleReady && completedIncreased && previous.observedAt) {
-        const deltaCount = completed - previousCompleted;
-        const observedMs = Math.max(0, now - Number(previous.observedAt || now));
-        const observedAverageMs = observedMs / deltaCount;
-        if (Number.isFinite(observedAverageMs) && observedAverageMs >= 1000 && observedAverageMs <= 10 * 60 * 1000) {
-            samples = samples.concat(Array.from({ length: deltaCount }, () => Math.round(observedAverageMs)))
-                .slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
+    if (initialized) {
+        for (const pair of pairs) {
+            if (previousPairKeys.has(pair.key)) continue;
+            if (skipAfterEventKey && pair.fromKey === skipAfterEventKey) {
+                skipAfterEventKey = '';
+                continue;
+            }
+            newSamples.push(pair.durationMs);
         }
+    } else if (events.length) {
+        skipAfterEventKey = events[events.length - 1]?.key || '';
+    }
+
+    if (newSamples.length) {
+        samples = [...samples, ...newSamples].slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
     }
     const averageMs = getPlannerBackgroundEtaAverage(samples, store.averageMs);
     const sampleCount = samples.length;
-
-    if (!hasPreviousCompleted || completedChanged) {
+    const pairKeys = pairs.map(pair => pair.key);
+    const pairStateChanged = !initialized
+        || pairKeys.length !== previousPairKeys.size
+        || pairKeys.some(key => !previousPairKeys.has(key))
+        || skipAfterEventKey !== String(previous.skipAfterEventKey || '');
+    if (pairStateChanged || newSamples.length) {
         jobs[jobId] = {
-            completedCount: completed,
-            observedAt: canRecordSample ? now : previous.observedAt,
-            sampleReady: canRecordSample && completed > 0,
+            pairKeys,
+            skipAfterEventKey,
+            observedAt: now,
             status: status.status
         };
-    } else {
-        jobs[jobId] = {
-            ...previous,
-            status: status.status,
-            sampleReady: Boolean(previous.sampleReady) && canRecordSample && completed > 0
-        };
+        writePlannerBackgroundEtaStore({
+            ...store,
+            averageMs,
+            sampleCount,
+            samples,
+            updatedAt: new Date(now).toISOString(),
+            jobs: prunePlannerBackgroundEtaJobs(jobs)
+        });
     }
-    writePlannerBackgroundEtaStore({
-        ...store,
-        averageMs,
-        sampleCount,
-        samples,
-        updatedAt: new Date(now).toISOString(),
-        jobs: prunePlannerBackgroundEtaJobs(jobs)
-    });
 
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'browser_observed_background_status',
-        basis: sampleCount ? 'completed_average' : 'fallback',
+        source: 'server_candidate_completed_intervals',
+        basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
         remainingCount,
@@ -3454,6 +3553,7 @@ export async function resumePlannerBackgroundGeneration(jobId = null) {
         return;
     }
     if (meta) {
+        resetPlannerBackgroundEtaJob(targetJobId, meta);
         meta.status = data.status || 'running';
         meta.stage = data.stage || 'running';
         meta.stageLabel = data.stageLabel || getPlannerStageLabel('running');
@@ -3707,6 +3807,7 @@ async function startPlannerBackgroundRun(project, meta, targetItems, situationId
     if (!res.ok) {
         throw new Error(data.error || '백그라운드 생성 등록에 실패했습니다.');
     }
+    if (!data.existing) resetPlannerBackgroundEtaJob(data.runKey || meta.runKey, meta);
 
     const nextMeta = {
         ...meta,
@@ -3859,6 +3960,7 @@ async function controlPlannerBackgroundEntries(project, entries, action) {
             );
             removePlannerBackgroundPollingJob(runKey);
         } else if (action === 'resume') {
+            resetPlannerBackgroundEtaJob(runKey, meta);
             meta.status = 'running';
             meta.stage = 'running';
             meta.stageLabel = getPlannerStageLabel('running');
@@ -3989,6 +4091,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
         return;
     }
 
+    resetPlannerBackgroundEtaJob(data.runKey || meta.runKey, meta);
     meta.runKey = data.runKey || meta.runKey;
     meta.backgroundJobId = data.jobId;
     meta.status = data.status || 'queued';
