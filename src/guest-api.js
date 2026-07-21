@@ -257,7 +257,7 @@ async function getCharacterImages(env, character, situations = { byImageNumber: 
                 || situations.byId.get(fileStem);
             return {
                 fileName,
-                name: situation?.name || aliases[fileName] || aliases[folderKey] || aliases[fileStem] || fileName,
+                name: aliases[fileName] || aliases[folderKey] || aliases[fileStem] || situation?.name || fileName,
                 situationId: situation?.id || folderKey || fileStem,
                 path: item.relativePath,
                 size: item.object.size,
