@@ -421,6 +421,7 @@ function serializeComment(row) {
 }
 
 function serializePost(row, projectPath, { detail = false, comments = [] } = {}) {
+    const imageVersion = row.image_key ? String(row.image_key).split('/').pop() : '';
     const post = {
         id: row.id,
         title: row.title,
@@ -429,7 +430,9 @@ function serializePost(row, projectPath, { detail = false, comments = [] } = {})
         updatedAt: row.updated_at,
         edited: row.updated_at !== row.created_at,
         commentCount: Number(row.comment_count || comments.length || 0),
-        imageUrl: row.image_key ? `/api/guest/projects/${encodeURIComponent(projectPath)}/posts/${encodeURIComponent(row.id)}/image` : null
+        imageUrl: row.image_key
+            ? `/api/guest/projects/${encodeURIComponent(projectPath)}/posts/${encodeURIComponent(row.id)}/image?v=${encodeURIComponent(imageVersion)}`
+            : null
     };
     if (detail) post.comments = comments.map(serializeComment);
     return post;
