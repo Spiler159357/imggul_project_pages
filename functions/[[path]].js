@@ -4,6 +4,11 @@ import {
     writeBackgroundErrorLog
 } from "../src/worker-utils.js";
 import {
+    handleGuestApi,
+    normalizeGuestProjectPath,
+    resolveGuestProject
+} from "../src/guest-api.js";
+import {
     cancelPlannerCompactGeneration,
     cleanupPlannerCompactAssets,
     completePlannerCompactBrowserQueue,
@@ -29,6 +34,19 @@ function plannerApiErrorResponse(error) {
         error: error?.message || String(error || "Planner request failed"),
         code: error?.code || undefined
     }, { status: error?.status || 500 });
+}
+
+async function constantTimeTextEqual(left, right) {
+    const encoder = new TextEncoder();
+    const [leftHash, rightHash] = await Promise.all([
+        crypto.subtle.digest('SHA-256', encoder.encode(String(left || ''))),
+        crypto.subtle.digest('SHA-256', encoder.encode(String(right || '')))
+    ]);
+    const leftBytes = new Uint8Array(leftHash);
+    const rightBytes = new Uint8Array(rightHash);
+    let difference = 0;
+    for (let index = 0; index < leftBytes.length; index += 1) difference |= leftBytes[index] ^ rightBytes[index];
+    return difference === 0;
 }
 
 /**
@@ -1882,25 +1900,27 @@ export async function onRequest(context) {
       const cookies = {};
       if (cookieStr) {
         cookieStr.split(';').forEach(cookie => {
-          const parts = cookie.split('=');
-          cookies[parts[0].trim()] = parts[1];
+          const separatorIndex = cookie.indexOf('=');
+          if (separatorIndex < 0) return;
+          const name = cookie.slice(0, separatorIndex).trim();
+          cookies[name] = cookie.slice(separatorIndex + 1);
         });
       }
       return cookies;
     };
     
     const cookies = getCookies(request.headers.get('Cookie'));
-    const isAdmin = cookies['auth'] === secret;
+    const isAdmin = !!secret && await constantTimeTextEqual(cookies['auth'], secret);
 
     // 1. 로그인 POST 라우팅 처리
     if (path === "/login" && method === "POST") {
         try {
             const body = await request.json();
-            if (body.password === secret) {
+            if (secret && await constantTimeTextEqual(body.password, secret)) {
                 return new Response(JSON.stringify({ success: true }), {
                     headers: {
                         'Content-Type': 'application/json',
-                        'Set-Cookie': `auth=${body.password}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`
+                        'Set-Cookie': `auth=${body.password}; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=31536000`
                     }
                 });
             } else {
@@ -1915,9 +1935,16 @@ export async function onRequest(context) {
     if (path === "/logout" && method === "GET") {
         return new Response(null, {
             status: 302,
-            headers: { 'Location': '/', 'Set-Cookie': `auth=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0` }
+            headers: { 'Location': '/login', 'Set-Cookie': `auth=; Path=/; HttpOnly; Secure; SameSite=Strict; Max-Age=0` }
         });
     }
+
+    if (path === "/login" && method === "GET" && isAdmin) {
+        return Response.redirect(new URL('/', request.url), 302);
+    }
+
+    const guestApiResponse = await handleGuestApi(request, env, isAdmin, context);
+    if (guestApiResponse) return guestApiResponse;
 
     // 3. API 라우팅 처리
     if (path === "/api/planner/v3/settings" && method === "GET") {
@@ -2540,6 +2567,7 @@ export async function onRequest(context) {
     }
 
     if (path === "/api/aliases" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         const prefix = url.searchParams.get('prefix') || '';
         let globalAliases = {};
         let projectAliases = {};
@@ -2653,6 +2681,9 @@ export async function onRequest(context) {
                 try {
                     await deleteAliasPrefix(env, prefix).catch(() => null);
                 } catch(e){}
+                await env.DB.prepare('DELETE FROM v2_projects WHERE prefix = ? OR prefix = ?')
+                    .bind(prefix, prefix.replace(/\/+$/g, ''))
+                    .run();
                 return new Response(JSON.stringify({ success: true }));
             }
 
@@ -2712,6 +2743,30 @@ export async function onRequest(context) {
                     await moveAliasPrefix(env, oldPrefix, newPrefix).catch(() => null);
                 } catch(e){}
 
+                const timestamp = nowIso();
+                await env.DB.batch([
+                    env.DB.prepare(`
+                        UPDATE v2_projects
+                        SET prefix = ?, updated_at = ?
+                        WHERE prefix = ? OR prefix = ?
+                    `).bind(newPrefix, timestamp, oldPrefix, oldPrefix.replace(/\/+$/g, '')),
+                    env.DB.prepare(`
+                        UPDATE v2_characters
+                        SET prefix = ? || substr(prefix, length(?) + 1), updated_at = ?
+                        WHERE prefix LIKE ?
+                    `).bind(newPrefix, oldPrefix, timestamp, `${oldPrefix}%`),
+                    env.DB.prepare(`
+                        UPDATE v2_assets
+                        SET r2_key = ? || substr(r2_key, length(?) + 1), updated_at = ?
+                        WHERE r2_key LIKE ?
+                    `).bind(newPrefix, oldPrefix, timestamp, `${oldPrefix}%`),
+                    env.DB.prepare(`
+                        UPDATE guest_posts
+                        SET image_key = ? || substr(image_key, length(?) + 1), updated_at = ?
+                        WHERE image_key LIKE ?
+                    `).bind(newPrefix, oldPrefix, timestamp, `${oldPrefix}%`)
+                ]);
+
                 return new Response(JSON.stringify({ success: true, newKey: newPrefix }));
             }
 
@@ -2767,11 +2822,8 @@ export async function onRequest(context) {
     }
 
     if (path === "/api/list" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         const prefix = url.searchParams.get('prefix') || '';
-        
-        if (!isAdmin && prefix === '') {
-             return new Response(JSON.stringify({ folders: [], files: [] }), { headers: { 'Content-Type': 'application/json' } });
-        }
 
         try {
             let allFolders = new Set();
@@ -2906,6 +2958,10 @@ export async function onRequest(context) {
         if (objectKey) {
             objectKey = decodeURIComponent(objectKey);
 
+            if (!isAdmin) {
+                return new Response('Not found', { status: 404 });
+            }
+
             if (objectKey.endsWith('_meta.json') && !isAdmin) {
                 return new Response("Forbidden: You don't have permission to access this metadata.", { status: 403 });
             }
@@ -2955,37 +3011,53 @@ export async function onRequest(context) {
         }
     }
 
-    // 5. 비인증 접속인데 로그인 페이지 또는 루트 요청일 때 처리
-    if (!isAdmin && (path === "/login" || path === "/")) {
+    // 5. 비인증 로그인 화면과 잘못된 루트 접근을 분리한다.
+    if (!isAdmin && path === "/login") {
         const loginRes = await env.ASSETS.fetch(new URL('/login.html', request.url));
         let loginHtmlText = await loginRes.text();
         return new Response(loginHtmlText.replace('{{ERROR_STYLE}}', 'none'), { headers: { "Content-Type": "text/html; charset=UTF-8" } });
     }
 
-    // 6. 어드민 / 게스트 뷰 동적 바인딩 및 파라미터 주입 처리
-    let initialPath = path === "/" ? "" : path.slice(1);
-    if (initialPath && !initialPath.endsWith('/')) initialPath += '/';
-    
-    let isEmpty = false;
-
-    if (isAdmin) {
-        initialPath = ''; 
-    } else {
-        if (initialPath !== '') {
-            const list = await env.imgBucket.list({ prefix: initialPath, limit: 1 });
-            isEmpty = list.objects.length === 0;
-        }
+    if (!isAdmin && path === "/") {
+        const errorResponse = await env.ASSETS.fetch(new URL('/access-error.html', request.url));
+        let errorHtml = await errorResponse.text();
+        errorHtml = errorHtml.replace('{{ERROR_TITLE}}', '잘못된 접근입니다')
+            .replace('{{ERROR_MESSAGE}}', '프로젝트 주소로 접속하거나 관리자 로그인 주소를 이용해 주세요.');
+        return new Response(errorHtml, {
+            status: 404,
+            headers: { "Content-Type": "text/html; charset=UTF-8" }
+        });
     }
 
-    const templatePath = isAdmin ? '/app.html' : '/guest.html';
-    const templateRes = await env.ASSETS.fetch(new URL(templatePath, request.url));
+    // 6. 관리자 화면 또는 검증된 단일 프로젝트 게스트 화면을 반환한다.
+    if (isAdmin) {
+        const templateRes = await env.ASSETS.fetch(new URL('/app.html', request.url));
+        let htmlContent = await templateRes.text();
+        const commitVersion = await getAppVersion(env, request);
+        htmlContent = htmlContent.replace('{{IS_ADMIN}}', 'true');
+        htmlContent = htmlContent.replace('{{INITIAL_PATH}}', '');
+        htmlContent = htmlContent.replace('{{IS_EMPTY}}', 'false');
+        htmlContent = htmlContent.replaceAll('{{APP_VERSION}}', commitVersion);
+        return new Response(htmlContent, { headers: { "Content-Type": "text/html; charset=UTF-8" } });
+    }
+
+    const pathParts = path.split('/').filter(Boolean);
+    const isSingleProjectPath = /^\/[^/]+\/?$/.test(path);
+    const projectPath = isSingleProjectPath && pathParts.length === 1 ? normalizeGuestProjectPath(pathParts[0]) : '';
+    const project = projectPath ? await resolveGuestProject(env, projectPath) : null;
+    if (!project) {
+        const errorResponse = await env.ASSETS.fetch(new URL('/access-error.html', request.url));
+        let errorHtml = await errorResponse.text();
+        errorHtml = errorHtml.replace('{{ERROR_TITLE}}', '프로젝트를 찾을 수 없습니다')
+            .replace('{{ERROR_MESSAGE}}', '주소를 확인한 뒤 다시 시도해 주세요.');
+        return new Response(errorHtml, { status: 404, headers: { "Content-Type": "text/html; charset=UTF-8" } });
+    }
+
+    const templateRes = await env.ASSETS.fetch(new URL('/guest.html', request.url));
     let htmlContent = await templateRes.text();
     const commitVersion = await getAppVersion(env, request);
-
-    htmlContent = htmlContent.replace('{{IS_ADMIN}}', isAdmin ? 'true' : 'false');
-    htmlContent = htmlContent.replace('{{INITIAL_PATH}}', initialPath);
-    htmlContent = htmlContent.replace('{{IS_EMPTY}}', isEmpty ? 'true' : 'false');
+    const projectPathJson = JSON.stringify(project.path).replace(/</g, '\\u003c');
+    htmlContent = htmlContent.replace('{{INITIAL_PROJECT_PATH_JSON}}', projectPathJson);
     htmlContent = htmlContent.replaceAll('{{APP_VERSION}}', commitVersion);
-    
     return new Response(htmlContent, { headers: { "Content-Type": "text/html; charset=UTF-8" } });
 }

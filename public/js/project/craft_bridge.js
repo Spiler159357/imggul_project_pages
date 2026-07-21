@@ -641,7 +641,11 @@ export async function saveCraftPromptToSituation() {
 }
 
 export async function restoreProjectState(state = {}) {
-    if (state.projectView === 'section' && state.projectSection) {
+    if (state.projectView === 'post-detail' && state.projectPostId) {
+        window.PROJECT_ACTIVE_PROJECT_ID = state.projectId || getDefaultProjectId();
+        await openProjectSection('posts', true);
+        await window.openAdminPost?.(state.projectPostId, true);
+    } else if (state.projectView === 'section' && state.projectSection) {
         window.PROJECT_ACTIVE_PROJECT_ID = state.projectId || getDefaultProjectId();
         await openProjectSection(state.projectSection, true);
     } else if (state.projectView === 'character-detail') {

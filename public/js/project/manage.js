@@ -3,6 +3,7 @@ import { renderCharacterSection } from './character.js';
 import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js';
 import { renderSituationSection } from './situation.js';
 import { renderImageEditor } from '../image_editor.js';
+import { openProjectPostsSection } from './posts.js';
 
 export async function renderProjectManage(skipHistory = true) {
     window.PROJECT_VIEW = 'manage';
@@ -208,17 +209,14 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
             </div>
         </div>
 
-        <div class="flex-1 min-h-0 overflow-hidden p-4 sm:p-6 flex items-stretch lg:items-center">
-            <section class="mx-auto grid h-full min-h-0 w-full grid-cols-1 grid-rows-[minmax(0,1fr)_minmax(0,2fr)_minmax(0,1fr)] lg:grid-cols-3 lg:grid-rows-none gap-4 sm:gap-6 lg:aspect-video" style="max-width: min(100%, calc((100dvh - 10rem) * 16 / 9));">
+        <div class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 flex items-stretch lg:items-center">
+            <section class="mx-auto grid min-h-full w-full max-w-6xl grid-cols-2 grid-rows-3 gap-3 sm:gap-4 lg:h-full lg:min-h-0 lg:grid-cols-3 lg:grid-rows-2 lg:gap-6">
                 ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'prompt'), 'min-h-0')}
-                <div class="min-h-0 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 sm:gap-6">
-                    ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0')}
-                    ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0')}
-                </div>
-                <div class="min-h-0 grid grid-rows-[minmax(0,1fr)_minmax(0,1fr)] gap-4 sm:gap-6">
-                    ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0')}
-                    ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'image-editor'), 'min-h-0')}
-                </div>
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'image-editor'), 'min-h-0')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'posts'), 'min-h-0')}
             </section>
         </div>
     `);
@@ -356,6 +354,17 @@ export function renderProjectPanelItems(project, section) {
         `;
     }
 
+    if (section.key === 'posts') {
+        const count = Array.isArray(project.posts) ? project.posts.length : 0;
+        return `
+            <span class="h-full flex flex-col items-center justify-center text-center text-xs text-gray-500 dark:text-gray-400">
+                <i data-lucide="newspaper" class="w-8 h-8 mb-2 text-indigo-500"></i>
+                <span class="font-bold text-gray-700 dark:text-gray-200">${count ? `${count}개 게시글` : section.emptyText}</span>
+                <span class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">게스트에게 공개할 소식을 관리합니다.</span>
+            </span>
+        `;
+    }
+
     const items = getProjectItems(project, section.itemKey);
     if (!items.length) {
         return `
@@ -470,6 +479,9 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
             ...(window.PROJECT_IMAGE_EDITOR_NEXT_OPTIONS || {})
         });
         window.PROJECT_IMAGE_EDITOR_NEXT_OPTIONS = null;
+    }
+    else if (section.key === 'posts') {
+        await openProjectPostsSection(true);
     }
 
     const routeState = { projectView: 'section', projectId: window.PROJECT_ACTIVE_PROJECT_ID, projectSection: section.key };
