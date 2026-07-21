@@ -9,8 +9,12 @@ const state = {
     postsScrollTop: 0,
     imageReturnFocus: null,
     commentReturnFocus: null,
-    commentAction: null
+    commentAction: null,
+    autoRefreshInFlight: false
 };
+
+const POSTS_AUTO_REFRESH_MS = 15000;
+let postsAutoRefreshTimer = null;
 
 const content = document.getElementById('guest-content');
 const main = document.getElementById('guest-main');
@@ -56,9 +60,27 @@ async function api(url, options = {}) {
     const response = await fetch(url, { cache: 'no-store', ...options });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-        throw new Error(payload?.error?.message || '요청을 처리하지 못했습니다.');
+        const error = new Error(payload?.error?.message || '요청을 처리하지 못했습니다.');
+        error.status = response.status;
+        throw error;
     }
     return payload.data;
+}
+
+function postsRevision(posts) {
+    return JSON.stringify((posts || []).map(post => [post.id, post.updatedAt, post.commentCount]));
+}
+
+function postRevision(post) {
+    if (!post?.id) return '';
+    return JSON.stringify([
+        post.id,
+        post.title,
+        post.body,
+        post.imageUrl,
+        post.updatedAt,
+        (post.comments || []).map(comment => [comment.id, comment.authorName, comment.body, comment.updatedAt])
+    ]);
 }
 
 function getRoute() {
@@ -232,11 +254,34 @@ function commentHtml(comment) {
         </article>`;
 }
 
-async function renderPostDetail(postId) {
-    renderState('loader-circle', '게시글을 불러오는 중입니다.');
+async function renderPostDetail(postId, options = {}) {
+    const preserveView = options.preserveView === true;
+    const previousScrollTop = preserveView ? main.scrollTop : 0;
+    const focusedId = preserveView && document.activeElement?.id ? document.activeElement.id : '';
+    const focusedSelection = focusedId && typeof document.activeElement?.selectionStart === 'number'
+        ? [document.activeElement.selectionStart, document.activeElement.selectionEnd]
+        : null;
+    const draft = preserveView ? {
+        name: document.getElementById('guest-comment-name')?.value || '',
+        password: document.getElementById('guest-comment-password')?.value || '',
+        body: document.getElementById('guest-comment-body')?.value || ''
+    } : null;
+    if (!options.post) renderState('loader-circle', '게시글을 불러오는 중입니다.');
     try {
-        const post = await api(`${apiBase}/posts/${encodeURIComponent(postId)}`);
+        const post = options.post || await api(`${apiBase}/posts/${encodeURIComponent(postId)}`);
         state.activePost = post;
+        const summaryIndex = state.posts.findIndex(item => item.id === post.id);
+        if (summaryIndex >= 0) {
+            state.posts[summaryIndex] = {
+                ...state.posts[summaryIndex],
+                title: post.title,
+                body: post.body,
+                imageUrl: post.imageUrl,
+                updatedAt: post.updatedAt,
+                edited: post.edited,
+                commentCount: post.commentCount
+            };
+        }
         setViewLabel(post.title);
         content.innerHTML = `
             <article class="mx-auto max-w-4xl">
@@ -276,7 +321,24 @@ async function renderPostDetail(postId) {
                 </section>
             </article>`;
         refreshIcons();
-        main.scrollTop = 0;
+        if (preserveView && draft) {
+            const nameInput = document.getElementById('guest-comment-name');
+            const passwordInput = document.getElementById('guest-comment-password');
+            const bodyInput = document.getElementById('guest-comment-body');
+            if (nameInput) nameInput.value = draft.name;
+            if (passwordInput) passwordInput.value = draft.password;
+            if (bodyInput) bodyInput.value = draft.body;
+            main.scrollTop = previousScrollTop;
+            const focused = focusedId ? document.getElementById(focusedId) : null;
+            if (focused) {
+                focused.focus({ preventScroll: true });
+                if (focusedSelection && typeof focused.setSelectionRange === 'function') {
+                    focused.setSelectionRange(focusedSelection[0], focusedSelection[1]);
+                }
+            }
+        } else {
+            main.scrollTop = 0;
+        }
     } catch (error) {
         renderState('circle-alert', '게시글을 불러오지 못했습니다.', error.message);
     }
@@ -296,6 +358,48 @@ async function renderRoute() {
     } else {
         renderCharacterList();
         main.scrollTop = 0;
+    }
+}
+
+async function refreshVisibleGuestPosts() {
+    if (document.hidden || !state.project || state.autoRefreshInFlight) return;
+    const route = getRoute();
+    if (route.tab !== 'posts') return;
+    state.autoRefreshInFlight = true;
+    try {
+        if (!route.id) {
+            const limit = Math.min(50, Math.max(20, state.posts.length || 0));
+            const page = await api(`${apiBase}/posts?limit=${limit}`);
+            if (postsRevision(state.posts) !== postsRevision(page.items)) {
+                state.postsScrollTop = main.scrollTop;
+                state.posts = page.items;
+                state.nextCursor = page.nextCursor;
+                state.postsLoaded = true;
+                renderPostList();
+            }
+            return;
+        }
+
+        const modal = document.getElementById('guest-comment-modal');
+        const submit = document.getElementById('guest-comment-create-submit');
+        if (!modal?.classList.contains('hidden') || submit?.disabled) return;
+        const post = await api(`${apiBase}/posts/${encodeURIComponent(route.id)}`);
+        if (postRevision(state.activePost) !== postRevision(post)) {
+            await renderPostDetail(route.id, { post, preserveView: true });
+        }
+    } catch (error) {
+        if (error.status === 404 && getRoute().id === route.id) navigate('posts', { replace: true });
+    } finally {
+        state.autoRefreshInFlight = false;
+    }
+}
+
+function startGuestPostsAutoRefresh() {
+    if (!postsAutoRefreshTimer) {
+        postsAutoRefreshTimer = window.setInterval(refreshVisibleGuestPosts, POSTS_AUTO_REFRESH_MS);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) refreshVisibleGuestPosts();
+        });
     }
 }
 
@@ -525,6 +629,7 @@ async function init() {
         document.getElementById('guest-project-name').textContent = state.project.name;
         if (!location.hash) history.replaceState({}, '', '#characters');
         await renderRoute();
+        startGuestPostsAutoRefresh();
     } catch (error) {
         document.getElementById('guest-project-name').textContent = '프로젝트 오류';
         renderState('circle-alert', '프로젝트를 불러오지 못했습니다.', error.message);

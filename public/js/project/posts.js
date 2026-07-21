@@ -9,6 +9,11 @@ import {
     setProjectRoute
 } from './shared.js';
 
+const POSTS_AUTO_REFRESH_MS = 15000;
+let postsAutoRefreshTimer = null;
+let postsAutoRefreshInFlight = false;
+let postsVisibilityListenerBound = false;
+
 function formatDate(value) {
     if (!value) return '';
     const date = new Date(value);
@@ -25,12 +30,32 @@ async function readApiResponse(response) {
     return payload.data;
 }
 
+async function fetchProjectPosts(project) {
+    const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/posts?limit=50`, { cache: 'no-store' });
+    const page = await readApiResponse(response);
+    return page.items || [];
+}
+
+function postsRevision(posts) {
+    return JSON.stringify((posts || []).map(post => [post.id, post.updatedAt, post.commentCount]));
+}
+
+function postRevision(post) {
+    if (!post?.id) return '';
+    return JSON.stringify([
+        post.id,
+        post.title,
+        post.body,
+        post.imageUrl,
+        post.updatedAt,
+        (post.comments || []).map(comment => [comment.id, comment.authorName, comment.body, comment.updatedAt])
+    ]);
+}
+
 export async function loadProjectPosts(project, force = false) {
     if (!project) return [];
     if (!force && project.postsLoaded) return Array.isArray(project.posts) ? project.posts : [];
-    const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/posts?limit=50`, { cache: 'no-store' });
-    const page = await readApiResponse(response);
-    project.posts = page.items || [];
+    project.posts = await fetchProjectPosts(project);
     project.postsLoaded = true;
     return project.posts;
 }
@@ -56,12 +81,12 @@ function renderHeader(project) {
 function renderPostList(project, selectedId, state = {}) {
     const posts = Array.isArray(project.posts) ? project.posts : [];
     return `
-        <aside class="min-h-0 rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 flex flex-col overflow-hidden">
+        <aside id="admin-post-list-panel" class="min-h-0 rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 flex flex-col overflow-hidden">
             <div class="flex-shrink-0 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
                 <h2 class="text-sm font-bold text-gray-900 dark:text-white">게시글 목록</h2>
                 <p class="mt-0.5 text-[11px] text-gray-400">최신 작성 순 · ${posts.length}개</p>
             </div>
-            <div class="min-h-0 flex-1 overflow-y-auto p-2 space-y-2">
+            <div id="admin-post-list-scroll" class="min-h-0 flex-1 overflow-y-auto p-2 space-y-2">
                 ${state.loading ? renderEmptyState('게시글을 불러오는 중입니다.') : ''}
                 ${state.error ? renderEmptyState(state.error) : ''}
                 ${!state.loading && !state.error && posts.map(post => `
@@ -100,7 +125,7 @@ function renderEditor(post = null) {
                 </div>
                 ${isEdit ? `<button type="button" onclick="window.deleteAdminPost('${escapeJsString(post.id)}')" class="rounded-lg p-2 text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/20" aria-label="게시글 삭제"><i data-lucide="trash-2" class="h-4 w-4"></i></button>` : ''}
             </div>
-            <div class="min-h-0 flex-1 overflow-y-auto p-4">
+            <div id="admin-post-editor-scroll" class="min-h-0 flex-1 overflow-y-auto p-4">
                 <form id="admin-post-form" class="space-y-4" onsubmit="window.submitAdminPost(event)">
                     <input id="admin-post-id" type="hidden" value="${escapeHtml(post?.id || '')}">
                     <div>
@@ -166,6 +191,87 @@ export function renderProjectPostsSection(options = {}) {
     refreshProjectIcons();
 }
 
+function isAdminPostEditorBusy(post) {
+    const form = document.getElementById('admin-post-form');
+    if (!form || !post?.id) return !!form;
+    if (form.contains(document.activeElement)) return true;
+    const title = document.getElementById('admin-post-title')?.value || '';
+    const body = document.getElementById('admin-post-body')?.value || '';
+    const removeImage = document.getElementById('admin-post-remove-image')?.value === 'true';
+    const hasImageFile = (document.getElementById('admin-post-image')?.files?.length || 0) > 0;
+    return title !== (post.title || '') || body !== (post.body || '') || removeImage || hasImageFile;
+}
+
+function refreshAdminPostListOnly(project, selectedId) {
+    const panel = document.getElementById('admin-post-list-panel');
+    if (!panel) return;
+    const scrollTop = document.getElementById('admin-post-list-scroll')?.scrollTop || 0;
+    panel.outerHTML = renderPostList(project, selectedId);
+    const scroll = document.getElementById('admin-post-list-scroll');
+    if (scroll) scroll.scrollTop = scrollTop;
+    refreshProjectIcons();
+}
+
+async function refreshVisibleAdminPosts() {
+    if (document.hidden || window.PROJECT_ACTIVE_SECTION !== 'posts' || postsAutoRefreshInFlight) return;
+    const project = getActiveProject();
+    if (!project) return;
+    postsAutoRefreshInFlight = true;
+    try {
+        const previousPostsRevision = postsRevision(project.posts);
+        const nextPosts = await fetchProjectPosts(project);
+        const listChanged = previousPostsRevision !== postsRevision(nextPosts);
+        project.posts = nextPosts;
+        project.postsLoaded = true;
+
+        const activePost = window.PROJECT_ACTIVE_POST;
+        if (!activePost?.id) {
+            if (listChanged) refreshAdminPostListOnly(project, activePost?.id);
+            return;
+        }
+
+        const response = await fetch(`/api/admin/posts/${encodeURIComponent(activePost.id)}`, { cache: 'no-store' });
+        if (response.status === 404) {
+            window.PROJECT_ACTIVE_POST = null;
+            renderProjectPostsSection({ post: null });
+            return;
+        }
+        const nextPost = await readApiResponse(response);
+        const detailChanged = postRevision(activePost) !== postRevision(nextPost);
+        if (!listChanged && !detailChanged) return;
+
+        if (isAdminPostEditorBusy(activePost)) {
+            if (listChanged) refreshAdminPostListOnly(project, activePost.id);
+            return;
+        }
+
+        const listScrollTop = document.getElementById('admin-post-list-scroll')?.scrollTop || 0;
+        const editorScrollTop = document.getElementById('admin-post-editor-scroll')?.scrollTop || 0;
+        window.PROJECT_ACTIVE_POST = nextPost;
+        renderProjectPostsSection({ post: nextPost });
+        const listScroll = document.getElementById('admin-post-list-scroll');
+        const editorScroll = document.getElementById('admin-post-editor-scroll');
+        if (listScroll) listScroll.scrollTop = listScrollTop;
+        if (editorScroll) editorScroll.scrollTop = editorScrollTop;
+    } catch {
+        // 자동 갱신 실패는 현재 화면을 유지하고 다음 주기에 다시 시도한다.
+    } finally {
+        postsAutoRefreshInFlight = false;
+    }
+}
+
+function startAdminPostsAutoRefresh() {
+    if (!postsAutoRefreshTimer) {
+        postsAutoRefreshTimer = window.setInterval(refreshVisibleAdminPosts, POSTS_AUTO_REFRESH_MS);
+    }
+    if (!postsVisibilityListenerBound) {
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) refreshVisibleAdminPosts();
+        });
+        postsVisibilityListenerBound = true;
+    }
+}
+
 export async function openProjectPostsSection(skipHistory = false) {
     const project = getActiveProject();
     if (!project) return;
@@ -180,6 +286,7 @@ export async function openProjectPostsSection(skipHistory = false) {
     const routeState = { projectView: 'section', projectId: project.id, projectSection: 'posts' };
     if (!skipHistory) setProjectRoute(routeState, `#project/${project.id}/posts`);
     else rememberProjectRoute(routeState, `#project/${project.id}/posts`);
+    startAdminPostsAutoRefresh();
 }
 
 export function openAdminPostEditor() {
