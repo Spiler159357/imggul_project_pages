@@ -21,7 +21,7 @@ const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 const MAX_FORM_BYTES = MAX_IMAGE_BYTES + 128 * 1024;
 const COMMENT_RATE_WINDOW_MS = 60 * 1000;
 const COMMENT_RATE_LIMIT = 5;
-const PBKDF2_ITERATIONS = 210000;
+const COMMENT_PASSWORD_SCHEME = 'sha256-v1';
 
 class GuestApiError extends Error {
     constructor(status, code, message) {
@@ -519,40 +519,19 @@ function bytesToBase64(bytes) {
     return btoa(binary);
 }
 
-function base64ToBytes(value) {
-    const binary = atob(value);
-    return Uint8Array.from(binary, char => char.charCodeAt(0));
-}
-
-async function derivePasswordHash(password, saltBytes) {
-    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(password), 'PBKDF2', false, ['deriveBits']);
-    const bits = await crypto.subtle.deriveBits({
-        name: 'PBKDF2',
-        hash: 'SHA-256',
-        salt: saltBytes,
-        iterations: PBKDF2_ITERATIONS
-    }, key, 256);
-    return new Uint8Array(bits);
-}
-
 async function hashPassword(password) {
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const hash = await derivePasswordHash(password, salt);
-    return { salt: bytesToBase64(salt), hash: bytesToBase64(hash) };
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(password));
+    return { salt: COMMENT_PASSWORD_SCHEME, hash: bytesToBase64(new Uint8Array(digest)) };
 }
 
 async function verifyPassword(password, encodedSalt, encodedHash) {
-    let expected;
-    let actual;
-    try {
-        expected = base64ToBytes(encodedHash);
-        actual = await derivePasswordHash(password, base64ToBytes(encodedSalt));
-    } catch {
-        return false;
-    }
-    if (actual.length !== expected.length) return false;
+    if (encodedSalt !== COMMENT_PASSWORD_SCHEME) return false;
+    const actual = await hashPassword(password);
+    if (actual.hash.length !== encodedHash.length) return false;
     let difference = 0;
-    for (let index = 0; index < actual.length; index += 1) difference |= actual[index] ^ expected[index];
+    for (let index = 0; index < actual.hash.length; index += 1) {
+        difference |= actual.hash.charCodeAt(index) ^ encodedHash.charCodeAt(index);
+    }
     return difference === 0;
 }
 
