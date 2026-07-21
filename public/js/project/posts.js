@@ -7,7 +7,7 @@ import {
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js';
+} from './shared.js?v=internal-folder-filter-20260721a';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;

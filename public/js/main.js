@@ -4,9 +4,9 @@ import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=planner-sync-preserve-20260608a';
 import * as Explorer from './explorer.js';
 import * as Craft from './craft.js?v=base-prompt-storage-20260612a';
-import * as TempGallery from './temp_gallery.js?v=temp-focus-keys-20260527a';
+import * as TempGallery from './temp_gallery.js?v=internal-folder-filter-20260721a';
 import * as Modals from './modals.js';
-import * as Project from './project.js?v=posts-manual-refresh-20260721a';
+import * as Project from './project.js?v=internal-folder-filter-20260721a';
 import * as ImageEditor from './image_editor.js?v=image-editor-history-20260607a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=temp-focus-keys-20260527a';
 

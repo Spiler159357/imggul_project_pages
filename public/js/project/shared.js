@@ -1,4 +1,4 @@
-import { loadPlannerForSelectedCharacter } from './planner.js';
+import { loadPlannerForSelectedCharacter } from './planner.js?v=internal-folder-filter-20260721a';
 
 export const EXCLUDED_PROJECT_FOLDERS = new Set([
     'logs',
@@ -7,7 +7,8 @@ export const EXCLUDED_PROJECT_FOLDERS = new Set([
     'editor_session',
     'editor_sessions',
     '__editor_sessions',
-    '__editor_backups'
+    '__editor_backups',
+    '_guest_posts'
 ]);
 
 export const PROJECT_SECTIONS = [

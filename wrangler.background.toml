@@ -18,7 +18,7 @@ binding = "imgBucket"
 bucket_name = "imggul-storage"
 
 [triggers]
-crons = ["*/5 * * * *", "17 */6 * * *"]
+crons = ["17 */6 * * *"]
 
 [[queues.consumers]]
 queue = "imggul-queue"

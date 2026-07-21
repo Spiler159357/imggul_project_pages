@@ -1947,7 +1947,7 @@ export async function onRequest(context) {
     if (guestApiResponse) return guestApiResponse;
 
     // 3. API 라우팅 처리
-    if (path === "/api/planner/v3/settings" && method === "GET") {
+    if (path === "/api/planner/compact/settings" && method === "GET") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const projectId = url.searchParams.get('projectId') || '';
@@ -1960,7 +1960,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/settings" && method === "PUT") {
+    if (path === "/api/planner/compact/settings" && method === "PUT") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -1971,7 +1971,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/run" && method === "GET") {
+    if (path === "/api/planner/compact/run" && method === "GET") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const projectId = url.searchParams.get('projectId') || '';
@@ -1985,7 +1985,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/run" && method === "POST") {
+    if (path === "/api/planner/compact/run" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -1998,7 +1998,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/item" && method === "POST") {
+    if (path === "/api/planner/compact/item" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -2009,54 +2009,54 @@ export async function onRequest(context) {
         }
     }
 
-    const plannerV3RunMatch = path.match(/^\/api\/planner\/v3\/run\/([^/]+)$/);
-    if (plannerV3RunMatch && method === "PUT") {
+    const plannerCompactRunMatch = path.match(/^\/api\/planner\/compact\/run\/([^/]+)$/);
+    if (plannerCompactRunMatch && method === "PUT") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await putPlannerCompactRunFromMeta(env, { ...(body?.data || body || {}), runId: decodeURIComponent(plannerV3RunMatch[1]) });
+            const data = await putPlannerCompactRunFromMeta(env, { ...(body?.data || body || {}), runId: decodeURIComponent(plannerCompactRunMatch[1]) });
             return jsonResponse({ success: true, data });
         } catch (e) {
             return plannerApiErrorResponse(e);
         }
     }
 
-    if (plannerV3RunMatch && method === "DELETE") {
+    if (plannerCompactRunMatch && method === "DELETE") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
-            const data = await deletePlannerCompactRun(env, decodeURIComponent(plannerV3RunMatch[1]));
+            const data = await deletePlannerCompactRun(env, decodeURIComponent(plannerCompactRunMatch[1]));
             return jsonResponse(data);
         } catch (e) {
             return plannerApiErrorResponse(e);
         }
     }
 
-    const plannerV3ItemMatch = path.match(/^\/api\/planner\/v3\/item\/([^/]+)$/);
-    if (plannerV3ItemMatch && method === "PUT") {
+    const plannerCompactItemMatch = path.match(/^\/api\/planner\/compact\/item\/([^/]+)$/);
+    if (plannerCompactItemMatch && method === "PUT") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            const data = await updatePlannerCompactItem(env, decodeURIComponent(plannerV3ItemMatch[1]), body || {});
+            const data = await updatePlannerCompactItem(env, decodeURIComponent(plannerCompactItemMatch[1]), body || {});
             return jsonResponse({ success: true, data });
         } catch (e) {
             return plannerApiErrorResponse(e);
         }
     }
 
-    if (plannerV3ItemMatch && method === "DELETE") {
+    if (plannerCompactItemMatch && method === "DELETE") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const runKey = url.searchParams.get('runKey') || '';
             const projectId = url.searchParams.get('projectId') || '';
             const characterId = url.searchParams.get('characterId') || '';
-            const data = await deletePlannerCompactItem(env, decodeURIComponent(plannerV3ItemMatch[1]), { runKey, projectId, characterId });
+            const data = await deletePlannerCompactItem(env, decodeURIComponent(plannerCompactItemMatch[1]), { runKey, projectId, characterId });
             return jsonResponse(data);
         } catch (e) {
             return plannerApiErrorResponse(e);
         }
     }
 
-    if (path === "/api/planner/v3/generate/start" && method === "POST") {
+    if (path === "/api/planner/compact/generate/start" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -2068,7 +2068,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/generate/status" && method === "GET") {
+    if (path === "/api/planner/compact/generate/status" && method === "GET") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const runKey = url.searchParams.get('runKey') || '';
@@ -2082,7 +2082,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/generate/next-browser-queue" && method === "GET") {
+    if (path === "/api/planner/compact/generate/next-browser-queue" && method === "GET") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const runKey = url.searchParams.get('runKey') || '';
@@ -2094,7 +2094,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/generate/complete-browser-queue" && method === "POST") {
+    if (path === "/api/planner/compact/generate/complete-browser-queue" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -2105,7 +2105,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/generate/pause" && method === "POST") {
+    if (path === "/api/planner/compact/generate/pause" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -2117,7 +2117,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/generate/resume" && method === "POST") {
+    if (path === "/api/planner/compact/generate/resume" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -2129,7 +2129,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/generate/cancel" && method === "POST") {
+    if (path === "/api/planner/compact/generate/cancel" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -2141,7 +2141,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/confirm" && method === "POST") {
+    if (path === "/api/planner/compact/confirm" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
@@ -2152,7 +2152,7 @@ export async function onRequest(context) {
         }
     }
 
-    if (path === "/api/planner/v3/cleanup-assets" && method === "POST") {
+    if (path === "/api/planner/compact/cleanup-assets" && method === "POST") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json().catch(() => ({}));
@@ -2163,8 +2163,12 @@ export async function onRequest(context) {
         }
     }
 
+    if (path.startsWith("/api/planner/v3/")) {
+        return jsonResponse({ error: 'Planner v3 API has been retired. Use /api/planner/compact/*.' }, { status: 410 });
+    }
+
     if (path === "/api/planner/meta" || path.startsWith("/api/planner/background/")) {
-        return jsonResponse({ error: 'Legacy planner API is disabled. Use /api/planner/v3/*.' }, { status: 410 });
+        return jsonResponse({ error: 'Legacy planner API is disabled. Use /api/planner/compact/*.' }, { status: 410 });
     }
 
     if (path === "/api/assets/cleanup-deleted" && method === "POST") {
@@ -2351,7 +2355,7 @@ export async function onRequest(context) {
             ).bind(folderPrefix, ...names, fileName).first();
             if (row?.metadata_json) return jsonResponse({ data: JSON.parse(row.metadata_json) });
 
-            return jsonResponse({ data: null }, { status: 404 });
+            return jsonResponse({ data: null });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
         }

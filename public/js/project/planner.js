@@ -1,7 +1,7 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js';
-import { renderSectionHeader } from './manage.js';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js';
-import { combinePromptParts, getSituationById } from './situation.js';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=internal-folder-filter-20260721a';
+import { renderSectionHeader } from './manage.js?v=internal-folder-filter-20260721a';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=internal-folder-filter-20260721a';
+import { combinePromptParts, getSituationById } from './situation.js?v=internal-folder-filter-20260721a';
 
 const PLANNER_DEFAULT_IMAGE_COUNT = 20;
 const PLANNER_MIN_IMAGE_COUNT = 1;
@@ -188,7 +188,7 @@ export async function loadPlannerMeta(project, characterId = '', options = {}) {
         const cached = readPlannerMetaCache(targetKey);
         if (cached !== null) return cached;
     }
-    let res = await fetch(`/api/planner/v3/run?projectId=${encodeURIComponent(project.id || '')}&characterId=${encodeURIComponent(targetCharacterId)}&_t=${Date.now()}`, {
+    let res = await fetch(`/api/planner/compact/run?projectId=${encodeURIComponent(project.id || '')}&characterId=${encodeURIComponent(targetCharacterId)}&_t=${Date.now()}`, {
         cache: 'no-store',
         signal
     });
@@ -220,7 +220,7 @@ export async function savePlannerMeta(project, meta, options = {}) {
     const normalized = normalizePlannerStoredMeta(meta || {}, options);
     normalized.projectId = normalized.projectId || project?.id || '';
     normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
-    const res = await fetch('/api/planner/v3/run?_t=' + Date.now(), {
+    const res = await fetch('/api/planner/compact/run?_t=' + Date.now(), {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
@@ -259,7 +259,7 @@ export async function savePlannerItem(project, meta, item) {
     const normalized = normalizePlannerStoredMeta(meta || {});
     normalized.projectId = normalized.projectId || project?.id || '';
     normalized.projectPrefix = normalized.projectPrefix || project?.prefix || '';
-    const res = await fetch('/api/planner/v3/item?_t=' + Date.now(), {
+    const res = await fetch('/api/planner/compact/item?_t=' + Date.now(), {
         method: 'POST',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
@@ -299,7 +299,7 @@ export async function deletePlannerMeta(project, characterId = '') {
     const key = getPlannerMetaKey(project, characterId || getSelectedPlannerCharacterId(project));
     const meta = await loadPlannerMeta(project, characterId, { force: true }).catch(() => null);
     if (meta?.id) {
-        await fetch(`/api/planner/v3/run/${encodeURIComponent(meta.id)}`, {
+        await fetch(`/api/planner/compact/run/${encodeURIComponent(meta.id)}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' }
         }).catch(() => null);
@@ -335,7 +335,7 @@ export async function loadPlannerSettings(project, options = {}) {
     if (!project?.prefix) return normalizePlannerSettings();
     if (!force && window.PROJECT_PLANNER_SETTINGS?.projectId === project.id) return window.PROJECT_PLANNER_SETTINGS;
 
-    const res = await fetch(`/api/planner/v3/settings?projectId=${encodeURIComponent(project.id || '')}&_t=${Date.now()}`, {
+    const res = await fetch(`/api/planner/compact/settings?projectId=${encodeURIComponent(project.id || '')}&_t=${Date.now()}`, {
         cache: 'no-store',
         signal
     });
@@ -353,7 +353,7 @@ export async function loadPlannerSettings(project, options = {}) {
 
 export async function savePlannerSettings(project, settings) {
     const normalized = normalizePlannerSettings(settings);
-    const res = await fetch('/api/planner/v3/settings?_t=' + Date.now(), {
+    const res = await fetch('/api/planner/compact/settings?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
             'Content-Type': 'application/json; charset=utf-8'
@@ -3113,7 +3113,7 @@ export async function clearPlannerItemImages(project, item) {
         )
     ].filter(Boolean)));
     if (compactCandidateKeys.length) {
-        const cleanupRes = await fetch('/api/planner/v3/cleanup-assets', {
+        const cleanupRes = await fetch('/api/planner/compact/cleanup-assets', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ keys: compactCandidateKeys })
@@ -3385,7 +3385,7 @@ async function refreshPlannerBackgroundStatusInternal(jobId = null) {
     const targetJobId = resolvePlannerRunKey(jobId, currentMeta);
     if (!project || !targetJobId) return null;
 
-    const res = await fetch(`/api/planner/v3/generate/status?runKey=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const res = await fetch(`/api/planner/compact/generate/status?runKey=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
     if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         setPlannerStatus(data.error || '백그라운드 상태 조회에 실패했습니다.');
@@ -3468,7 +3468,7 @@ export async function cancelPlannerBackgroundGeneration(jobId = null) {
         renderPlannerIfVisible();
     }
 
-    const res = await fetch('/api/planner/v3/generate/cancel', {
+    const res = await fetch('/api/planner/compact/generate/cancel', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runKey: targetJobId })
@@ -3509,7 +3509,7 @@ export async function pausePlannerBackgroundGeneration(jobId = null) {
         renderPlannerIfVisible();
     }
 
-    const res = await fetch('/api/planner/v3/generate/pause', {
+    const res = await fetch('/api/planner/compact/generate/pause', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runKey: targetJobId })
@@ -3532,7 +3532,7 @@ export async function resumePlannerBackgroundGeneration(jobId = null) {
     const targetJobId = resolvePlannerRunKey(jobId, meta);
     if (!targetJobId) return;
 
-    const res = await fetch('/api/planner/v3/generate/resume', {
+    const res = await fetch('/api/planner/compact/generate/resume', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ runKey: targetJobId })
@@ -3663,7 +3663,7 @@ export async function resumePlannerGeneration() {
                 characterId: resumeMeta.characterId || ''
             });
             if (resumeMeta.runKey) {
-                const resumeRes = await fetch('/api/planner/v3/generate/resume', {
+                const resumeRes = await fetch('/api/planner/compact/generate/resume', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ runKey: resumeMeta.runKey })
@@ -3787,7 +3787,7 @@ function hasUnsupportedPlannerBackgroundReference(items = []) {
 }
 
 async function startPlannerBackgroundRun(project, meta, targetItems, situationId = null, batch = null) {
-    const res = await fetch('/api/planner/v3/generate/start', {
+    const res = await fetch('/api/planner/compact/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -3928,9 +3928,9 @@ async function getPlannerBackgroundControlEntries(project, statuses) {
 async function controlPlannerBackgroundEntries(project, entries, action) {
     if (!entries.length) return false;
     const endpoint = {
-        pause: '/api/planner/v3/generate/pause',
-        resume: '/api/planner/v3/generate/resume',
-        cancel: '/api/planner/v3/generate/cancel'
+        pause: '/api/planner/compact/generate/pause',
+        resume: '/api/planner/compact/generate/resume',
+        cancel: '/api/planner/compact/generate/cancel'
     }[action];
     if (!endpoint) return false;
 
@@ -4059,7 +4059,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
         clearExisting
     };
     startPayload.runId = meta.id;
-    const res = await fetch('/api/planner/v3/generate/start', {
+    const res = await fetch('/api/planner/compact/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(startPayload)
@@ -4153,7 +4153,7 @@ function splitPlannerCompactR2Key(key = '') {
 
 async function runPlannerCompactBrowserGeneration(project, meta, situationId = null, clearExisting = false, resume = false) {
     const savedMeta = resume ? meta : await savePlannerMeta(project, meta);
-    const startRes = await fetch('/api/planner/v3/generate/start', {
+    const startRes = await fetch('/api/planner/compact/generate/start', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -4183,7 +4183,7 @@ async function runPlannerCompactBrowserGeneration(project, meta, situationId = n
 
     const plannerSettings = await loadPlannerSettings(project).catch(() => normalizePlannerSettings());
     while (!window.PROJECT_PLANNER_CANCEL_REQUESTED && !window.PROJECT_PLANNER_PAUSE_REQUESTED) {
-        const nextRes = await fetch(`/api/planner/v3/generate/next-browser-queue?runKey=${encodeURIComponent(savedMeta.runKey)}&_t=${Date.now()}`, {
+        const nextRes = await fetch(`/api/planner/compact/generate/next-browser-queue?runKey=${encodeURIComponent(savedMeta.runKey)}&_t=${Date.now()}`, {
             cache: 'no-store'
         });
         const next = await nextRes.json().catch(() => ({}));
@@ -4214,7 +4214,7 @@ async function runPlannerCompactBrowserGeneration(project, meta, situationId = n
         if (result.stopped) break;
 
         const [width, height] = String(generation.res || '832x1216').split('x').map(Number);
-        const completeRes = await fetch('/api/planner/v3/generate/complete-browser-queue', {
+        const completeRes = await fetch('/api/planner/compact/generate/complete-browser-queue', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -4241,13 +4241,13 @@ async function runPlannerCompactBrowserGeneration(project, meta, situationId = n
     }
 
     if (window.PROJECT_PLANNER_PAUSE_REQUESTED) {
-        await fetch('/api/planner/v3/generate/pause', {
+        await fetch('/api/planner/compact/generate/pause', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ runKey: savedMeta.runKey })
         });
     } else if (window.PROJECT_PLANNER_CANCEL_REQUESTED) {
-        await fetch('/api/planner/v3/generate/cancel', {
+        await fetch('/api/planner/compact/generate/cancel', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ runKey: savedMeta.runKey })
@@ -4414,8 +4414,8 @@ function findSelectedPlannerAsset(item) {
     ) || null;
 }
 
-async function confirmPlannerV3Item(character, item, asset, metadata, runKey = '') {
-    const res = await fetch('/api/planner/v3/confirm?_t=' + Date.now(), {
+async function confirmPlannerCompactItem(character, item, asset, metadata, runKey = '') {
+    const res = await fetch('/api/planner/compact/confirm?_t=' + Date.now(), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json; charset=utf-8' },
         body: JSON.stringify({
@@ -4465,7 +4465,7 @@ async function confirmLegacyPlannerItem(project, character, item, metadata) {
         await window.saveMetadataToDB(character.prefix, `${item.imageNumber}.webp`, metadata);
     }
     if (item.id) {
-        const deleteRes = await fetch(`/api/planner/v3/item/${encodeURIComponent(item.id)}?runKey=${encodeURIComponent(window.PROJECT_PLANNER_META?.runKey || '')}`, {
+        const deleteRes = await fetch(`/api/planner/compact/item/${encodeURIComponent(item.id)}?runKey=${encodeURIComponent(window.PROJECT_PLANNER_META?.runKey || '')}`, {
             method: 'DELETE',
             cache: 'no-store'
         });
@@ -4479,12 +4479,24 @@ async function confirmLegacyPlannerItem(project, character, item, metadata) {
 }
 
 async function confirmSinglePlannerItem(project, character, item) {
-    const metadata = await loadPlannerConfirmationMetadata(item);
     const selectedAsset = findSelectedPlannerAsset(item);
+    const selectedVariantId = selectedAsset?.variantId || '';
+    const selectedVariant = selectedVariantId
+        ? (item?.variantGenerations || []).find(variant =>
+            variant?.id === selectedVariantId || variant?.variantId === selectedVariantId
+        )
+        : null;
+    const metadata = selectedAsset
+        ? mergePlannerSplitMetadata(
+            selectedVariant?.generation ? { ...item, generation: selectedVariant.generation } : item,
+            {},
+            item.selectedImage
+        )
+        : await loadPlannerConfirmationMetadata(item);
     if (selectedAsset) {
         return {
-            mode: 'v3',
-            data: await confirmPlannerV3Item(character, item, selectedAsset, metadata, getPlannerMetaForCharacter(project, character.id)?.runKey || '')
+            mode: 'compact',
+            data: await confirmPlannerCompactItem(character, item, selectedAsset, metadata, getPlannerMetaForCharacter(project, character.id)?.runKey || '')
         };
     }
     return {

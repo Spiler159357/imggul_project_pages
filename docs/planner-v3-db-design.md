@@ -1,5 +1,8 @@
 # Planner V3 DB Design
 
+> 보관 문서: 이 설계는 현재 compact 플래너로 대체되었다. 운영 런타임은
+> `planner_compact_records`와 `/api/planner/compact/*`를 사용한다.
+
 ## 1. Goal
 
 Planner V3는 기존 플래너 관련 DB와 완전히 분리된 새 저장 구조다.

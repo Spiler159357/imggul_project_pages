@@ -1,5 +1,9 @@
 # Planner V3 Cleanup Queue Removal Plan
 
+> 보관 문서: 구형 Planner V3 Worker와 cleanup queue 소비 경로는 compact 전환 후
+> 제거되었다. 운영 DB 정리는 `scripts/audit-planner-v3-retirement.sql` 확인 후
+> `scripts/drop-planner-v3-schema.sql`을 수동 실행한다.
+
 ## 목적
 
 `planner_v3_asset_cleanup_queue`는 Planner V3 후보 이미지 삭제를 지연 처리하기 위해 만든 D1 outbox 테이블이다. 현재 코드에서는 확정 처리 중 후보 이미지를 이미 직접 R2에서 삭제하고 있어, 이 테이블은 설계 문서와 실제 구현 사이의 불일치 지점이 되었다.
