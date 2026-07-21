@@ -10,11 +10,10 @@ const state = {
     imageReturnFocus: null,
     commentReturnFocus: null,
     commentAction: null,
-    autoRefreshInFlight: false
+    postsRefreshInFlight: false
 };
 
-const POSTS_AUTO_REFRESH_MS = 15000;
-let postsAutoRefreshTimer = null;
+let guestPostsVisibilityListenerBound = false;
 
 const content = document.getElementById('guest-content');
 const main = document.getElementById('guest-main');
@@ -109,6 +108,9 @@ function setActiveTab(tab) {
             ? 'shadow-sm bg-white dark:bg-gray-700 text-indigo-600 dark:text-indigo-400'
             : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'}`;
     }
+    const refreshButton = document.getElementById('guest-posts-refresh');
+    refreshButton?.classList.toggle('hidden', tab !== 'posts');
+    refreshButton?.classList.toggle('inline-flex', tab === 'posts');
 }
 
 function setViewLabel(value) {
@@ -361,45 +363,81 @@ async function renderRoute() {
     }
 }
 
-async function refreshVisibleGuestPosts() {
-    if (document.hidden || !state.project || state.autoRefreshInFlight) return;
+function setGuestPostsRefreshNeeded(needed) {
+    const label = document.getElementById('guest-posts-refresh-label');
+    const dot = document.getElementById('guest-posts-refresh-dot');
+    if (label) {
+        label.textContent = needed ? '새 변경 있음' : '새로고침';
+        label.classList.toggle('text-amber-600', needed);
+        label.classList.toggle('dark:text-amber-400', needed);
+    }
+    dot?.classList.toggle('hidden', !needed);
+}
+
+function setGuestPostsRefreshLoading(loading) {
+    const button = document.getElementById('guest-posts-refresh');
+    const icon = document.getElementById('guest-posts-refresh-icon');
+    if (button) button.disabled = loading;
+    icon?.classList.toggle('animate-spin', loading);
+}
+
+async function detectVisibleGuestPostChanges() {
+    if (document.hidden || !state.project || state.postsRefreshInFlight) return;
     const route = getRoute();
     if (route.tab !== 'posts') return;
-    state.autoRefreshInFlight = true;
+    state.postsRefreshInFlight = true;
     try {
         if (!route.id) {
             const limit = Math.min(50, Math.max(20, state.posts.length || 0));
             const page = await api(`${apiBase}/posts?limit=${limit}`);
-            if (postsRevision(state.posts) !== postsRevision(page.items)) {
-                state.postsScrollTop = main.scrollTop;
-                state.posts = page.items;
-                state.nextCursor = page.nextCursor;
-                state.postsLoaded = true;
-                renderPostList();
-            }
+            setGuestPostsRefreshNeeded(postsRevision(state.posts) !== postsRevision(page.items));
             return;
         }
 
-        const modal = document.getElementById('guest-comment-modal');
-        const submit = document.getElementById('guest-comment-create-submit');
-        if (!modal?.classList.contains('hidden') || submit?.disabled) return;
         const post = await api(`${apiBase}/posts/${encodeURIComponent(route.id)}`);
-        if (postRevision(state.activePost) !== postRevision(post)) {
-            await renderPostDetail(route.id, { post, preserveView: true });
-        }
+        setGuestPostsRefreshNeeded(postRevision(state.activePost) !== postRevision(post));
     } catch (error) {
-        if (error.status === 404 && getRoute().id === route.id) navigate('posts', { replace: true });
+        if (error.status === 404) setGuestPostsRefreshNeeded(true);
     } finally {
-        state.autoRefreshInFlight = false;
+        state.postsRefreshInFlight = false;
     }
 }
 
-function startGuestPostsAutoRefresh() {
-    if (!postsAutoRefreshTimer) {
-        postsAutoRefreshTimer = window.setInterval(refreshVisibleGuestPosts, POSTS_AUTO_REFRESH_MS);
+async function refreshGuestPosts() {
+    if (!state.project || state.postsRefreshInFlight) return;
+    const route = getRoute();
+    if (route.tab !== 'posts') return;
+    state.postsRefreshInFlight = true;
+    setGuestPostsRefreshLoading(true);
+    try {
+        if (!route.id) {
+            const limit = Math.min(50, Math.max(20, state.posts.length || 0));
+            const page = await api(`${apiBase}/posts?limit=${limit}`);
+            state.postsScrollTop = main.scrollTop;
+            state.posts = page.items;
+            state.nextCursor = page.nextCursor;
+            state.postsLoaded = true;
+            renderPostList();
+        } else {
+            const post = await api(`${apiBase}/posts/${encodeURIComponent(route.id)}`);
+            await renderPostDetail(route.id, { post, preserveView: true });
+        }
+        setGuestPostsRefreshNeeded(false);
+    } catch (error) {
+        if (error.status === 404 && getRoute().id === route.id) navigate('posts', { replace: true });
+    } finally {
+        state.postsRefreshInFlight = false;
+        setGuestPostsRefreshLoading(false);
+    }
+}
+
+function bindGuestPostsChangeDetection() {
+    if (!guestPostsVisibilityListenerBound) {
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) refreshVisibleGuestPosts();
+            if (!document.hidden) detectVisibleGuestPostChanges();
         });
+        window.addEventListener('focus', detectVisibleGuestPostChanges);
+        guestPostsVisibilityListenerBound = true;
     }
 }
 
@@ -483,6 +521,7 @@ async function createComment(form) {
         passwordInput.value = '';
         form.reset();
         await renderPostDetail(state.activePost.id);
+        setGuestPostsRefreshNeeded(false);
     } catch (error) {
         passwordInput.value = '';
         errorElement.textContent = error.message;
@@ -517,6 +556,7 @@ async function submitCommentAction() {
         const postId = state.activePost.id;
         closeCommentModal();
         await renderPostDetail(postId);
+        setGuestPostsRefreshNeeded(false);
     } catch (error) {
         passwordInput.value = '';
         errorElement.textContent = error.message;
@@ -594,6 +634,7 @@ content.addEventListener('click', event => {
 
 document.getElementById('guest-tab-characters').addEventListener('click', () => navigate('characters'));
 document.getElementById('guest-tab-posts').addEventListener('click', () => navigate('posts'));
+document.getElementById('guest-posts-refresh').addEventListener('click', refreshGuestPosts);
 document.getElementById('guest-logo-home').addEventListener('click', () => navigate('characters'));
 document.getElementById('guest-theme-toggle').addEventListener('click', () => {
     document.documentElement.classList.toggle('dark');
@@ -629,7 +670,7 @@ async function init() {
         document.getElementById('guest-project-name').textContent = state.project.name;
         if (!location.hash) history.replaceState({}, '', '#characters');
         await renderRoute();
-        startGuestPostsAutoRefresh();
+        bindGuestPostsChangeDetection();
     } catch (error) {
         document.getElementById('guest-project-name').textContent = '프로젝트 오류';
         renderState('circle-alert', '프로젝트를 불러오지 못했습니다.', error.message);

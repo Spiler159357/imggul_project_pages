@@ -9,10 +9,9 @@ import {
     setProjectRoute
 } from './shared.js';
 
-const POSTS_AUTO_REFRESH_MS = 15000;
-let postsAutoRefreshTimer = null;
-let postsAutoRefreshInFlight = false;
+let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;
+let adminPostsRefreshNeeded = false;
 
 function formatDate(value) {
     if (!value) return '';
@@ -72,9 +71,16 @@ function renderHeader(project) {
                     <p class="text-[11px] text-gray-500 dark:text-gray-400">게시글</p>
                 </div>
             </div>
-            <button type="button" onclick="window.openAdminPostEditor()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition">
-                <i data-lucide="plus" class="w-4 h-4"></i><span>새 게시글</span>
-            </button>
+            <div class="flex flex-shrink-0 items-center gap-2">
+                <button id="admin-post-refresh" type="button" onclick="window.refreshAdminPosts()" class="relative inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition hover:border-indigo-300 hover:text-indigo-600 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-indigo-600" title="게시글과 댓글 새로고침">
+                    <i id="admin-post-refresh-icon" data-lucide="refresh-cw" class="h-4 w-4"></i>
+                    <span id="admin-post-refresh-label" class="hidden sm:inline ${adminPostsRefreshNeeded ? 'text-amber-600 dark:text-amber-400' : ''}">${adminPostsRefreshNeeded ? '새 변경 있음' : '새로고침'}</span>
+                    <span id="admin-post-refresh-dot" class="${adminPostsRefreshNeeded ? '' : 'hidden'} absolute -right-1 -top-1 h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-white dark:ring-gray-800"></span>
+                </button>
+                <button type="button" onclick="window.openAdminPostEditor()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition">
+                    <i data-lucide="plus" class="w-4 h-4"></i><span>새 게시글</span>
+                </button>
+            </div>
         </div>`;
 }
 
@@ -212,21 +218,62 @@ function refreshAdminPostListOnly(project, selectedId) {
     refreshProjectIcons();
 }
 
-async function refreshVisibleAdminPosts() {
-    if (document.hidden || window.PROJECT_ACTIVE_SECTION !== 'posts' || postsAutoRefreshInFlight) return;
+function setAdminPostsRefreshNeeded(needed) {
+    adminPostsRefreshNeeded = needed;
+    const label = document.getElementById('admin-post-refresh-label');
+    const dot = document.getElementById('admin-post-refresh-dot');
+    if (label) {
+        label.textContent = needed ? '새 변경 있음' : '새로고침';
+        label.classList.toggle('text-amber-600', needed);
+        label.classList.toggle('dark:text-amber-400', needed);
+    }
+    dot?.classList.toggle('hidden', !needed);
+}
+
+function setAdminPostsRefreshLoading(loading) {
+    const button = document.getElementById('admin-post-refresh');
+    const icon = document.getElementById('admin-post-refresh-icon');
+    if (button) button.disabled = loading;
+    icon?.classList.toggle('animate-spin', loading);
+}
+
+async function detectVisibleAdminPostChanges() {
+    if (document.hidden || window.PROJECT_ACTIVE_SECTION !== 'posts' || postsRefreshInFlight) return;
     const project = getActiveProject();
     if (!project) return;
-    postsAutoRefreshInFlight = true;
+    postsRefreshInFlight = true;
     try {
-        const previousPostsRevision = postsRevision(project.posts);
         const nextPosts = await fetchProjectPosts(project);
-        const listChanged = previousPostsRevision !== postsRevision(nextPosts);
+        let changed = postsRevision(project.posts) !== postsRevision(nextPosts);
+        const activePost = window.PROJECT_ACTIVE_POST;
+        if (activePost?.id) {
+            const response = await fetch(`/api/admin/posts/${encodeURIComponent(activePost.id)}`, { cache: 'no-store' });
+            if (response.status === 404) changed = true;
+            else changed = changed || postRevision(activePost) !== postRevision(await readApiResponse(response));
+        }
+        setAdminPostsRefreshNeeded(changed);
+    } catch {
+        // 변경 감지 실패는 현재 화면을 유지한다.
+    } finally {
+        postsRefreshInFlight = false;
+    }
+}
+
+export async function refreshAdminPosts() {
+    if (window.PROJECT_ACTIVE_SECTION !== 'posts' || postsRefreshInFlight) return;
+    const project = getActiveProject();
+    if (!project) return;
+    postsRefreshInFlight = true;
+    setAdminPostsRefreshLoading(true);
+    try {
+        const nextPosts = await fetchProjectPosts(project);
         project.posts = nextPosts;
         project.postsLoaded = true;
 
         const activePost = window.PROJECT_ACTIVE_POST;
         if (!activePost?.id) {
-            if (listChanged) refreshAdminPostListOnly(project, activePost?.id);
+            refreshAdminPostListOnly(project, activePost?.id);
+            setAdminPostsRefreshNeeded(false);
             return;
         }
 
@@ -234,14 +281,15 @@ async function refreshVisibleAdminPosts() {
         if (response.status === 404) {
             window.PROJECT_ACTIVE_POST = null;
             renderProjectPostsSection({ post: null });
+            setAdminPostsRefreshNeeded(false);
             return;
         }
         const nextPost = await readApiResponse(response);
         const detailChanged = postRevision(activePost) !== postRevision(nextPost);
-        if (!listChanged && !detailChanged) return;
 
         if (isAdminPostEditorBusy(activePost)) {
-            if (listChanged) refreshAdminPostListOnly(project, activePost.id);
+            refreshAdminPostListOnly(project, activePost.id);
+            setAdminPostsRefreshNeeded(detailChanged);
             return;
         }
 
@@ -253,21 +301,21 @@ async function refreshVisibleAdminPosts() {
         const editorScroll = document.getElementById('admin-post-editor-scroll');
         if (listScroll) listScroll.scrollTop = listScrollTop;
         if (editorScroll) editorScroll.scrollTop = editorScrollTop;
+        setAdminPostsRefreshNeeded(false);
     } catch {
-        // 자동 갱신 실패는 현재 화면을 유지하고 다음 주기에 다시 시도한다.
+        // 수동 갱신 실패는 현재 화면을 유지한다.
     } finally {
-        postsAutoRefreshInFlight = false;
+        postsRefreshInFlight = false;
+        setAdminPostsRefreshLoading(false);
     }
 }
 
-function startAdminPostsAutoRefresh() {
-    if (!postsAutoRefreshTimer) {
-        postsAutoRefreshTimer = window.setInterval(refreshVisibleAdminPosts, POSTS_AUTO_REFRESH_MS);
-    }
+function bindAdminPostsChangeDetection() {
     if (!postsVisibilityListenerBound) {
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) refreshVisibleAdminPosts();
+            if (!document.hidden) detectVisibleAdminPostChanges();
         });
+        window.addEventListener('focus', detectVisibleAdminPostChanges);
         postsVisibilityListenerBound = true;
     }
 }
@@ -279,14 +327,17 @@ export async function openProjectPostsSection(skipHistory = false) {
     renderProjectPostsSection({ loading: !project.postsLoaded });
     try {
         await loadProjectPosts(project);
-        if (window.PROJECT_ACTIVE_SECTION === 'posts') renderProjectPostsSection();
+        if (window.PROJECT_ACTIVE_SECTION === 'posts') {
+            setAdminPostsRefreshNeeded(false);
+            renderProjectPostsSection();
+        }
     } catch (error) {
         if (window.PROJECT_ACTIVE_SECTION === 'posts') renderProjectPostsSection({ error: error.message });
     }
     const routeState = { projectView: 'section', projectId: project.id, projectSection: 'posts' };
     if (!skipHistory) setProjectRoute(routeState, `#project/${project.id}/posts`);
     else rememberProjectRoute(routeState, `#project/${project.id}/posts`);
-    startAdminPostsAutoRefresh();
+    bindAdminPostsChangeDetection();
 }
 
 export function openAdminPostEditor() {
@@ -371,6 +422,7 @@ export async function submitAdminPost(event) {
         const post = await readApiResponse(response);
         await loadProjectPosts(project, true);
         window.PROJECT_ACTIVE_POST = post;
+        setAdminPostsRefreshNeeded(false);
         renderProjectPostsSection({ post });
         const routeState = { projectView: 'post-detail', projectId: project.id, projectSection: 'posts', projectPostId: post.id };
         rememberProjectRoute(routeState, `#project/${project.id}/posts/${post.id}`);
@@ -393,6 +445,7 @@ export async function deleteAdminPost(postId) {
         await readApiResponse(response);
         await loadProjectPosts(project, true);
         window.PROJECT_ACTIVE_POST = null;
+        setAdminPostsRefreshNeeded(false);
         renderProjectPostsSection();
         const routeState = { projectView: 'section', projectId: project.id, projectSection: 'posts' };
         history.replaceState({ tab: 'project', ...routeState }, '', `#project/${project.id}/posts`);
@@ -409,6 +462,7 @@ export async function deleteAdminComment(commentId) {
         const response = await fetch(`/api/guest/comments/${encodeURIComponent(commentId)}`, { method: 'DELETE', cache: 'no-store' });
         await readApiResponse(response);
         await openAdminPost(post.id, true);
+        setAdminPostsRefreshNeeded(false);
     } catch (error) {
         alert(error.message || '댓글을 삭제하지 못했습니다.');
     }

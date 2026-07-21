@@ -66,13 +66,18 @@
 
     <div class="relative flex flex-1 overflow-hidden">
         <section class="absolute inset-0 flex h-full w-full flex-col">
-            <div class="flex h-14 w-full flex-shrink-0 items-center border-b border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-800 sm:px-6">
+            <div class="flex h-14 w-full flex-shrink-0 items-center justify-between gap-3 border-b border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-800 sm:px-6">
                 <div class="flex min-w-0 items-center text-sm text-gray-600 dark:text-gray-300">
                     <i data-lucide="folder" class="mr-2 h-4 w-4 flex-shrink-0 fill-current text-yellow-500"></i>
                     <span id="guest-project-name" class="truncate font-bold text-gray-800 dark:text-gray-200">프로젝트 불러오는 중</span>
                     <i data-lucide="chevron-right" class="mx-1.5 h-3.5 w-3.5 flex-shrink-0 text-gray-400"></i>
                     <span id="guest-view-label" class="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400">캐릭터</span>
                 </div>
+                <button id="guest-posts-refresh" type="button" class="relative hidden flex-shrink-0 items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition hover:border-indigo-300 hover:text-indigo-600 disabled:cursor-wait disabled:opacity-60 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-indigo-600" title="게시글과 댓글 새로고침">
+                    <i id="guest-posts-refresh-icon" data-lucide="refresh-cw" class="h-4 w-4"></i>
+                    <span id="guest-posts-refresh-label" class="hidden sm:inline">새로고침</span>
+                    <span id="guest-posts-refresh-dot" class="absolute -right-1 -top-1 hidden h-2.5 w-2.5 rounded-full bg-amber-500 ring-2 ring-white dark:ring-gray-800"></span>
+                </button>
             </div>
 
             <main id="guest-main" class="relative min-h-0 flex-1 overflow-y-auto bg-gray-50 p-4 dark:bg-gray-900/50 sm:p-6" tabindex="-1">
@@ -130,6 +135,6 @@
     </div>
 
     <script>window.GUEST_PROJECT_PATH = {{INITIAL_PROJECT_PATH_JSON}};</script>
-    <script type="module" src="/js/guest.js?v=guest-alias-display-20260721a"></script>
+    <script type="module" src="/js/guest.js?v=posts-manual-refresh-20260721a"></script>
 </body>
 </html>
