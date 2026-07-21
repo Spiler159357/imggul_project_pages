@@ -6,102 +6,130 @@
     <title>ImgGul Guest</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/style.css">
+    <link rel="stylesheet" href="/style.css?v=guest-admin-theme-20260721a">
     <script src="https://unpkg.com/lucide@latest"></script>
     <script>
-        tailwind.config = { darkMode: 'class' };
+        tailwind.config = {
+            darkMode: 'class',
+            theme: {
+                extend: {
+                    colors: { gray: { 800: '#171717', 900: '#0a0a0a' } },
+                    screens: { 'xs': '400px' }
+                }
+            }
+        };
         const savedTheme = localStorage.getItem('theme');
         if (savedTheme === 'dark' || (!savedTheme && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
             document.documentElement.classList.add('dark');
         }
     </script>
+    <style>
+        #guest-tab-characters, #guest-tab-posts {
+            flex: 0 0 82px;
+            width: 82px;
+            height: 2rem;
+        }
+        @media (min-width: 400px) {
+            #guest-tab-characters, #guest-tab-posts { flex-basis: 100px; width: 100px; }
+        }
+        @media (min-width: 640px) {
+            #guest-tab-characters, #guest-tab-posts { flex-basis: 120px; width: 120px; height: 2.25rem; }
+        }
+    </style>
 </head>
-<body class="h-[100dvh] overflow-hidden bg-gray-50 text-gray-900 dark:bg-gray-900 dark:text-gray-100 font-['Noto_Sans_KR']">
-    <div class="flex h-full min-h-0 flex-col">
-        <header class="h-14 flex-shrink-0 border-b border-gray-200 bg-white px-3 sm:px-5 dark:border-gray-700 dark:bg-gray-800">
-            <div class="mx-auto flex h-full max-w-7xl items-center justify-between gap-3">
-                <div class="flex min-w-0 items-center gap-2.5">
-                    <span class="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-lg bg-indigo-600 text-sm font-bold text-white">IG</span>
-                    <div class="min-w-0">
-                        <div class="flex items-baseline gap-2">
-                            <span class="text-sm font-bold text-gray-900 dark:text-white">ImgGul</span>
-                            <span class="text-[10px] font-medium text-gray-400">v{{APP_VERSION}}</span>
-                        </div>
-                        <p id="guest-project-name" class="truncate text-[11px] text-gray-500 dark:text-gray-400">프로젝트 불러오는 중</p>
-                    </div>
-                </div>
-                <button id="guest-theme-toggle" type="button" class="rounded-full p-2 text-gray-500 transition hover:bg-gray-100 hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-gray-700 dark:hover:text-indigo-300" aria-label="다크 모드 전환">
-                    <i data-lucide="moon" class="h-5 w-5"></i>
-                </button>
-            </div>
-        </header>
+<body class="flex h-[100dvh] flex-col overflow-hidden bg-white text-gray-800 transition-colors duration-200 dark:bg-gray-900 dark:text-gray-100">
+    <header class="relative z-40 flex h-14 flex-shrink-0 items-center justify-between border-b border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-800 sm:px-6">
+        <div class="flex min-w-0 flex-shrink items-center">
+            <button type="button" id="guest-logo-home" class="flex min-w-0 items-center transition hover:opacity-80 sm:mr-4">
+                <i data-lucide="image" class="mr-1.5 h-5 w-5 flex-shrink-0 text-indigo-600 dark:text-indigo-400 sm:h-6 sm:w-6"></i>
+                <span class="mr-1.5 hidden text-base font-bold text-gray-900 dark:text-white xs:inline sm:text-xl">ImgGul</span>
+                <span class="mr-1.5 hidden whitespace-nowrap rounded border border-gray-200 bg-gray-100 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-gray-500 dark:border-gray-600 dark:bg-gray-700/80 dark:text-gray-400 sm:inline">{{APP_VERSION}}</span>
+                <span class="hidden whitespace-nowrap rounded-md bg-green-100 px-2 py-0.5 text-[9px] font-bold text-green-700 dark:bg-green-900/40 dark:text-green-400 lg:inline-block">게스트</span>
+            </button>
+        </div>
 
-        <nav class="flex-shrink-0 border-b border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-800" aria-label="게스트 메뉴">
-            <div class="mx-auto grid h-12 max-w-md grid-cols-2 gap-2 p-1.5">
-                <button id="guest-tab-characters" type="button" class="rounded-lg px-4 text-sm font-bold transition" aria-selected="true">
-                    <span class="inline-flex items-center gap-1.5"><i data-lucide="users" class="h-4 w-4"></i>캐릭터</span>
-                </button>
-                <button id="guest-tab-posts" type="button" class="rounded-lg px-4 text-sm font-bold transition" aria-selected="false">
-                    <span class="inline-flex items-center gap-1.5"><i data-lucide="newspaper" class="h-4 w-4"></i>게시글</span>
-                </button>
-            </div>
+        <nav class="mx-1 flex w-[172px] flex-shrink-0 flex-nowrap overflow-x-auto whitespace-nowrap rounded-xl border border-gray-200 bg-gray-100 p-1 scrollbar-hide dark:border-gray-700 dark:bg-gray-900/50 xs:w-[208px] sm:mx-2 sm:w-[248px]" aria-label="게스트 메뉴">
+            <button id="guest-tab-characters" type="button" class="flex flex-shrink-0 items-center justify-center whitespace-nowrap rounded-lg text-xs font-bold shadow-sm transition-colors bg-white text-indigo-600 dark:bg-gray-700 dark:text-indigo-400 sm:text-sm" aria-selected="true">
+                <i data-lucide="users" class="mr-1.5 h-3.5 w-3.5 flex-shrink-0"></i><span>캐릭터</span>
+            </button>
+            <button id="guest-tab-posts" type="button" class="flex flex-shrink-0 items-center justify-center whitespace-nowrap rounded-lg text-xs font-bold text-gray-500 transition-colors hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 sm:text-sm" aria-selected="false">
+                <i data-lucide="newspaper" class="mr-1.5 h-3.5 w-3.5 flex-shrink-0"></i><span>게시글</span>
+            </button>
         </nav>
 
-        <main id="guest-main" class="min-h-0 flex-1 overflow-y-auto p-3 sm:p-6" tabindex="-1">
-            <div id="guest-content" class="mx-auto w-full max-w-6xl"></div>
-        </main>
+        <div class="flex flex-shrink-0 items-center sm:space-x-4">
+            <button id="guest-theme-toggle" type="button" class="rounded-full p-1.5 transition hover:bg-gray-100 dark:hover:bg-gray-700" aria-label="다크 모드 전환">
+                <i data-lucide="sun" class="h-4 w-4 text-gray-600 dark:text-gray-400 sm:h-5 sm:w-5"></i>
+            </button>
+        </div>
+    </header>
+
+    <div class="relative flex flex-1 overflow-hidden">
+        <section class="absolute inset-0 flex h-full w-full flex-col">
+            <div class="flex h-14 w-full flex-shrink-0 items-center border-b border-gray-200 bg-white px-3 dark:border-gray-700 dark:bg-gray-800 sm:px-6">
+                <div class="flex min-w-0 items-center text-sm text-gray-600 dark:text-gray-300">
+                    <i data-lucide="folder" class="mr-2 h-4 w-4 flex-shrink-0 fill-current text-yellow-500"></i>
+                    <span id="guest-project-name" class="truncate font-bold text-gray-800 dark:text-gray-200">프로젝트 불러오는 중</span>
+                    <i data-lucide="chevron-right" class="mx-1.5 h-3.5 w-3.5 flex-shrink-0 text-gray-400"></i>
+                    <span id="guest-view-label" class="flex-shrink-0 text-xs text-gray-500 dark:text-gray-400">캐릭터</span>
+                </div>
+            </div>
+
+            <main id="guest-main" class="relative min-h-0 flex-1 overflow-y-auto bg-gray-50 p-4 dark:bg-gray-900/50 sm:p-6" tabindex="-1">
+                <div id="guest-content" class="mx-auto w-full max-w-7xl"></div>
+                <div class="h-16 w-full flex-shrink-0 pointer-events-none"></div>
+            </main>
+        </section>
     </div>
 
-    <div id="guest-image-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/80 p-2 backdrop-blur-sm sm:p-5" role="dialog" aria-modal="true" aria-labelledby="guest-image-title">
-        <div class="flex max-h-[95dvh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-gray-700 bg-gray-950 shadow-2xl">
-            <div class="flex flex-shrink-0 items-center justify-between gap-3 border-b border-gray-700 px-4 py-3 text-white">
-                <div class="min-w-0">
-                    <h2 id="guest-image-title" class="truncate text-sm font-bold">이미지 미리보기</h2>
-                    <p id="guest-image-path" class="truncate text-[11px] text-gray-400"></p>
+    <div id="guest-image-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/75 p-2 backdrop-blur-sm sm:p-4" role="dialog" aria-modal="true" aria-labelledby="guest-image-title">
+        <div class="relative flex h-[95dvh] w-full max-w-4xl flex-col overflow-hidden rounded-xl bg-white shadow-2xl transition-colors duration-200 dark:bg-gray-800 sm:max-h-[90dvh]">
+            <div class="flex flex-shrink-0 items-center justify-between border-b border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-800 sm:p-4">
+                <div class="mr-4 flex min-w-0 flex-col overflow-hidden">
+                    <h2 id="guest-image-title" class="truncate text-base font-bold leading-tight text-gray-900 dark:text-white sm:text-lg">이미지 미리보기</h2>
+                    <p id="guest-image-path" class="truncate text-[10px] text-gray-500 dark:text-gray-400 sm:text-xs"></p>
                 </div>
-                <button id="guest-image-close" type="button" class="rounded-lg p-2 text-gray-300 transition hover:bg-gray-800 hover:text-white" aria-label="이미지 닫기">
-                    <i data-lucide="x" class="h-5 w-5"></i>
+                <button id="guest-image-close" type="button" class="flex-shrink-0 p-1 text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400" aria-label="이미지 닫기">
+                    <i data-lucide="x" class="h-6 w-6"></i>
                 </button>
             </div>
-            <div class="min-h-0 flex-1 overflow-auto p-2 text-center sm:p-4">
-                <img id="guest-image-preview" alt="" class="mx-auto max-h-[80dvh] max-w-full object-contain">
+            <div class="flex min-h-0 flex-grow items-center justify-center overflow-auto bg-gray-100 p-2 dark:bg-gray-900 sm:p-4">
+                <img id="guest-image-preview" alt="" class="max-h-full max-w-full rounded object-contain shadow-md bg-checkered">
             </div>
         </div>
     </div>
 
-    <div id="guest-comment-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 p-4 backdrop-blur-sm" role="dialog" aria-modal="true" aria-labelledby="guest-comment-modal-title">
+    <div id="guest-comment-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/75 p-3 backdrop-blur-sm sm:p-4" role="dialog" aria-modal="true" aria-labelledby="guest-comment-modal-title">
         <div class="w-full max-w-md overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-800">
-            <div class="flex items-center justify-between border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-                <h2 id="guest-comment-modal-title" class="text-sm font-bold">댓글 수정</h2>
-                <button id="guest-comment-modal-close" type="button" class="rounded-lg p-1.5 text-gray-500 hover:bg-gray-100 dark:text-gray-400 dark:hover:bg-gray-700" aria-label="닫기">
-                    <i data-lucide="x" class="h-5 w-5"></i>
-                </button>
+            <div class="flex items-center justify-between border-b border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-800">
+                <h2 id="guest-comment-modal-title" class="text-sm font-bold text-gray-900 dark:text-white">댓글 수정</h2>
+                <button id="guest-comment-modal-close" type="button" class="p-1 text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400" aria-label="닫기"><i data-lucide="x" class="h-5 w-5"></i></button>
             </div>
-            <form id="guest-comment-action-form" class="space-y-4 p-4">
+            <form id="guest-comment-action-form" class="space-y-4 p-4 sm:p-5">
                 <div id="guest-comment-edit-fields" class="space-y-4">
                     <div>
-                        <label for="guest-comment-edit-name" class="mb-1 block text-xs font-bold text-gray-600 dark:text-gray-300">이름</label>
-                        <input id="guest-comment-edit-name" type="text" maxlength="30" class="w-full rounded-lg border border-gray-300 bg-white p-2.5 text-sm dark:border-gray-600 dark:bg-gray-700" required>
+                        <label for="guest-comment-edit-name" class="mb-1.5 block text-xs font-bold text-gray-700 dark:text-gray-300">이름</label>
+                        <input id="guest-comment-edit-name" type="text" maxlength="30" class="w-full rounded-lg border border-gray-300 bg-white p-2.5 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" required>
                     </div>
                     <div>
-                        <label for="guest-comment-edit-body" class="mb-1 block text-xs font-bold text-gray-600 dark:text-gray-300">내용</label>
-                        <textarea id="guest-comment-edit-body" maxlength="2000" rows="5" class="w-full resize-y rounded-lg border border-gray-300 bg-white p-2.5 text-sm dark:border-gray-600 dark:bg-gray-700" required></textarea>
+                        <label for="guest-comment-edit-body" class="mb-1.5 block text-xs font-bold text-gray-700 dark:text-gray-300">내용</label>
+                        <textarea id="guest-comment-edit-body" maxlength="2000" rows="5" class="w-full resize-y rounded-lg border border-gray-300 bg-white p-2.5 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" required></textarea>
                     </div>
                 </div>
                 <div>
-                    <label for="guest-comment-action-password" class="mb-1 block text-xs font-bold text-gray-600 dark:text-gray-300">댓글 비밀번호</label>
-                    <input id="guest-comment-action-password" type="password" minlength="8" maxlength="72" autocomplete="current-password" class="w-full rounded-lg border border-gray-300 bg-white p-2.5 text-sm dark:border-gray-600 dark:bg-gray-700" required>
+                    <label for="guest-comment-action-password" class="mb-1.5 block text-xs font-bold text-gray-700 dark:text-gray-300">댓글 비밀번호</label>
+                    <input id="guest-comment-action-password" type="password" minlength="8" maxlength="72" autocomplete="current-password" class="w-full rounded-lg border border-gray-300 bg-white p-2.5 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" required>
                 </div>
                 <p id="guest-comment-action-error" class="hidden text-xs text-red-500" role="alert"></p>
-                <div class="flex justify-end gap-2">
-                    <button id="guest-comment-action-cancel" type="button" class="rounded-lg border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 dark:border-gray-700 dark:text-gray-300">취소</button>
-                    <button id="guest-comment-action-submit" type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white hover:bg-indigo-700">저장</button>
+                <div class="flex justify-end gap-2 border-t border-gray-100 pt-3 dark:border-gray-700">
+                    <button id="guest-comment-action-cancel" type="button" class="rounded-lg border border-gray-200 px-4 py-2 text-sm font-bold text-gray-600 transition hover:bg-gray-100 dark:border-gray-600 dark:text-gray-300 dark:hover:bg-gray-700">취소</button>
+                    <button id="guest-comment-action-submit" type="submit" class="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600">저장</button>
                 </div>
             </form>
         </div>
     </div>
 
     <script>window.GUEST_PROJECT_PATH = {{INITIAL_PROJECT_PATH_JSON}};</script>
-    <script type="module" src="/js/guest.js?v=guest-page-20260721a"></script>
+    <script type="module" src="/js/guest.js?v=guest-admin-theme-20260721a"></script>
 </body>
 </html>
