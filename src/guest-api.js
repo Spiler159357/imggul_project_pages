@@ -178,7 +178,43 @@ function folderNameFromPrefix(prefix) {
     return parts[parts.length - 1] || '';
 }
 
-async function getProjectCharacters(env, project) {
+async function getProjectAliases(env, project) {
+    const projectName = String(project.prefix || project.path || '').split('/').filter(Boolean)[0] || '';
+    if (!projectName) return {};
+    try {
+        const rows = (await env.DB.prepare(`
+            SELECT target_key, alias
+            FROM aliases
+            WHERE scope = 'project' AND project_name = ?
+        `).bind(projectName).all()).results || [];
+        return Object.fromEntries(rows.map(row => [row.target_key, row.alias]));
+    } catch {
+        return {};
+    }
+}
+
+async function getProjectSituations(env, project) {
+    try {
+        const rows = (await env.DB.prepare(`
+            SELECT id, name, image_number
+            FROM v2_situations
+            WHERE project_id = ?
+            ORDER BY sort_order ASC, image_number ASC
+        `).bind(project.id).all()).results || [];
+        const byImageNumber = new Map();
+        const byId = new Map();
+        for (const row of rows) {
+            const situation = { id: String(row.id || ''), name: row.name || row.id || '', imageNumber: String(row.image_number ?? '') };
+            if (situation.imageNumber) byImageNumber.set(situation.imageNumber, situation);
+            if (situation.id) byId.set(situation.id, situation);
+        }
+        return { byImageNumber, byId };
+    } catch {
+        return { byImageNumber: new Map(), byId: new Map() };
+    }
+}
+
+async function getProjectCharacters(env, project, aliases = {}) {
     const dbRows = (await env.DB.prepare(`
         SELECT id, name, prefix, sort_order
         FROM v2_characters
@@ -190,7 +226,7 @@ async function getProjectCharacters(env, project) {
         const prefix = normalizeCharacterPrefix(project.prefix, row.prefix);
         const folderName = folderNameFromPrefix(prefix);
         if (!folderName || INTERNAL_PATH_PARTS.has(folderName) || folderName.startsWith('.')) continue;
-        byFolder.set(folderName, { id: row.id, name: row.name || folderName, prefix, folderName, sortOrder: row.sort_order || 0 });
+        byFolder.set(folderName, { id: row.id, name: aliases[folderName] || row.name || folderName, prefix, folderName, sortOrder: row.sort_order || 0 });
     }
 
     const listing = await listAllObjects(env.imgBucket, { prefix: project.prefix, delimiter: '/' }, 1000);
@@ -198,25 +234,36 @@ async function getProjectCharacters(env, project) {
         const folderName = folderNameFromPrefix(prefix);
         if (!folderName || INTERNAL_PATH_PARTS.has(folderName) || folderName.startsWith('.')) continue;
         if (!byFolder.has(folderName)) {
-            byFolder.set(folderName, { id: folderName, name: folderName, prefix, folderName, sortOrder: Number.MAX_SAFE_INTEGER });
+            byFolder.set(folderName, { id: folderName, name: aliases[folderName] || folderName, prefix, folderName, sortOrder: Number.MAX_SAFE_INTEGER });
         }
     }
 
     return [...byFolder.values()].sort((a, b) => a.sortOrder - b.sortOrder || a.name.localeCompare(b.name, 'ko'));
 }
 
-async function getCharacterImages(env, character) {
+async function getCharacterImages(env, character, situations = { byImageNumber: new Map(), byId: new Map() }, aliases = {}) {
     const listing = await listAllObjects(env.imgBucket, { prefix: character.prefix }, 5000);
     return listing.objects
         .map(object => ({ object, relativePath: object.key.slice(character.prefix.length) }))
         .filter(item => isGuestImageRelativePath(item.relativePath))
         .sort((a, b) => a.relativePath.localeCompare(b.relativePath, 'ko', { numeric: true }))
-        .map(item => ({
-            fileName: item.relativePath.split('/').pop(),
-            path: item.relativePath,
-            size: item.object.size,
-            uploadedAt: item.object.uploaded?.toISOString?.() || null
-        }));
+        .map(item => {
+            const pathParts = item.relativePath.split('/').filter(Boolean);
+            const fileName = pathParts.pop() || item.relativePath;
+            const fileStem = fileName.replace(/\.[^.]+$/, '');
+            const folderKey = pathParts[pathParts.length - 1] || '';
+            const situation = situations.byImageNumber.get(fileStem)
+                || situations.byId.get(folderKey)
+                || situations.byId.get(fileStem);
+            return {
+                fileName,
+                name: situation?.name || aliases[fileName] || aliases[folderKey] || aliases[fileStem] || fileName,
+                situationId: situation?.id || folderKey || fileStem,
+                path: item.relativePath,
+                size: item.object.size,
+                uploadedAt: item.object.uploaded?.toISOString?.() || null
+            };
+        });
 }
 
 function projectApiBase(project) {
@@ -224,9 +271,13 @@ function projectApiBase(project) {
 }
 
 async function getGuestProjectSummary(env, project) {
-    const characters = await getProjectCharacters(env, project);
+    const [aliases, situations] = await Promise.all([
+        getProjectAliases(env, project),
+        getProjectSituations(env, project)
+    ]);
+    const characters = await getProjectCharacters(env, project, aliases);
     const summaries = await Promise.all(characters.map(async character => {
-        const images = await getCharacterImages(env, character);
+        const images = await getCharacterImages(env, character, situations, aliases);
         const base = `${projectApiBase(project)}/characters/${encodeURIComponent(character.folderName)}/image`;
         return {
             id: character.folderName,
@@ -239,10 +290,10 @@ async function getGuestProjectSummary(env, project) {
     return { id: project.id, name: project.name, path: project.path, characters: summaries };
 }
 
-async function getCharacterByPath(env, project, rawCharacterPath) {
+async function getCharacterByPath(env, project, rawCharacterPath, aliases = {}) {
     const characterPath = normalizeGuestProjectPath(rawCharacterPath);
     if (!characterPath) throw new GuestApiError(404, 'CHARACTER_NOT_FOUND', '캐릭터를 찾을 수 없습니다.');
-    const characters = await getProjectCharacters(env, project);
+    const characters = await getProjectCharacters(env, project, aliases);
     const character = characters.find(item => item.folderName === characterPath);
     if (!character) throw new GuestApiError(404, 'CHARACTER_NOT_FOUND', '캐릭터를 찾을 수 없습니다.');
     return character;
@@ -671,8 +722,12 @@ export async function handleGuestApi(request, env, isAdmin, context) {
         if (match && method === 'GET') {
             const project = await resolveGuestProject(env, match[1]);
             if (!project) throw new GuestApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
-            const character = await getCharacterByPath(env, project, match[2]);
-            const images = await getCharacterImages(env, character);
+            const [aliases, situations] = await Promise.all([
+                getProjectAliases(env, project),
+                getProjectSituations(env, project)
+            ]);
+            const character = await getCharacterByPath(env, project, match[2], aliases);
+            const images = await getCharacterImages(env, character, situations, aliases);
             const base = `${projectApiBase(project)}/characters/${encodeURIComponent(character.folderName)}/image`;
             return publicJson({
                 id: character.folderName,

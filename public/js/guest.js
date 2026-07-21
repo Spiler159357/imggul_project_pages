@@ -126,7 +126,7 @@ function characterCard(character) {
             </span>
             <span class="block w-full overflow-hidden text-center">
                 <span class="block w-full truncate text-xs font-bold text-gray-800 group-hover:text-indigo-700 dark:text-gray-200 dark:group-hover:text-indigo-400 sm:text-sm">${escapeHtml(character.name)}</span>
-                <span class="mt-0.5 block w-full truncate text-[9px] text-gray-500 dark:text-gray-400 sm:text-[10px]">${escapeHtml(character.path)} · ${character.imageCount}개</span>
+                <span class="mt-0.5 block w-full truncate text-[9px] text-gray-500 dark:text-gray-400 sm:text-[10px]">이미지 ${character.imageCount}개</span>
             </span>
         </button>`;
 }
@@ -165,16 +165,16 @@ async function renderCharacterDetail(characterId) {
                     <button type="button" data-route="characters" class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 transition hover:border-indigo-300 hover:text-indigo-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300 dark:hover:border-indigo-600 dark:hover:text-indigo-400" aria-label="캐릭터 목록">
                         <i data-lucide="arrow-left" class="h-4 w-4"></i><span>캐릭터 목록</span>
                     </button>
-                    <span class="truncate text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(detail.path)} · 이미지 ${detail.images.length}개</span>
+                    <span class="truncate text-[11px] text-gray-400 dark:text-gray-500">이미지 ${detail.images.length}개</span>
                 </div>
                 ${detail.images.length ? `
                     <div class="grid grid-cols-2 gap-3 sm:grid-cols-3 sm:gap-4 md:grid-cols-4 lg:grid-cols-5 xl:grid-cols-6">
                         ${detail.images.map(image => `
-                            <button type="button" data-image-url="${escapeHtml(image.url)}" data-image-title="${escapeHtml(detail.name)}" data-image-path="${escapeHtml(`${detail.path}/${image.path}`)}" class="group relative flex w-full flex-col items-center overflow-hidden rounded-lg border border-gray-100 p-2 transition hover:border-indigo-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:border-indigo-500 dark:hover:bg-gray-700 sm:p-3">
+                            <button type="button" data-image-url="${escapeHtml(image.url)}" data-image-title="${escapeHtml(`${detail.name} · ${image.name || image.fileName}`)}" data-image-path="${escapeHtml(image.name || image.fileName)}" class="group relative flex w-full flex-col items-center overflow-hidden rounded-lg border border-gray-100 p-2 transition hover:border-indigo-200 hover:bg-gray-50 dark:border-gray-700 dark:hover:border-indigo-500 dark:hover:bg-gray-700 sm:p-3">
                                 <span class="block h-24 w-full overflow-hidden rounded border border-gray-200 bg-gray-100 shadow-sm dark:border-gray-600 dark:bg-gray-800 sm:h-32">
-                                    <img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.fileName)}" loading="lazy" class="h-full w-full object-cover">
+                                    <img src="${escapeHtml(image.url)}" alt="${escapeHtml(image.name || image.fileName)}" loading="lazy" class="h-full w-full object-cover">
                                 </span>
-                                <span class="mt-2 block w-full truncate text-center text-[10px] font-medium text-gray-600 group-hover:text-indigo-700 dark:text-gray-300 dark:group-hover:text-indigo-400 sm:text-xs">${escapeHtml(image.fileName)}</span>
+                                <span class="mt-2 block w-full truncate text-center text-[10px] font-medium text-gray-600 group-hover:text-indigo-700 dark:text-gray-300 dark:group-hover:text-indigo-400 sm:text-xs">${escapeHtml(image.name || image.fileName)}</span>
                             </button>`).join('')}
                     </div>` : `
                     <div class="flex h-40 flex-col items-center justify-center text-gray-400 dark:text-gray-500"><i data-lucide="image-off" class="mb-2 h-12 w-12 opacity-50"></i><p class="text-sm">등록된 이미지가 없습니다.</p></div>`}
