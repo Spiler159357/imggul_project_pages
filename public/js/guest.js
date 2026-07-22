@@ -8,6 +8,7 @@ const state = {
     activePost: null,
     postsScrollTop: 0,
     imageReturnFocus: null,
+    imageClosePending: false,
     commentReturnFocus: null,
     commentAction: null,
     postsRefreshInFlight: false
@@ -444,7 +445,9 @@ function bindGuestPostsChangeDetection() {
 function openImageModal(button) {
     const modal = document.getElementById('guest-image-modal');
     const image = document.getElementById('guest-image-preview');
+    const wasOpen = !modal.classList.contains('hidden');
     state.imageReturnFocus = button;
+    state.imageClosePending = false;
     image.src = button.dataset.imageUrl || '';
     image.alt = button.dataset.imageTitle || '이미지 미리보기';
     document.getElementById('guest-image-title').textContent = button.dataset.imageTitle || '이미지 미리보기';
@@ -453,9 +456,13 @@ function openImageModal(button) {
     modal.classList.add('flex');
     document.body.style.overflow = 'hidden';
     document.getElementById('guest-image-close').focus();
+    if (!wasOpen) {
+        const currentState = history.state && typeof history.state === 'object' ? history.state : {};
+        history.pushState({ ...currentState, guestModal: 'image' }, '', location.href);
+    }
 }
 
-function closeImageModal() {
+function hideImageModal() {
     const modal = document.getElementById('guest-image-modal');
     modal.classList.add('hidden');
     modal.classList.remove('flex');
@@ -463,6 +470,17 @@ function closeImageModal() {
     document.body.style.overflow = '';
     state.imageReturnFocus?.focus();
     state.imageReturnFocus = null;
+}
+
+function closeImageModal() {
+    const modal = document.getElementById('guest-image-modal');
+    if (modal.classList.contains('hidden') || state.imageClosePending) return;
+    if (history.state?.guestModal === 'image') {
+        state.imageClosePending = true;
+        history.back();
+        return;
+    }
+    hideImageModal();
 }
 
 function openCommentModal(mode, commentId, button) {
@@ -659,7 +677,15 @@ document.addEventListener('keydown', event => {
     if (!document.getElementById('guest-comment-modal').classList.contains('hidden')) closeCommentModal();
     else if (!document.getElementById('guest-image-modal').classList.contains('hidden')) closeImageModal();
 });
-window.addEventListener('popstate', renderRoute);
+window.addEventListener('popstate', () => {
+    state.imageClosePending = false;
+    const imageModal = document.getElementById('guest-image-modal');
+    if (!imageModal.classList.contains('hidden')) {
+        hideImageModal();
+        return;
+    }
+    renderRoute();
+});
 
 async function init() {
     renderState('loader-circle', '프로젝트를 불러오는 중입니다.');
