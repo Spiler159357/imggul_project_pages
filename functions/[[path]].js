@@ -3025,8 +3025,7 @@ export async function onRequest(context) {
     if (!isAdmin && path === "/") {
         const errorResponse = await env.ASSETS.fetch(new URL('/access-error.html', request.url));
         let errorHtml = await errorResponse.text();
-        errorHtml = errorHtml.replace('{{ERROR_TITLE}}', '잘못된 접근입니다')
-            .replace('{{ERROR_MESSAGE}}', '프로젝트 주소로 접속하거나 관리자 로그인 주소를 이용해 주세요.');
+        errorHtml = errorHtml.replace('{{ERROR_MESSAGE}}', '프로젝트 주소를 통해 접속해 주세요.');
         return new Response(errorHtml, {
             status: 404,
             headers: { "Content-Type": "text/html; charset=UTF-8" }
@@ -3052,8 +3051,7 @@ export async function onRequest(context) {
     if (!project) {
         const errorResponse = await env.ASSETS.fetch(new URL('/access-error.html', request.url));
         let errorHtml = await errorResponse.text();
-        errorHtml = errorHtml.replace('{{ERROR_TITLE}}', '프로젝트를 찾을 수 없습니다')
-            .replace('{{ERROR_MESSAGE}}', '주소를 확인한 뒤 다시 시도해 주세요.');
+        errorHtml = errorHtml.replace('{{ERROR_MESSAGE}}', '프로젝트 주소를 확인해 주세요.');
         return new Response(errorHtml, { status: 404, headers: { "Content-Type": "text/html; charset=UTF-8" } });
     }
 
