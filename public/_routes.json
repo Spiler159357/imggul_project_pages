@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "include": ["/*"],
+  "exclude": [
+    "/js/*",
+    "/style.css",
+    "/build-version.json"
+  ]
+}

@@ -9,6 +9,12 @@ import {
     resolveGuestProject
 } from "../src/guest-api.js";
 import {
+    isImageObjectKey,
+    isPublicR2ImageObject,
+    normalizeImageObjectKey,
+    serveR2Image
+} from "../src/image-serving.js";
+import {
     cancelPlannerCompactGeneration,
     cleanupPlannerCompactAssets,
     completePlannerCompactBrowserQueue,
@@ -2640,7 +2646,11 @@ export async function onRequest(context) {
                 
                 const object = await env.imgBucket.get(key);
                 if (!object) throw new Error('File not found');
-                const newMetadata = { ...object.customMetadata, ispublic: isPublic ? 'true' : 'false' };
+                const newMetadata = {
+                    ...object.customMetadata,
+                    ispublic: isPublic ? 'true' : 'false',
+                    visibilityconfigured: 'true'
+                };
                 await env.imgBucket.put(key, object.body, {
                     httpMetadata: object.httpMetadata,
                     customMetadata: newMetadata
@@ -2850,7 +2860,9 @@ export async function onRequest(context) {
                             key: o.key, 
                             size: o.size, 
                             uploaded: o.uploaded,
-                            isPublic: o.customMetadata?.ispublic === 'true'
+                            isPublic: isImageObjectKey(o.key)
+                                ? isPublicR2ImageObject(o.key, o.customMetadata)
+                                : o.customMetadata?.ispublic === 'true'
                         });
                     }
                 });
@@ -2934,9 +2946,15 @@ export async function onRequest(context) {
             return new Response(JSON.stringify({ success: true, url: `/${finalKey}` }), { headers: { 'Content-Type': 'application/json' } });
             
         } else {
+            const uploadContentType = request.headers.get('Content-Type') || 'application/octet-stream';
+            const isImageUpload = /^image\/(?:webp|png|jpeg)$/i.test(uploadContentType)
+                && isImageObjectKey(finalKey);
             await env.imgBucket.put(finalKey, request.body, {
-              httpMetadata: { contentType: request.headers.get('Content-Type') || 'application/octet-stream' },
-              customMetadata: { ispublic: 'false' }
+              httpMetadata: { contentType: uploadContentType },
+              customMetadata: {
+                  ispublic: isImageUpload ? 'true' : 'false',
+                  visibilityconfigured: 'true'
+              }
             });
             return new Response(JSON.stringify({ success: true, url: `/${finalKey}` }), { headers: { 'Content-Type': 'application/json' } });
         }
@@ -2960,14 +2978,37 @@ export async function onRequest(context) {
         else objectKey = path.slice(1);
 
         if (objectKey) {
-            objectKey = decodeURIComponent(objectKey);
+            const normalizedImageKey = normalizeImageObjectKey(objectKey);
+            if (normalizedImageKey && isImageObjectKey(normalizedImageKey)) {
+                return serveR2Image({
+                    request,
+                    env,
+                    rawKey: objectKey,
+                    isAdmin
+                });
+            }
 
-            if (!isAdmin) {
-                return new Response('Not found', { status: 404 });
+            try {
+                objectKey = decodeURIComponent(objectKey);
+            } catch {
+                return new Response('Not found', {
+                    status: 404,
+                    headers: { 'Cache-Control': 'no-store' }
+                });
             }
 
             if (objectKey.endsWith('_meta.json') && !isAdmin) {
-                return new Response("Forbidden: You don't have permission to access this metadata.", { status: 403 });
+                return new Response('Not found', {
+                    status: 404,
+                    headers: { 'Cache-Control': 'no-store' }
+                });
+            }
+
+            if (!isReadableTextFile(objectKey) && !isAdmin) {
+                return new Response('Not found', {
+                    status: 404,
+                    headers: { 'Cache-Control': 'no-store' }
+                });
             }
 
             try {
@@ -2981,7 +3022,10 @@ export async function onRequest(context) {
                         if (memos[mFileName]) {
                             const mData = memos[mFileName];
                             if (!mData.isPublic && !isAdmin) {
-                                return new Response("Access Denied: Private Text File", { status: 403 });
+                                return new Response('Not found', {
+                                    status: 404,
+                                    headers: { 'Cache-Control': 'no-store' }
+                                });
                             }
                             return new Response(mData.content, { 
                                 headers: { 
@@ -2993,25 +3037,40 @@ export async function onRequest(context) {
                     }
                 }
 
-                if (!object) return new Response("Not found", { status: 404 });
+                if (!object) {
+                    return new Response('Not found', {
+                        status: 404,
+                        headers: { 'Cache-Control': 'no-store' }
+                    });
+                }
 
                 if (isReadableTextFile(objectKey)) {
                     const isPublic = object.customMetadata?.ispublic === 'true';
                     if (!isPublic && !isAdmin) {
-                        return new Response("Access Denied: Private Text File", { status: 403 });
+                        return new Response('Not found', {
+                            status: 404,
+                            headers: { 'Cache-Control': 'no-store' }
+                        });
                     }
                 }
 
                 const headers = new Headers();
                 object.writeHttpMetadata(headers);
                 headers.set('etag', object.httpEtag);
-                headers.set('Cache-Control', 'public, max-age=120, stale-while-revalidate=86400');
+                headers.set('Cache-Control', isAdmin
+                    ? 'private, no-store'
+                    : 'public, max-age=300, must-revalidate');
                 if (isReadableTextFile(objectKey) && !headers.get('Content-Type')) {
                     headers.set('Content-Type', 'text/plain; charset=UTF-8');
                 }
                 return new Response(object.body, { headers });
 
-            } catch (e) { return new Response("Error", { status: 500 }); }
+            } catch (e) {
+                return new Response('Error', {
+                    status: 500,
+                    headers: { 'Cache-Control': 'no-store' }
+                });
+            }
         }
     }
 

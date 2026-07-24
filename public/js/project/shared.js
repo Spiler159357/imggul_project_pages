@@ -937,7 +937,10 @@ export function escapeJsString(value) {
 }
 
 export function getAssetUrl(key) {
-    return `/${encodeURI(key)}`;
+    const encodedKey = encodeURI(key);
+    return /\.(png|jpe?g|webp)$/i.test(String(key || ''))
+        ? `/i/${encodedKey}`
+        : `/${encodedKey}`;
 }
 
 export function getAssetVersion(file) {

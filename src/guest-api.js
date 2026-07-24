@@ -299,7 +299,11 @@ async function getCharacterByPath(env, project, rawCharacterPath, aliases = {}) 
     return character;
 }
 
-function objectResponse(object, cacheControl = 'public, max-age=300, stale-while-revalidate=86400') {
+function objectResponse(object, {
+    cacheControl = 'public, max-age=300, must-revalidate',
+    method = 'GET',
+    isPublic = true
+} = {}) {
     const headers = new Headers();
     object.writeHttpMetadata(headers);
     const mimeByExtension = {
@@ -313,7 +317,8 @@ function objectResponse(object, cacheControl = 'public, max-age=300, stale-while
     if (object.httpEtag) headers.set('ETag', object.httpEtag);
     headers.set('Cache-Control', cacheControl);
     headers.set('X-Content-Type-Options', 'nosniff');
-    return new Response(object.body, { headers });
+    if (isPublic) headers.set('Access-Control-Allow-Origin', '*');
+    return new Response(method === 'HEAD' ? null : object.body, { headers });
 }
 
 async function serveCharacterImage(request, env, project, rawCharacterPath) {
@@ -325,7 +330,7 @@ async function serveCharacterImage(request, env, project, rawCharacterPath) {
     if (!key.startsWith(character.prefix)) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
     const object = await env.imgBucket.get(key);
     if (!object) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
-    return objectResponse(object);
+    return objectResponse(object, { method: request.method });
 }
 
 function validateText(value, label, maximum, { required = true } = {}) {
@@ -500,7 +505,7 @@ async function getGuestPostDetail(env, project, postId) {
     return serializePost(post, project.path, { detail: true, comments });
 }
 
-async function servePostImage(env, project, postId, isAdmin = false) {
+async function servePostImage(request, env, project, postId, isAdmin = false) {
     const post = await getPostForProject(env, project, postId);
     if (!post.image_key) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
     const expectedPrefix = `${project.prefix}_guest_posts/${post.id}/`;
@@ -509,7 +514,11 @@ async function servePostImage(env, project, postId, isAdmin = false) {
     }
     const object = await env.imgBucket.get(post.image_key);
     if (!object) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
-    return objectResponse(object, isAdmin ? 'private, no-store' : undefined);
+    return objectResponse(object, {
+        cacheControl: isAdmin ? 'private, no-store' : undefined,
+        method: request.method,
+        isPublic: !isAdmin
+    });
 }
 
 async function createPost(request, env, project) {
@@ -741,7 +750,7 @@ export async function handleGuestApi(request, env, isAdmin, context) {
         }
 
         match = path.match(/^\/api\/guest\/projects\/([^/]+)\/characters\/([^/]+)\/image$/);
-        if (match && method === 'GET') {
+        if (match && (method === 'GET' || method === 'HEAD')) {
             const project = await resolveGuestProject(env, match[1]);
             if (!project) throw new GuestApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
             return await serveCharacterImage(request, env, project, match[2]);
@@ -762,10 +771,10 @@ export async function handleGuestApi(request, env, isAdmin, context) {
         }
 
         match = path.match(/^\/api\/guest\/projects\/([^/]+)\/posts\/([^/]+)\/image$/);
-        if (match && method === 'GET') {
+        if (match && (method === 'GET' || method === 'HEAD')) {
             const project = await resolveGuestProject(env, match[1]);
             if (!project) throw new GuestApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
-            return await servePostImage(env, project, match[2]);
+            return await servePostImage(request, env, project, match[2]);
         }
 
         match = path.match(/^\/api\/guest\/projects\/([^/]+)\/posts\/([^/]+)\/comments$/);
@@ -788,10 +797,10 @@ export async function handleGuestApi(request, env, isAdmin, context) {
         }
 
         match = path.match(/^\/api\/admin\/posts\/([^/]+)\/image$/);
-        if (match && method === 'GET') {
+        if (match && (method === 'GET' || method === 'HEAD')) {
             if (!isAdmin) throw new GuestApiError(403, 'FORBIDDEN', '관리자 권한이 필요합니다.');
             const { project } = await getAdminPostContext(env, match[1]);
-            return await servePostImage(env, project, match[1], true);
+            return await servePostImage(request, env, project, match[1], true);
         }
 
         match = path.match(/^\/api\/admin\/posts\/([^/]+)$/);

@@ -1,7 +1,7 @@
 import { getDefaultEditedKey } from './document.js';
 
 export function getAssetUrl(key) {
-    return `/${String(key || '').split('/').map(part => encodeURIComponent(part)).join('/')}`;
+    return `/i/${String(key || '').split('/').map(part => encodeURIComponent(part)).join('/')}`;
 }
 
 export function loadImageFromKey(key) {

@@ -460,6 +460,7 @@ window.openModal = async function(key, url, isImage, isText, isPublic, skipHisto
 
     if (isImage) {
         if(imgEl) { imgEl.src = url; imgEl.classList.remove('hidden'); }
+        if(window.IS_ADMIN && publicCheckWrapper && /\.(png|jpe?g|webp)$/i.test(fileName)) publicCheckWrapper.classList.remove('hidden');
         if(imgActions) {
             imgActions.classList.remove('hidden'); imgActions.classList.add('flex');
             if (!document.getElementById('modal-inpaint-craft-btn')) {
@@ -1361,7 +1362,8 @@ window.loadImportPath = async function(prefix) {
             if (!/\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName)) return;
             
             const alias = window.getAliasOnly(file.key, false); 
-            const fileUrl = window.location.origin + '/' + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
+            const assetPath = /\.(png|jpe?g|webp)$/i.test(fileName) ? '/i/' : '/';
+            const fileUrl = window.location.origin + assetPath + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
             
             const div = document.createElement('div');
             div.className = 'relative w-full aspect-[3/4] bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden shadow-sm border border-gray-200 dark:border-gray-700 cursor-pointer hover:border-indigo-500 hover:ring-2 hover:ring-indigo-500/50 transition-all group';

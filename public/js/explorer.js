@@ -107,7 +107,7 @@ export function renderFiles(folders, files) {
             ? `<div class="flex flex-col items-center w-full overflow-hidden mt-1"><span class="text-xs sm:text-sm font-bold text-gray-800 dark:text-gray-200 truncate w-full text-center group-hover:text-indigo-700 dark:group-hover:text-indigo-400" title="이름">${alias}</span><span class="text-[9px] sm:text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center" title="경로">(${folderName})</span></div>`
             : `<span class="text-xs sm:text-sm font-medium text-gray-700 dark:text-gray-300 truncate w-full text-center group-hover:text-indigo-700 dark:group-hover:text-indigo-400 mt-1">${folderName}</span>`;
 
-        div.innerHTML = `<div class="relative w-20 h-20 sm:w-28 sm:h-28 mb-2"><div class="absolute inset-0 bg-yellow-100 dark:bg-yellow-900/30 rounded-xl flex items-center justify-center group-hover:bg-yellow-200 dark:group-hover:bg-yellow-900/50 transition"><i data-lucide="folder" class="w-10 h-10 sm:w-12 sm:h-12 text-yellow-500 fill-current"></i></div><img src="/${folderPrefix}0.webp" class="absolute inset-0 w-20 h-20 sm:w-28 sm:h-28 object-cover rounded-xl border border-gray-200 dark:border-gray-600 shadow-sm z-10 bg-white dark:bg-gray-800 transition-opacity" onerror="this.style.display='none'" loading="lazy"></div>${nameHtml}${deleteBtnHtml}`;
+        div.innerHTML = `<div class="relative w-20 h-20 sm:w-28 sm:h-28 mb-2"><div class="absolute inset-0 bg-yellow-100 dark:bg-yellow-900/30 rounded-xl flex items-center justify-center group-hover:bg-yellow-200 dark:group-hover:bg-yellow-900/50 transition"><i data-lucide="folder" class="w-10 h-10 sm:w-12 sm:h-12 text-yellow-500 fill-current"></i></div><img src="/i/${folderPrefix}0.webp" class="absolute inset-0 w-20 h-20 sm:w-28 sm:h-28 object-cover rounded-xl border border-gray-200 dark:border-gray-600 shadow-sm z-10 bg-white dark:bg-gray-800 transition-opacity" onerror="this.style.display='none'" loading="lazy"></div>${nameHtml}${deleteBtnHtml}`;
         grid.appendChild(div);
     });
 
@@ -119,15 +119,16 @@ export function renderFiles(folders, files) {
         const isText = /\.(txt|log)$/i.test(fileName);
         const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
         const timestamp = file.uploaded ? new Date(file.uploaded).getTime() : Date.now();
-        const fileUrl = window.location.origin + '/' + file.key + '?t=' + timestamp;
+        const assetPath = /\.(png|jpe?g|webp)$/i.test(fileName) ? '/i/' : '/';
+        const fileUrl = window.location.origin + assetPath + file.key + '?t=' + timestamp;
 
         const div = document.createElement('div');
         div.className = 'flex flex-col items-center p-2 sm:p-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 cursor-pointer transition group border border-gray-100 dark:border-gray-700 hover:border-indigo-200 dark:hover:border-indigo-500 relative w-full overflow-hidden';
         div.dataset.key = file.key; div.dataset.public = file.isPublic; 
         div.onclick = () => window.openModal(file.key, fileUrl, isImage, isText, file.isPublic);
         
-        let iconHtml = isImage ? `<img src="/${file.key}?t=${timestamp}" class="w-full h-24 sm:h-32 object-cover rounded mb-2 border border-gray-200 dark:border-gray-600 shadow-sm" loading="lazy">` : (isText ? `<div class="w-full h-24 sm:h-32 bg-gray-100 dark:bg-gray-800 rounded mb-2 flex items-center justify-center border border-gray-200 dark:border-gray-600 shadow-sm"><i data-lucide="file-text" class="w-8 h-8 sm:w-10 sm:h-10 text-gray-500 dark:text-gray-400"></i></div>` : `<div class="w-full h-24 sm:h-32 bg-gray-100 dark:bg-gray-800 rounded mb-2 flex items-center justify-center border border-gray-200 dark:border-gray-600 shadow-sm"><i data-lucide="file" class="w-8 h-8 sm:w-10 sm:h-10 text-gray-400 dark:text-gray-500"></i></div>`);
-        let statusIcon = isText ? (file.isPublic ? `<div class="absolute top-1 right-1 sm:top-2 sm:right-2 z-10 bg-white/90 dark:bg-gray-800/90 rounded-full p-1 shadow-sm border border-green-200 dark:border-green-900" title="공개됨"><i data-lucide="eye" class="w-3 h-3 sm:w-3.5 sm:h-3.5 text-green-600 dark:text-green-400"></i></div>` : `<div class="absolute top-1 right-1 sm:top-2 sm:right-2 z-10 bg-white/90 dark:bg-gray-800/90 rounded-full p-1 shadow-sm border border-red-200 dark:border-red-900" title="비공개"><i data-lucide="lock" class="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-600 dark:text-red-400"></i></div>`) : '';
+        let iconHtml = isImage ? `<img src="${assetPath}${file.key}?t=${timestamp}" class="w-full h-24 sm:h-32 object-cover rounded mb-2 border border-gray-200 dark:border-gray-600 shadow-sm" loading="lazy">` : (isText ? `<div class="w-full h-24 sm:h-32 bg-gray-100 dark:bg-gray-800 rounded mb-2 flex items-center justify-center border border-gray-200 dark:border-gray-600 shadow-sm"><i data-lucide="file-text" class="w-8 h-8 sm:w-10 sm:h-10 text-gray-500 dark:text-gray-400"></i></div>` : `<div class="w-full h-24 sm:h-32 bg-gray-100 dark:bg-gray-800 rounded mb-2 flex items-center justify-center border border-gray-200 dark:border-gray-600 shadow-sm"><i data-lucide="file" class="w-8 h-8 sm:w-10 sm:h-10 text-gray-400 dark:text-gray-500"></i></div>`);
+        let statusIcon = (isText || /\.(png|jpe?g|webp)$/i.test(fileName)) ? (file.isPublic ? `<div class="absolute top-1 right-1 sm:top-2 sm:right-2 z-10 bg-white/90 dark:bg-gray-800/90 rounded-full p-1 shadow-sm border border-green-200 dark:border-green-900" title="공개됨"><i data-lucide="eye" class="w-3 h-3 sm:w-3.5 sm:h-3.5 text-green-600 dark:text-green-400"></i></div>` : `<div class="absolute top-1 right-1 sm:top-2 sm:right-2 z-10 bg-white/90 dark:bg-gray-800/90 rounded-full p-1 shadow-sm border border-red-200 dark:border-red-900" title="비공개"><i data-lucide="lock" class="w-3 h-3 sm:w-3.5 sm:h-3.5 text-red-600 dark:text-red-400"></i></div>`) : '';
         const nameHtml = alias ? `<div class="flex flex-col items-center w-full overflow-hidden mt-1"><span class="text-xs sm:text-sm font-bold text-gray-800 dark:text-gray-200 truncate w-full text-center group-hover:text-black dark:group-hover:text-white" title="이름">${alias}</span><span class="text-[9px] sm:text-[10px] text-gray-500 dark:text-gray-400 truncate w-full text-center" title="파일 경로">(${fileName})</span></div>` : `<span class="text-[10px] sm:text-xs text-gray-600 dark:text-gray-400 truncate w-full text-center group-hover:text-black dark:group-hover:text-white mt-1">${fileName}</span>`;
 
         div.innerHTML = `${statusIcon}${iconHtml}${nameHtml}`; grid.appendChild(div);
@@ -170,7 +171,8 @@ export function renderSidebarFoldersAndFiles(folders, files) {
         const alias = window.getAliasOnly(file.key, false);
         const isText = /\.(txt|log)$/i.test(fileName);
         const isImage = /\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName);
-        const fileUrl = window.location.origin + '/' + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
+        const assetPath = /\.(png|jpe?g|webp)$/i.test(fileName) ? '/i/' : '/';
+        const fileUrl = window.location.origin + assetPath + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
         const icon = isImage ? 'image' : (isText ? 'file-text' : 'file');
         const iconColor = isImage ? 'text-indigo-500' : (isText ? 'text-green-500' : 'text-gray-500');
 
