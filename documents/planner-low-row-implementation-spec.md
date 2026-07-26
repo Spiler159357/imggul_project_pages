@@ -105,10 +105,10 @@ planner frontend
 구현 전체에서 아래 조건을 깨면 안 된다.
 
 1. 영속 ID 생성에 `crypto.randomUUID()`, 시간값, 난수 suffix를 사용하지 않는다.
-2. `record_key`와 payload의 `runId`, `itemId`, `variantId`, `jobId`, `assetId`, `operationId`는 안정적인 source reference로부터 생성한다.
+2. `record_key`와 payload의 `runId`, `itemId`, `variantId`는 안정적인 source reference로부터 생성하고, 생성 실행을 구분해야 하는 `jobId`, `assetId`, `operationId`에는 생성 시작 UPDATE가 만든 run `revision` 기반 `generationSequence`를 포함한다.
 3. run payload의 `projectId`, `characterId`는 row의 `project_id`, `character_id`와 일치한다.
 4. 하나의 run에는 동시에 하나의 `activeJob`만 존재한다.
-5. candidate는 `(itemId, variantId, imageIndex)` 조합당 최대 하나다.
+5. 현재 generation의 candidate는 `(itemId, variantId, imageIndex, generationSequence)` 조합당 최대 하나이며 새 generation 시작 시 이전 generation candidate를 run payload에서 제거한다.
 6. candidate 배열은 append-only가 아니라 동일 `assetId`를 replace하는 방식으로 갱신한다.
 7. `completedCount + failedCount`는 `totalCount`를 초과하지 않는다.
 8. run update는 반드시 `record_key`와 기존 `revision`을 함께 조건으로 사용한다.
@@ -512,7 +512,7 @@ items sort_order
 -> variantImageIndex 0..targetCount-1
 ```
 
-`targetSituationId`가 있으면 해당 situation item만 순회한다. `clearExisting=false`이면 이미 candidate가 있는 슬롯을 건너뛴다. `clearExisting=true`이면 대상 item의 candidate 배열을 생성 시작 update에서 비우고 동일 asset ID 슬롯을 다시 채운다.
+`targetSituationId`가 있으면 해당 situation item만 순회한다. `clearExisting=false`이고 동일 generation candidate가 있으면 이미 완료된 슬롯을 건너뛴다. `clearExisting=true` 또는 새 generation이면 대상 item의 candidate 배열을 생성 시작 update에서 비우고 새 `generationSequence`의 asset ID 슬롯을 채운다.
 
 ### 11.5 완료 조건
 
@@ -667,7 +667,7 @@ GET run
 {projectPrefix}_planner_temp_image/{characterRef}/{situationRef}/{variantRef}/{variantImageIndex}.webp
 ```
 
-동일 슬롯 재시도는 동일 R2 key에 overwrite한다. 파일명에 timestamp나 random UUID를 넣지 않는다.
+동일 generation의 동일 슬롯 재시도는 동일 R2 key에 overwrite한다. 새 generation은 run revision 기반 `generationSequence` 경로를 사용하며 파일명에 timestamp나 random UUID를 넣지 않는다.
 
 ### 13.5 성공 update
 
@@ -808,20 +808,21 @@ export async function cleanupPlannerCompactAssets(env, options = {});
 5. R2 후보 object 읽기 및 최종 key put                  D1 write 0
 6. file_metadata upsert                               D1 write 1
 7. confirm completed update                           D1 write 1
-8. run에서 item 제거 또는 마지막 item이면 run delete    D1 write 1
-9. 미선택 후보 R2 object best-effort 삭제               D1 write 0
+8. run에서 item 제거 또는 마지막 item이면 빈 tombstone UPDATE D1 write 1
+9. 선택 후보를 포함한 모든 후보 R2 object 삭제          D1 write 0
 ```
 
 정상 base count는 4다.
 
 ### 15.4 confirm record 재사용
 
-confirm key는 item당 하나다. 동일 item에 대해 새 random operation row를 만들지 않는다.
+confirm key는 item당 하나다. 동일 item에 대해 새 random operation row를 만들지 않는다. 같은 generation의 동일 asset/target 재호출은 기존 결과를 반환하고, 더 높은 `generationSequence`의 확정은 같은 confirm row를 새 pending operation으로 갱신한다.
 
 - 동일 asset/target 재호출: write 0, 이전 성공 반환
 - `pending` 재호출: 마지막 완료 지점부터 재개
 - `failed` 재호출: 같은 row를 pending으로 upsert하고 재시도
-- 다른 asset/target으로 completed operation 변경 요청: `409 PLANNER_CONFIRM_CONFLICT`
+- 같은 generation에서 다른 asset/target으로 completed operation 변경 요청: `409 PLANNER_CONFIRM_CONFLICT`
+- 더 높은 generation의 다른 asset/target 확정 요청: 같은 confirm row를 재사용해 최종 R2 key와 metadata를 교체
 
 ### 15.5 실패 경계
 
@@ -845,7 +846,7 @@ confirm 시작 시 읽은 run revision이 변경되면 최신 run을 다시 읽�
 
 ### 15.7 cleanup
 
-- 정상 confirm에서는 후보 R2 object를 직접 best-effort 삭제한다.
+- 정상 confirm에서는 선택 후보를 포함한 해당 item/generation의 모든 후보 R2 object를 직접 best-effort 삭제한다.
 - cleanup 작업을 위해 D1 queue row를 만들지 않는다.
 - 삭제 실패는 R2/Worker log에 남긴다.
 - 정기 cleanup은 deterministic prefix를 기준으로 orphan object를 찾아 처리하되 D1 row를 만들지 않는다.
@@ -1009,7 +1010,7 @@ compact 함수와 v3 route 연결부에는 존재하면 안 된다.
 | pause/resume/cancel 상태 변경 | 0 | 1 | 0 | 1 |
 | 중복 상태 제어 | 0 | 0 | 0 | 0 |
 | confirm | 2 | 2 | 0 | 4 |
-| 마지막 item confirm | 2 | 1 | 1 | 4 |
+| 마지막 item confirm | 2 | 2 | 0 | 4 |
 | 중복 completed confirm | 0 | 0 | 0 | 0 |
 
 confirm의 INSERT 2개는 compact confirm row와 기존 `file_metadata` row를 의미한다. metadata가 이미 있으면 그중 하나는 UPDATE가 될 수 있으나 base count는 동일하게 1로 본다.
@@ -1163,4 +1164,3 @@ background Worker를 먼저 배포하는 이유는 Pages가 compact Queue 메시
 7. frontend의 플랜 작성, background 생성, browser 생성, 상태 제어, 최종 확정 흐름이 유지된다.
 8. 로컬 static check와 BOM 검사를 통과한다.
 9. Cloudflare 배포 후 D1 `meta.rows_written` 및 dashboard로 개선 효과를 확인한다.
-

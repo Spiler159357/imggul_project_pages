@@ -1029,6 +1029,10 @@ export async function processNextQueueItem() {
         }
         const tempKey = outputPrefix + uploadFileName;
         const uploadHeaders = { 'X-File-Name': encodeURIComponent(uploadFileName), 'Content-Type': uploadContentType, 'X-Absolute-Path': encodeURIComponent(tempKey) };
+        if (task.planner?.compact) {
+            uploadHeaders['X-Planner-Asset-Id'] = encodeURIComponent(task.planner.assetId || '');
+            uploadHeaders['X-Planner-Generation-Sequence'] = String(task.planner.generationSequence || 0);
+        }
         const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(uploadFile); });
         const uploadRes = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: uploadHeaders, body: buffer, cache: 'no-store' });
         if (!uploadRes.ok) throw new Error("서버 임시 저장소 동기화에 실패했습니다.");

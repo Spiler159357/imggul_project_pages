@@ -3358,19 +3358,46 @@ function applyPlannerBackgroundStatus(meta, status, statusForStorage) {
                 ? statusItem.images
                 : (Array.isArray(statusItem.resultKeys) ? statusItem.resultKeys : []);
             const incomingGeneratedImages = Array.isArray(statusItem.generatedImages) ? statusItem.generatedImages : [];
+            const incomingGenerationSequence = Number(
+                statusItem.generationSequence
+                || incomingGeneratedImages.find(image => image?.generationSequence)?.generationSequence
+                || status.generationSequence
+                || 0
+            );
+            const currentGenerationSequence = Number(
+                item.generationSequence
+                || (item.generatedImages || []).find(image => image?.generationSequence)?.generationSequence
+                || 0
+            );
+            const replacePreviousGeneration = incomingGenerationSequence > 0
+                && incomingGenerationSequence !== currentGenerationSequence;
+            const nextImages = replacePreviousGeneration
+                ? [...incomingImages]
+                : Array.from(new Set([...(item.images || []), ...incomingImages]));
+            const nextGeneratedImages = replacePreviousGeneration
+                ? [...incomingGeneratedImages]
+                : mergePlannerGeneratedImages(item.generatedImages || [], incomingGeneratedImages);
+            const selectedImage = nextImages.includes(item.selectedImage) ? item.selectedImage : null;
             return {
                 ...item,
                 status: incomingStatus || item.status,
                 stage: statusItem.stage || item.stage || '',
                 stageLabel: statusItem.stageLabel || item.stageLabel || '',
-                images: Array.from(new Set([...(item.images || []), ...incomingImages])),
-                generatedImages: mergePlannerGeneratedImages(item.generatedImages || [], incomingGeneratedImages),
-                completedCount: Math.max(
-                    Number(item.completedCount || 0),
-                    Number(statusItem.completedCount || 0),
-                    incomingImages.length
-                ),
-                failedCount: Math.max(Number(item.failedCount || 0), Number(statusItem.failedCount || 0)),
+                generationSequence: incomingGenerationSequence || currentGenerationSequence,
+                images: nextImages,
+                generatedImages: nextGeneratedImages,
+                selectedImage,
+                selectedAssetId: selectedImage ? item.selectedAssetId : '',
+                completedCount: replacePreviousGeneration
+                    ? Math.max(Number(statusItem.completedCount || 0), incomingImages.length)
+                    : Math.max(
+                        Number(item.completedCount || 0),
+                        Number(statusItem.completedCount || 0),
+                        incomingImages.length
+                    ),
+                failedCount: replacePreviousGeneration
+                    ? Number(statusItem.failedCount || 0)
+                    : Math.max(Number(item.failedCount || 0), Number(statusItem.failedCount || 0)),
                 errorMessage: statusItem.errorMessage || item.errorMessage || ''
             };
         });
@@ -4207,6 +4234,7 @@ async function runPlannerCompactBrowserGeneration(project, meta, situationId = n
                 runKey: next.runKey,
                 jobId: next.jobId,
                 assetId: next.slot.assetId,
+                generationSequence: next.slot.generationSequence,
                 situationId: next.slot.itemId
             }
         });
@@ -4221,6 +4249,7 @@ async function runPlannerCompactBrowserGeneration(project, meta, situationId = n
                 runKey: next.runKey,
                 jobId: next.jobId,
                 assetId: next.slot.assetId,
+                generationSequence: next.slot.generationSequence,
                 r2Key: next.slot.r2Key,
                 width: width || 0,
                 height: height || 0,
@@ -4422,7 +4451,8 @@ async function confirmPlannerCompactItem(character, item, asset, metadata, runKe
             runKey,
             itemId: item.id,
             assetId: asset.id,
-            idempotencyKey: `confirm:${item.id}:${asset.id}`,
+            generationSequence: asset.generationSequence || 0,
+            idempotencyKey: `confirm:${item.id}:${asset.generationSequence || 0}:${asset.id}`,
             targetFolderPrefix: character.prefix,
             targetFileName: `${item.imageNumber}.webp`,
             metadata
@@ -4607,6 +4637,10 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
         const succeeded = results.filter(result => result.success);
         const failed = results.filter(result => !result.success);
         if (succeeded.length) {
+            const cleanupFailedCount = succeeded.reduce(
+                (total, result) => total + Number(result.data?.cleanup?.failedCount || 0),
+                0
+            );
             const selectedIds = new Set(succeeded.map(result => result.item.situationId));
             if (Array.isArray(window.GENERATION_QUEUE) && window.GENERATION_QUEUE.length) {
                 window.GENERATION_QUEUE = window.GENERATION_QUEUE.filter(task => !selectedIds.has(task?.planner?.situationId));
@@ -4618,6 +4652,9 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
                 : (latestMeta?.items?.length
                     ? `${succeeded.length}개 플랜을 확정했습니다. 선택하지 않은 플랜은 남아 있습니다.`
                     : '선택한 플랜이 모두 확정되었습니다.');
+            if (cleanupFailedCount > 0) {
+                finalMessage += ` 임시 후보 ${cleanupFailedCount}개는 R2 정리가 필요합니다.`;
+            }
         } else {
             finalMessage = failed[0]?.error?.message || '플랜 확정에 실패했습니다.';
         }

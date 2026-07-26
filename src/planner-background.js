@@ -537,9 +537,16 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
         makePlannerCompactSeed(prepared.generation, slot.globalImageIndex)
     );
     let object = await env.imgBucket.head(slot.r2Key);
+    const objectGenerationSequence = Number.parseInt(object?.customMetadata?.generationSequence, 10);
+    const reusableObject = Boolean(
+        object
+        && object.customMetadata?.assetId === slot.assetId
+        && Number.isFinite(objectGenerationSequence)
+        && objectGenerationSequence === slot.generationSequence
+    );
 
     try {
-        if (!object) {
+        if (!reusableObject) {
             const cooldownDelay = await getPlannerCompactCooldownDelay(env);
             if (cooldownDelay > 0) return { disposition: "retry", delaySeconds: cooldownDelay };
 
@@ -552,6 +559,7 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                     ispublic: "false",
                     plannerCompact: "true",
                     assetId: slot.assetId,
+                    generationSequence: String(slot.generationSequence),
                     width: String(request.width || 0),
                     height: String(request.height || 0)
                 }
@@ -560,6 +568,8 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                 size: webpBuffer.byteLength,
                 httpMetadata: { contentType: "image/webp" },
                 customMetadata: {
+                    assetId: slot.assetId,
+                    generationSequence: String(slot.generationSequence),
                     width: String(request.width || 0),
                     height: String(request.height || 0)
                 }
@@ -569,7 +579,8 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
         const committed = await commitPlannerCompactQueueSlot(env, {
             runKey: prepared.runKey,
             jobId: prepared.jobId,
-            assetId: slot.assetId
+            assetId: slot.assetId,
+            generationSequence: slot.generationSequence
         }, {
             r2Key: slot.r2Key,
             width: Number(object.customMetadata?.width || request.width || 0),
@@ -621,7 +632,8 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
         const committed = await commitPlannerCompactQueueSlot(env, {
             runKey: prepared.runKey,
             jobId: prepared.jobId,
-            assetId: slot.assetId
+            assetId: slot.assetId,
+            generationSequence: slot.generationSequence
         }, { errorMessage: message.slice(0, 1000) });
         if (committed.nextMessage && env.GENERATION_QUEUE) {
             await env.GENERATION_QUEUE.send(committed.nextMessage);

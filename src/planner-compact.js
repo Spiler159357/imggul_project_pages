@@ -105,13 +105,15 @@ export function makePlannerCompactIds(input = {}) {
         ? safePlannerRef(input.targetSituationId, "all")
         : "all";
     const mode = safePlannerRef(input.mode, "background");
+    const generationSequence = asNonNegativeInteger(input.generationSequence, 0);
+    const generationSuffix = generationSequence > 0 ? `:${generationSequence}` : "";
     return {
         ...refs,
         runId,
         itemId,
         variantId,
-        jobId: `pjob:${runRef}:${targetRef}:${mode}`,
-        operationId: `pcfm:${itemRef}`
+        jobId: `pjob:${runRef}:${targetRef}:${mode}${generationSuffix}`,
+        operationId: `pcfm:${itemRef}${generationSuffix}`
     };
 }
 
@@ -129,7 +131,9 @@ export function makePlannerCompactAssetId(input = {}) {
     const itemRef = safePlannerRef(input.itemId || ids.itemId, "item");
     const variantRef = safePlannerRef(input.variantId || ids.variantId, "variant");
     const imageIndex = asNonNegativeInteger(input.variantImageIndex ?? input.imageIndex, 0);
-    return `passet:${itemRef}:${variantRef}:${imageIndex}`;
+    const generationSequence = asNonNegativeInteger(input.generationSequence, 0);
+    const generationSuffix = generationSequence > 0 ? `:${generationSequence}` : "";
+    return `passet:${itemRef}:${variantRef}:${imageIndex}${generationSuffix}`;
 }
 
 function serializePayload(payload, recordKey = "") {
@@ -419,6 +423,7 @@ function normalizeRunItems(meta, ids, existingPayload = null) {
                 variantId: asString(candidate.variantId),
                 variantImageIndex: asNonNegativeInteger(candidate.variantImageIndex ?? candidate.imageIndex, 0),
                 globalImageIndex: asNonNegativeInteger(candidate.globalImageIndex, 0),
+                generationSequence: asNonNegativeInteger(candidate.generationSequence, 0),
                 width: asNonNegativeInteger(candidate.width, 0),
                 height: asNonNegativeInteger(candidate.height, 0),
                 byteSize: asNonNegativeInteger(candidate.byteSize, 0),
@@ -520,6 +525,7 @@ function compactStatusFromRun(payload) {
         totalCount: asNonNegativeInteger(job?.totalCount, 0),
         completedCount: asNonNegativeInteger(job?.completedCount, 0),
         failedCount: asNonNegativeInteger(job?.failedCount, 0),
+        generationSequence: asNonNegativeInteger(job?.generationSequence, 0),
         stage: asString(job?.stage, job?.status || payload.status || "draft"),
         stageLabel: asString(job?.stageLabel, job?.status || payload.status || "Draft"),
         errorMessage: asString(job?.lastError),
@@ -541,11 +547,21 @@ export function plannerCompactRunToClient(record) {
             id: candidate.assetId,
             key: candidate.r2Key
         }));
+        const activeJobTargetsItem = Boolean(
+            payload.activeJob
+            && (!payload.activeJob.targetSituationId
+                || payload.activeJob.targetSituationId === item.situationId
+                || payload.activeJob.targetSituationId === item.itemId)
+        );
         return {
             ...item,
             status: item.status === "complete" ? "completed" : item.status,
             id: item.itemId,
             count: item.targetCount,
+            generationSequence: asNonNegativeInteger(
+                generatedImages[0]?.generationSequence,
+                activeJobTargetsItem ? payload.activeJob?.generationSequence : 0
+            ),
             images: generatedImages.map(candidate => candidate.r2Key),
             generatedImages,
             variantGenerations: asArray(item.variants).map(variant => ({
@@ -783,9 +799,10 @@ export async function deletePlannerCompactRun(env, lookup = {}) {
     throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Planner revision conflict.");
 }
 
-function enumerateRunSlots(payload, targetSituationId = "") {
+function enumerateRunSlots(payload, targetSituationId = "", generationSequence = 0) {
     const slots = [];
     let globalImageIndex = 0;
+    const normalizedGenerationSequence = asNonNegativeInteger(generationSequence, 0);
     for (let itemIndex = 0; itemIndex < payload.items.length; itemIndex += 1) {
         const item = payload.items[itemIndex];
         for (let variantIndex = 0; variantIndex < item.variants.length; variantIndex += 1) {
@@ -795,7 +812,8 @@ function enumerateRunSlots(payload, targetSituationId = "") {
                     const assetId = makePlannerCompactAssetId({
                         itemId: item.itemId,
                         variantId: variant.variantId,
-                        variantImageIndex
+                        variantImageIndex,
+                        generationSequence: normalizedGenerationSequence
                     });
                     slots.push({
                         itemIndex,
@@ -804,6 +822,7 @@ function enumerateRunSlots(payload, targetSituationId = "") {
                         globalImageIndex,
                         itemId: item.itemId,
                         variantId: variant.variantId,
+                        generationSequence: normalizedGenerationSequence,
                         assetId,
                         item,
                         variant
@@ -827,7 +846,7 @@ function nextRunnableSlot(payload, activeJob = payload.activeJob) {
         || activeJob.status === "cancel_requested") return null;
     const completed = getCompletedAssetIds(payload);
     const failed = new Set(asArray(activeJob.failedSlots).map(slot => slot.assetId));
-    return enumerateRunSlots(payload, activeJob.targetSituationId)
+    return enumerateRunSlots(payload, activeJob.targetSituationId, activeJob.generationSequence)
         .find(slot => !completed.has(slot.assetId) && !failed.has(slot.assetId)) || null;
 }
 
@@ -856,11 +875,13 @@ function makePlannerCompactR2Key(payload, slot) {
     const characterRef = safePlannerRef(payload.characterId || payload.characterPrefix, "character");
     const situationRef = safePlannerRef(slot.item.situationId || slot.item.imageNumber || slot.item.situationName, "situation");
     const variantRef = safePlannerRef(slot.variant.variantId, "variant");
-    return `${plannerTempPrefix(payload)}/${characterRef}/${situationRef}/${variantRef}/${slot.variantImageIndex}.webp`;
+    const generationSequence = asNonNegativeInteger(slot.generationSequence, 0);
+    const generationPath = generationSequence > 0 ? `/${generationSequence}` : "";
+    return `${plannerTempPrefix(payload)}/${characterRef}/${situationRef}${generationPath}/${variantRef}/${slot.variantImageIndex}.webp`;
 }
 
 function recalculateJob(payload, job) {
-    const slots = enumerateRunSlots(payload, job.targetSituationId);
+    const slots = enumerateRunSlots(payload, job.targetSituationId, job.generationSequence);
     const targetAssetIds = new Set(slots.map(slot => slot.assetId));
     const completedCount = payload.items.flatMap(item => item.candidates)
         .filter(candidate => targetAssetIds.has(candidate.assetId)).length;
@@ -884,7 +905,7 @@ function recalculateJob(payload, job) {
 function applyJobStatusToItems(payload) {
     const job = payload.activeJob;
     if (!job) return;
-    const targetIds = new Set(enumerateRunSlots(payload, job.targetSituationId).map(slot => slot.itemId));
+    const targetIds = new Set(enumerateRunSlots(payload, job.targetSituationId, job.generationSequence).map(slot => slot.itemId));
     for (const item of payload.items) {
         if (!targetIds.has(item.itemId)) continue;
         item.completedCount = item.candidates.length;
@@ -923,6 +944,7 @@ export async function startPlannerCompactGeneration(env, body = {}) {
                 plannerCompact: true,
                 runKey: record.recordKey,
                 jobId: record.payload.activeJob.jobId,
+                generationSequence: record.payload.activeJob.generationSequence,
                 expectedGlobalImageIndex: record.payload.activeJob.next?.globalImageIndex || 0
             });
         }
@@ -931,9 +953,21 @@ export async function startPlannerCompactGeneration(env, body = {}) {
 
     const mode = body.mode === "browser" ? "browser" : "background";
     const targetSituationId = asString(body.targetSituationId);
-    const updated = await mutateRunWithRetry(env, { runKey: record.recordKey }, payload => {
+    const updated = await mutateRunWithRetry(env, { runKey: record.recordKey }, (payload, current) => {
         if (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status)) return { noWrite: true };
-        if (body.clearExisting === true) {
+        const targetItems = payload.items.filter(item =>
+            !targetSituationId || item.situationId === targetSituationId || item.itemId === targetSituationId
+        );
+        const candidateSequences = new Set(targetItems
+            .flatMap(item => asArray(item.candidates))
+            .map(candidate => asNonNegativeInteger(candidate.generationSequence, 0))
+            .filter(sequence => sequence > 0));
+        const reusableGenerationSequence = body.clearExisting !== true && candidateSequences.size === 1
+            ? [...candidateSequences][0]
+            : 0;
+        const generationSequence = reusableGenerationSequence || (current.revision + 1);
+        const startsNewGeneration = reusableGenerationSequence === 0;
+        if (body.clearExisting === true || startsNewGeneration) {
             for (const item of payload.items) {
                 if (!targetSituationId || item.situationId === targetSituationId || item.itemId === targetSituationId) {
                     item.candidates = [];
@@ -942,7 +976,7 @@ export async function startPlannerCompactGeneration(env, body = {}) {
                 }
             }
         }
-        const slots = enumerateRunSlots(payload, targetSituationId);
+        const slots = enumerateRunSlots(payload, targetSituationId, generationSequence);
         const completed = getCompletedAssetIds(payload);
         const runnable = slots.find(slot => !completed.has(slot.assetId));
         if (!runnable) throw plannerError("PLANNER_NO_RUNNABLE_ITEMS", 409, "No runnable planner items.");
@@ -950,10 +984,12 @@ export async function startPlannerCompactGeneration(env, body = {}) {
             ...payload,
             runId: payload.runId,
             targetSituationId,
-            mode
+            mode,
+            generationSequence
         });
         payload.activeJob = {
             jobId: ids.jobId,
+            generationSequence,
             mode,
             status: "queued",
             targetSituationId,
@@ -979,6 +1015,7 @@ export async function startPlannerCompactGeneration(env, body = {}) {
             plannerCompact: true,
             runKey: record.recordKey,
             jobId: record.payload.activeJob.jobId,
+            generationSequence: record.payload.activeJob.generationSequence,
             expectedGlobalImageIndex: record.payload.activeJob.next.globalImageIndex
         });
     }
@@ -1023,6 +1060,7 @@ async function controlPlannerCompactGeneration(env, lookup, action) {
             plannerCompact: true,
             runKey: record.recordKey,
             jobId: record.payload.activeJob.jobId,
+            generationSequence: record.payload.activeJob.generationSequence,
             expectedGlobalImageIndex: record.payload.activeJob.next?.globalImageIndex || 0
         });
     }
@@ -1031,6 +1069,7 @@ async function controlPlannerCompactGeneration(env, lookup, action) {
             plannerCompact: true,
             runKey: record.recordKey,
             jobId: record.payload.activeJob.jobId,
+            generationSequence: record.payload.activeJob.generationSequence,
             expectedGlobalImageIndex: record.payload.activeJob.next?.globalImageIndex || 0
         });
     }
@@ -1055,6 +1094,10 @@ export async function preparePlannerCompactQueueSlot(env, message = {}) {
     const payload = record.payload;
     const job = payload.activeJob;
     if (job.jobId !== message.jobId) return { disposition: "ack", reason: "stale_job" };
+    const messageGenerationSequence = asNonNegativeInteger(message.generationSequence, job.generationSequence);
+    if (messageGenerationSequence !== asNonNegativeInteger(job.generationSequence, 0)) {
+        return { disposition: "ack", reason: "stale_generation" };
+    }
     if (job.status === "paused") return { disposition: "ack", reason: "paused" };
     if (job.status === "cancel_requested") {
         const updated = await mutateRunWithRetry(env, { runKey: record.recordKey }, latest => {
@@ -1084,6 +1127,7 @@ export async function preparePlannerCompactQueueSlot(env, message = {}) {
             variantIndex: slot.variantIndex,
             variantImageIndex: slot.variantImageIndex,
             globalImageIndex: slot.globalImageIndex,
+            generationSequence: slot.generationSequence,
             itemId: slot.itemId,
             variantId: slot.variantId,
             assetId: slot.assetId,
@@ -1097,6 +1141,10 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
     const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
         const job = payload.activeJob;
         if (!job || job.jobId !== message.jobId) return { noWrite: true, stale: true };
+        if (asNonNegativeInteger(message.generationSequence, job.generationSequence)
+            !== asNonNegativeInteger(job.generationSequence, 0)) {
+            return { noWrite: true, stale: true };
+        }
         if (job.status === "paused") return { noWrite: true, stale: true };
         if (job.status === "cancel_requested") {
             job.status = "cancelled";
@@ -1121,6 +1169,7 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
                     variantId: slot.variantId,
                     variantImageIndex: slot.variantImageIndex,
                     globalImageIndex: slot.globalImageIndex,
+                    generationSequence: slot.generationSequence,
                     errorMessage: asString(outcome.errorMessage).slice(0, 1000)
                 }
             ];
@@ -1133,6 +1182,7 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
                 variantId: slot.variantId,
                 variantImageIndex: slot.variantImageIndex,
                 globalImageIndex: slot.globalImageIndex,
+                generationSequence: slot.generationSequence,
                 width: asNonNegativeInteger(outcome.width, 0),
                 height: asNonNegativeInteger(outcome.height, 0),
                 byteSize: asNonNegativeInteger(outcome.byteSize, 0),
@@ -1166,6 +1216,7 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
             plannerCompact: true,
             runKey: record.recordKey,
             jobId: record.payload.activeJob.jobId,
+            generationSequence: record.payload.activeJob.generationSequence,
             expectedGlobalImageIndex: next.globalImageIndex
         } : null,
         status: { ...compactStatusFromRun(record.payload), runKey: record.recordKey, revision: record.revision }
@@ -1194,6 +1245,7 @@ export async function getPlannerCompactBrowserQueue(env, lookup = {}) {
             variantId: slot.variantId,
             variantImageIndex: slot.variantImageIndex,
             globalImageIndex: slot.globalImageIndex,
+            generationSequence: slot.generationSequence,
             assetId: slot.assetId,
             r2Key: makePlannerCompactR2Key(record.payload, slot)
         },
@@ -1215,7 +1267,10 @@ export async function completePlannerCompactBrowserQueue(env, body = {}) {
     }
     const next = await getPlannerCompactBrowserQueue(env, { runKey: body.runKey });
     if (next.done) return next;
-    if (next.jobId !== body.jobId || next.slot.assetId !== body.assetId || next.slot.r2Key !== body.r2Key) {
+    if (next.jobId !== body.jobId
+        || next.slot.assetId !== body.assetId
+        || next.slot.r2Key !== body.r2Key
+        || asNonNegativeInteger(body.generationSequence, next.slot.generationSequence) !== next.slot.generationSequence) {
         throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Browser generation slot is stale.");
     }
     const object = await env.imgBucket.head(next.slot.r2Key);
@@ -1223,7 +1278,8 @@ export async function completePlannerCompactBrowserQueue(env, body = {}) {
     return await commitPlannerCompactQueueSlot(env, {
         runKey: body.runKey,
         jobId: body.jobId,
-        assetId: next.slot.assetId
+        assetId: next.slot.assetId,
+        generationSequence: next.slot.generationSequence
     }, {
         r2Key: next.slot.r2Key,
         width: body.width,
@@ -1267,18 +1323,14 @@ async function removeConfirmedItemFromRun(env, runKey, itemId, assetId) {
         if (!item.candidates.some(candidate => candidate.assetId === assetId)) {
             throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner item candidates changed during confirm.");
         }
-        if (current.payload.items.length === 1) {
-            if (await deletePlannerCompactRecord(env, current.recordKey, current.revision)) return null;
-        } else {
-            const payload = cloneJson(current.payload);
-            payload.items = payload.items.filter(entry => entry.itemId !== itemId);
-            payload.status = "draft";
-            payload.activeJob = null;
-            if (await updatePlannerCompactRecord(env, current, payload, {
-                status: "draft",
-                label: "run:confirm:remove-item"
-            })) return await getPlannerCompactRunRecord(env, { runKey });
-        }
+        const payload = cloneJson(current.payload);
+        payload.items = payload.items.filter(entry => entry.itemId !== itemId);
+        payload.status = payload.items.length ? "draft" : "confirmed";
+        payload.activeJob = null;
+        if (await updatePlannerCompactRecord(env, current, payload, {
+            status: payload.status,
+            label: payload.items.length ? "run:confirm:remove-item" : "run:confirm:tombstone"
+        })) return await getPlannerCompactRunRecord(env, { runKey });
     }
     throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Planner revision conflict.");
 }
@@ -1292,6 +1344,7 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
     }
     const confirmKey = makePlannerCompactKey("confirm", { itemId });
     let confirm = await getPlannerCompactRecord(env, confirmKey, "confirm");
+    const requestedGenerationSequence = asNonNegativeInteger(body.generationSequence, 0);
     const requestedTargetFolderPrefix = asString(body.targetFolderPrefix);
     const requestedTargetFileName = asString(body.targetFileName);
     const requestedTargetR2Key = asString(
@@ -1301,13 +1354,20 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
             : ""
     );
     if (confirm?.payload.status === "completed") {
-        if (confirm.payload.selectedAssetId !== assetId
-            || (requestedTargetR2Key && confirm.payload.targetR2Key !== requestedTargetR2Key)) {
-            throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner item was already confirmed with another asset.");
+        const confirmGenerationSequence = asNonNegativeInteger(confirm.payload.generationSequence, 0);
+        const sameCompletedOperation = confirm.payload.selectedAssetId === assetId
+            && (!requestedTargetR2Key || confirm.payload.targetR2Key === requestedTargetR2Key)
+            && (!requestedGenerationSequence || confirmGenerationSequence === requestedGenerationSequence);
+        if (sameCompletedOperation) {
+            const remainingRun = await getPlannerCompactRunRecord(env, { runKey });
+            if (remainingRun?.payload.items.some(entry => entry.itemId === itemId)) {
+                await removeConfirmedItemFromRun(env, runKey, itemId, assetId);
+            }
+            const cleanup = await cleanupPlannerCompactAssets(env, {
+                keys: asArray(confirm.payload.candidateKeys)
+            });
+            return { ...cloneJson(confirm.payload), cleanup };
         }
-        const remainingRun = await getPlannerCompactRunRecord(env, { runKey });
-        if (remainingRun) await removeConfirmedItemFromRun(env, runKey, itemId, assetId);
-        return cloneJson(confirm.payload);
     }
     const run = await getPlannerCompactRunRecord(env, { runKey });
     if (!run) throw plannerError("PLANNER_RUN_NOT_FOUND", 404, "Planner run not found.");
@@ -1315,31 +1375,51 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
     if (!item) throw plannerError("PLANNER_ITEM_NOT_FOUND", 404, "Planner item not found.");
     const candidate = item.candidates.find(entry => entry.assetId === assetId);
     if (!candidate) throw plannerError("PLANNER_ASSET_NOT_FOUND", 404, "Planner asset not found.");
+    const generationSequence = asNonNegativeInteger(candidate.generationSequence, 0);
+    if (requestedGenerationSequence && requestedGenerationSequence !== generationSequence) {
+        throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner candidate generation changed during confirm.");
+    }
     const targetFolderPrefix = asString(body.targetFolderPrefix);
     const targetFileName = asString(body.targetFileName, `${item.imageNumber}.webp`);
     const targetR2Key = asString(body.targetR2Key, `${targetFolderPrefix}${targetFileName}`);
     if (!targetR2Key) throw plannerError("PLANNER_INVALID_INPUT", 400, "targetR2Key is required.");
-    if (confirm && (confirm.payload.selectedAssetId !== assetId || confirm.payload.targetR2Key !== targetR2Key)) {
-        throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Another confirm operation already exists for this item.");
+    const confirmGenerationSequence = asNonNegativeInteger(confirm?.payload.generationSequence, 0);
+    const sameConfirmOperation = Boolean(
+        confirm
+        && confirmGenerationSequence === generationSequence
+        && confirm.payload.selectedAssetId === assetId
+        && confirm.payload.targetR2Key === targetR2Key
+    );
+    if (confirm?.payload.status === "pending" && !sameConfirmOperation) {
+        throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Another confirm operation is still pending for this item.");
+    }
+    if (confirm
+        && !sameConfirmOperation
+        && (generationSequence < confirmGenerationSequence
+            || (generationSequence === confirmGenerationSequence && confirm.payload.status === "completed"))) {
+        throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner item was already confirmed with the same or a newer generation.");
     }
     const timestamp = nowIso();
+    const candidateKeys = [...new Set(item.candidates.map(entry => asString(entry.r2Key)).filter(Boolean))];
     const confirmPayload = {
         version: 1,
-        operationId: makePlannerCompactIds({ itemId }).operationId,
+        operationId: makePlannerCompactIds({ itemId, generationSequence }).operationId,
         runKey,
         itemId,
+        generationSequence,
         selectedAssetId: assetId,
         selectedR2Key: candidate.r2Key,
+        candidateKeys,
         targetR2Key,
         targetFolderPrefix,
         targetFileName,
         status: "pending",
         errorMessage: "",
-        createdAt: confirm?.payload.createdAt || timestamp,
+        createdAt: sameConfirmOperation ? (confirm?.payload.createdAt || timestamp) : timestamp,
         completedAt: "",
         expiresAt: futureIso(CONFIRM_RETENTION_MS)
     };
-    if (!confirm || confirm.payload.status === "failed") {
+    if (!confirm || !sameConfirmOperation || confirm.payload.status === "failed") {
         confirm = await putPlannerCompactRecord(env, {
             recordKey: confirmKey,
             recordType: "confirm",
@@ -1388,17 +1468,16 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
             throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Planner confirm revision conflict.");
         }
         await removeConfirmedItemFromRun(env, runKey, itemId, assetId);
-        const unselectedKeys = item.candidates
-            .filter(entry => entry.assetId !== assetId)
-            .map(entry => entry.r2Key);
-        for (const key of unselectedKeys) {
-            try {
-                await env.imgBucket.delete(key);
-            } catch (error) {
-                console.warn("[planner-compact-cleanup]", { key, error: error?.message || String(error) });
-            }
+        const cleanup = await cleanupPlannerCompactAssets(env, { keys: candidateKeys });
+        if (cleanup.failedCount > 0) {
+            console.warn(JSON.stringify({
+                message: "Planner candidate cleanup was incomplete.",
+                itemId,
+                generationSequence,
+                failedKeys: cleanup.failedKeys
+            }));
         }
-        return completedPayload;
+        return { ...completedPayload, cleanup };
     } catch (error) {
         const latestConfirm = await getPlannerCompactRecord(env, confirmKey, "confirm").catch(() => null);
         if (latestConfirm && latestConfirm.payload.status !== "completed") {

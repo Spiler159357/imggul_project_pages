@@ -2949,11 +2949,27 @@ export async function onRequest(context) {
             const uploadContentType = request.headers.get('Content-Type') || 'application/octet-stream';
             const isImageUpload = /^image\/(?:webp|png|jpeg)$/i.test(uploadContentType)
                 && isImageObjectKey(finalKey);
+            const plannerAssetId = decodeURIComponent(request.headers.get('X-Planner-Asset-Id') || '').trim();
+            const plannerGenerationSequence = Number.parseInt(
+                request.headers.get('X-Planner-Generation-Sequence') || '',
+                10
+            );
+            const isPlannerCompactUpload = Boolean(
+                plannerAssetId
+                && Number.isFinite(plannerGenerationSequence)
+                && plannerGenerationSequence > 0
+                && finalKey.includes('/_planner_temp_image/')
+            );
             await env.imgBucket.put(finalKey, request.body, {
               httpMetadata: { contentType: uploadContentType },
               customMetadata: {
-                  ispublic: isImageUpload ? 'true' : 'false',
-                  visibilityconfigured: 'true'
+                  ispublic: isPlannerCompactUpload ? 'false' : (isImageUpload ? 'true' : 'false'),
+                  visibilityconfigured: 'true',
+                  ...(isPlannerCompactUpload ? {
+                      plannerCompact: 'true',
+                      assetId: plannerAssetId,
+                      generationSequence: String(plannerGenerationSequence)
+                  } : {})
               }
             });
             return new Response(JSON.stringify({ success: true, url: `/${finalKey}` }), { headers: { 'Content-Type': 'application/json' } });
