@@ -1335,6 +1335,293 @@ async function removeConfirmedItemFromRun(env, runKey, itemId, assetId) {
     throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Planner revision conflict.");
 }
 
+function makePlannerCompactConfirmBackupKey(candidateR2Key) {
+    return `${candidateR2Key}.confirm-backup`;
+}
+
+function plannerCompactObjectMatches(left, right) {
+    return Boolean(
+        left
+        && right
+        && left.key === right.key
+        && left.etag === right.etag
+        && Number(left.size) === Number(right.size)
+    );
+}
+
+async function preparePlannerCompactTargetWrite(env, {
+    candidate,
+    generationSequence,
+    operationId,
+    targetR2Key
+}) {
+    const backupR2Key = makePlannerCompactConfirmBackupKey(candidate.r2Key);
+    let backup = await env.imgBucket.head(backupR2Key);
+    let previousTarget = null;
+
+    if (backup) {
+        if (backup.customMetadata?.plannerConfirmBackupOperationId !== operationId) {
+            throw plannerError(
+                "PLANNER_CONFIRM_BACKUP_CONFLICT",
+                409,
+                "Planner confirm backup belongs to another operation."
+            );
+        }
+        previousTarget = await env.imgBucket.head(targetR2Key);
+        if (previousTarget?.customMetadata?.plannerConfirmOperationId !== operationId) {
+            throw plannerError(
+                "PLANNER_CONFIRM_TARGET_CONFLICT",
+                409,
+                "Planner confirm target changed while recovering an interrupted operation."
+            );
+        }
+    } else {
+        const originalTarget = await env.imgBucket.get(targetR2Key);
+        const originalMissing = !originalTarget;
+        const backupResult = await env.imgBucket.put(
+            backupR2Key,
+            originalTarget ? originalTarget.body : null,
+            {
+                httpMetadata: originalTarget?.httpMetadata,
+                customMetadata: {
+                    ...(originalTarget?.customMetadata || {}),
+                    plannerConfirmBackupOperationId: operationId,
+                    plannerConfirmOriginalMissing: originalMissing ? "true" : "false"
+                }
+            }
+        );
+        backup = await env.imgBucket.head(backupR2Key);
+        if (!backupResult || !plannerCompactObjectMatches(backupResult, backup)
+            || backup?.customMetadata?.plannerConfirmBackupOperationId !== operationId) {
+            throw plannerError(
+                "PLANNER_CONFIRM_BACKUP_FAILED",
+                502,
+                "Planner target backup could not be verified."
+            );
+        }
+        previousTarget = originalTarget;
+    }
+
+    const object = await env.imgBucket.get(candidate.r2Key);
+    if (!object) {
+        throw plannerError("PLANNER_ASSET_NOT_FOUND", 404, "Planner candidate object not found.");
+    }
+    const onlyIf = previousTarget
+        ? { etagMatches: previousTarget.etag }
+        : { etagDoesNotMatch: "*" };
+    const stored = await env.imgBucket.put(targetR2Key, object.body, {
+        onlyIf,
+        httpMetadata: {
+            contentType: candidate.mimeType || object.httpMetadata?.contentType || "image/webp"
+        },
+        customMetadata: {
+            ispublic: "false",
+            visibilityconfigured: "true",
+            plannerConfirmOperationId: operationId,
+            plannerAssetId: candidate.assetId,
+            plannerGenerationSequence: String(generationSequence)
+        }
+    });
+    if (!stored) {
+        throw plannerError(
+            "PLANNER_CONFIRM_TARGET_CONFLICT",
+            409,
+            "Planner target changed before the replacement could be stored."
+        );
+    }
+
+    const verified = await env.imgBucket.head(targetR2Key);
+    if (!plannerCompactObjectMatches(stored, verified)
+        || verified?.customMetadata?.plannerConfirmOperationId !== operationId
+        || verified?.customMetadata?.plannerAssetId !== candidate.assetId
+        || verified?.customMetadata?.plannerGenerationSequence !== String(generationSequence)) {
+        throw plannerError(
+            "PLANNER_CONFIRM_TARGET_VERIFY_FAILED",
+            502,
+            "Planner target replacement could not be verified."
+        );
+    }
+
+    return {
+        backupR2Key,
+        storedEtag: stored.etag
+    };
+}
+
+async function rollbackPlannerCompactTargetWrite(env, {
+    backupR2Key,
+    operationId,
+    storedEtag,
+    targetR2Key
+}) {
+    const current = await env.imgBucket.head(targetR2Key);
+    if (!current || current.customMetadata?.plannerConfirmOperationId !== operationId) {
+        await env.imgBucket.delete(backupR2Key);
+        return { restored: false, targetWasUnchanged: true };
+    }
+    if (storedEtag && current.etag !== storedEtag) {
+        throw plannerError(
+            "PLANNER_CONFIRM_ROLLBACK_CONFLICT",
+            409,
+            "Planner target changed before the failed confirmation could be rolled back."
+        );
+    }
+
+    const backup = await env.imgBucket.get(backupR2Key);
+    if (!backup || backup.customMetadata?.plannerConfirmBackupOperationId !== operationId) {
+        throw plannerError(
+            "PLANNER_CONFIRM_ROLLBACK_FAILED",
+            500,
+            "Planner target backup is missing."
+        );
+    }
+    if (backup.customMetadata?.plannerConfirmOriginalMissing === "true") {
+        await env.imgBucket.delete(targetR2Key);
+        if (await env.imgBucket.head(targetR2Key)) {
+            throw plannerError(
+                "PLANNER_CONFIRM_ROLLBACK_FAILED",
+                500,
+                "New planner target could not be removed during rollback."
+            );
+        }
+    } else {
+        const restoredMetadata = { ...(backup.customMetadata || {}) };
+        delete restoredMetadata.plannerConfirmBackupOperationId;
+        delete restoredMetadata.plannerConfirmOriginalMissing;
+        const restored = await env.imgBucket.put(targetR2Key, backup.body, {
+            onlyIf: { etagMatches: current.etag },
+            httpMetadata: backup.httpMetadata,
+            customMetadata: restoredMetadata
+        });
+        const verified = await env.imgBucket.head(targetR2Key);
+        if (!restored || !plannerCompactObjectMatches(restored, verified)) {
+            throw plannerError(
+                "PLANNER_CONFIRM_ROLLBACK_FAILED",
+                500,
+                "Previous planner target could not be restored."
+            );
+        }
+    }
+    await env.imgBucket.delete(backupR2Key);
+    return { restored: true, targetWasUnchanged: false };
+}
+
+async function commitPlannerCompactConfirmation(env, {
+    assetId,
+    completedPayload,
+    confirmKey,
+    itemId,
+    metadata,
+    runKey,
+    targetFileName,
+    targetFolderPrefix,
+    timestamp
+}) {
+    const [currentConfirm, currentRun] = await Promise.all([
+        getPlannerCompactRecord(env, confirmKey, "confirm"),
+        getPlannerCompactRunRecord(env, { runKey })
+    ]);
+    if (!currentConfirm || currentConfirm.payload.status !== "pending") {
+        throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner confirmation is no longer pending.");
+    }
+    const currentItem = currentRun?.payload.items.find(entry => entry.itemId === itemId);
+    if (!currentItem?.candidates.some(candidate => candidate.assetId === assetId)) {
+        throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner item candidates changed during confirm.");
+    }
+
+    const nextRunPayload = cloneJson(currentRun.payload);
+    nextRunPayload.items = nextRunPayload.items.filter(entry => entry.itemId !== itemId);
+    nextRunPayload.status = nextRunPayload.items.length ? "draft" : "confirmed";
+    nextRunPayload.activeJob = null;
+    nextRunPayload.updatedAt = timestamp;
+
+    const nextConfirmPayload = {
+        ...completedPayload,
+        updatedAt: timestamp
+    };
+    const nextRunPayloadJson = serializePayload(nextRunPayload, currentRun.recordKey);
+    const nextConfirmPayloadJson = serializePayload(nextConfirmPayload, currentConfirm.recordKey);
+    const nextRunRevision = currentRun.revision + 1;
+
+    const results = await env.DB.batch([
+        env.DB.prepare(`
+            INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
+            SELECT ?, ?, ?, ?, ?
+            WHERE EXISTS (
+                SELECT 1 FROM planner_compact_records
+                WHERE record_key = ? AND record_type = 'confirm' AND revision = ?
+            ) AND EXISTS (
+                SELECT 1 FROM planner_compact_records
+                WHERE record_key = ? AND record_type = 'run' AND revision = ?
+            )
+            ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
+                metadata_json = excluded.metadata_json,
+                updated_at = excluded.updated_at
+        `).bind(
+            targetFolderPrefix,
+            targetFileName,
+            JSON.stringify(metadata || {}),
+            timestamp,
+            timestamp,
+            currentConfirm.recordKey,
+            currentConfirm.revision,
+            currentRun.recordKey,
+            currentRun.revision
+        ),
+        env.DB.prepare(`
+            UPDATE planner_compact_records
+            SET status = ?, payload_json = ?, revision = revision + 1,
+                updated_at = ?, expires_at = ?
+            WHERE record_key = ? AND record_type = 'run' AND revision = ?
+              AND EXISTS (
+                  SELECT 1 FROM planner_compact_records
+                  WHERE record_key = ? AND record_type = 'confirm' AND revision = ?
+              )
+        `).bind(
+            nextRunPayload.status,
+            nextRunPayloadJson,
+            timestamp,
+            currentRun.expiresAt,
+            currentRun.recordKey,
+            currentRun.revision,
+            currentConfirm.recordKey,
+            currentConfirm.revision
+        ),
+        env.DB.prepare(`
+            UPDATE planner_compact_records
+            SET status = 'completed', payload_json = ?, revision = revision + 1,
+                updated_at = ?, expires_at = ?
+            WHERE record_key = ? AND record_type = 'confirm' AND revision = ?
+              AND EXISTS (
+                  SELECT 1 FROM planner_compact_records
+                  WHERE record_key = ? AND record_type = 'run'
+                    AND revision = ? AND payload_json = ?
+              )
+        `).bind(
+            nextConfirmPayloadJson,
+            timestamp,
+            nextConfirmPayload.expiresAt,
+            currentConfirm.recordKey,
+            currentConfirm.revision,
+            currentRun.recordKey,
+            nextRunRevision,
+            nextRunPayloadJson
+        )
+    ]);
+    const changes = results.map(result => Number(result.meta?.changes || 0));
+    if (changes.some(changeCount => changeCount !== 1)) {
+        throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Planner confirm revision conflict.");
+    }
+    if (env?.PLANNER_D1_METRICS === "1") {
+        console.log("[planner-compact-d1]", "confirm:commit-batch", {
+            itemId,
+            rowsWritten: results.reduce((total, result) => total + Number(result.meta?.rows_written || 0), 0),
+            changes
+        });
+    }
+    return nextConfirmPayload;
+}
+
 export async function confirmPlannerCompactAsset(env, body = {}) {
     const runKey = asString(body.runKey);
     const itemId = asString(body.itemId);
@@ -1364,7 +1651,10 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
                 await removeConfirmedItemFromRun(env, runKey, itemId, assetId);
             }
             const cleanup = await cleanupPlannerCompactAssets(env, {
-                keys: asArray(confirm.payload.candidateKeys)
+                keys: [
+                    ...asArray(confirm.payload.candidateKeys),
+                    asString(confirm.payload.backupR2Key)
+                ].filter(Boolean)
             });
             return { ...cloneJson(confirm.payload), cleanup };
         }
@@ -1410,6 +1700,7 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
         selectedAssetId: assetId,
         selectedR2Key: candidate.r2Key,
         candidateKeys,
+        backupR2Key: makePlannerCompactConfirmBackupKey(candidate.r2Key),
         targetR2Key,
         targetFolderPrefix,
         targetFileName,
@@ -1431,44 +1722,35 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
             expiresAt: confirmPayload.expiresAt
         });
     }
+    let targetWrite = null;
     try {
-        const object = await env.imgBucket.get(candidate.r2Key);
-        if (!object) throw plannerError("PLANNER_ASSET_NOT_FOUND", 404, "Planner candidate object not found.");
-        await env.imgBucket.put(targetR2Key, object.body, {
-            httpMetadata: { contentType: candidate.mimeType || object.httpMetadata?.contentType || "image/webp" },
-            customMetadata: { ispublic: "false", plannerConfirmOperationId: confirmPayload.operationId }
+        targetWrite = await preparePlannerCompactTargetWrite(env, {
+            candidate,
+            generationSequence,
+            operationId: confirmPayload.operationId,
+            targetR2Key
         });
-        await runPlannerCompactWrite(env.DB.prepare(`
-            INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
-                metadata_json = excluded.metadata_json,
-                updated_at = excluded.updated_at
-        `).bind(
-            targetFolderPrefix,
-            targetFileName,
-            JSON.stringify(body.metadata || {}),
-            timestamp,
-            timestamp
-        ), "confirm:file-metadata", env);
-
-        const latestConfirm = await getPlannerCompactRecord(env, confirmKey, "confirm");
         const completedPayload = {
-            ...latestConfirm.payload,
+            ...confirmPayload,
             status: "completed",
             errorMessage: "",
             completedAt: nowIso(),
             expiresAt: futureIso(CONFIRM_RETENTION_MS)
         };
-        if (!await updatePlannerCompactRecord(env, latestConfirm, completedPayload, {
-            status: "completed",
-            expiresAt: completedPayload.expiresAt,
-            label: "confirm:completed"
-        })) {
-            throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Planner confirm revision conflict.");
-        }
-        await removeConfirmedItemFromRun(env, runKey, itemId, assetId);
-        const cleanup = await cleanupPlannerCompactAssets(env, { keys: candidateKeys });
+        const committedPayload = await commitPlannerCompactConfirmation(env, {
+            assetId,
+            completedPayload,
+            confirmKey,
+            itemId,
+            metadata: body.metadata,
+            runKey,
+            targetFileName,
+            targetFolderPrefix,
+            timestamp: nowIso()
+        });
+        const cleanup = await cleanupPlannerCompactAssets(env, {
+            keys: [...candidateKeys, targetWrite.backupR2Key]
+        });
         if (cleanup.failedCount > 0) {
             console.warn(JSON.stringify({
                 message: "Planner candidate cleanup was incomplete.",
@@ -1477,20 +1759,46 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
                 failedKeys: cleanup.failedKeys
             }));
         }
-        return { ...completedPayload, cleanup };
+        return { ...committedPayload, cleanup };
     } catch (error) {
+        let rollbackError = null;
+        const backupR2Key = targetWrite?.backupR2Key
+            || makePlannerCompactConfirmBackupKey(candidate.r2Key);
+        try {
+            await rollbackPlannerCompactTargetWrite(env, {
+                backupR2Key,
+                operationId: confirmPayload.operationId,
+                storedEtag: targetWrite?.storedEtag || "",
+                targetR2Key
+            });
+        } catch (caughtRollbackError) {
+            rollbackError = caughtRollbackError;
+            console.error(JSON.stringify({
+                message: "Planner target rollback failed.",
+                itemId,
+                generationSequence,
+                targetR2Key,
+                backupR2Key,
+                error: caughtRollbackError?.message || String(caughtRollbackError)
+            }));
+        }
         const latestConfirm = await getPlannerCompactRecord(env, confirmKey, "confirm").catch(() => null);
         if (latestConfirm && latestConfirm.payload.status !== "completed") {
             const failedPayload = {
                 ...latestConfirm.payload,
                 status: "failed",
-                errorMessage: (error?.message || String(error)).slice(0, 1000)
+                errorMessage: (
+                    rollbackError
+                        ? `${error?.message || String(error)} Rollback failed: ${rollbackError?.message || String(rollbackError)}`
+                        : (error?.message || String(error))
+                ).slice(0, 1000)
             };
             await updatePlannerCompactRecord(env, latestConfirm, failedPayload, {
                 status: "failed",
                 label: "confirm:failed"
             }).catch(() => false);
         }
+        if (rollbackError) throw rollbackError;
         throw error;
     }
 }

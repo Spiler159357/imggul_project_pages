@@ -805,11 +805,10 @@ export async function cleanupPlannerCompactAssets(env, options = {});
 2. confirm:{itemId} 조회                               D1 write 0
 3. completed + 동일 asset/target이면 기존 결과 반환     D1 write 0
 4. pending confirm upsert                              D1 write 1
-5. R2 후보 object 읽기 및 최종 key put                  D1 write 0
-6. file_metadata upsert                               D1 write 1
-7. confirm completed update                           D1 write 1
-8. run에서 item 제거 또는 마지막 item이면 빈 tombstone UPDATE D1 write 1
-9. 선택 후보를 포함한 모든 후보 R2 object 삭제          D1 write 0
+5. 기존 최종 R2 object를 임시 backup key에 보관·검증     D1 write 0
+6. 조건부 put 후 최종 key의 ETag/operation metadata 검증 D1 write 0
+7. metadata + confirm completed + run 정리를 D1 batch 처리 D1 write 3
+8. 선택 후보와 backup을 포함한 임시 R2 object 삭제       D1 write 0
 ```
 
 정상 base count는 4다.
@@ -829,10 +828,11 @@ confirm key는 item당 하나다. 동일 item에 대해 새 random operation row
 | 실패 위치 | 재호출 동작 |
 | --- | --- |
 | pending 저장 전 | 처음부터 시작 |
-| pending 저장 후, R2 put 전 | 같은 confirm row로 재개 |
-| R2 put 후, metadata 전 | 동일 target key overwrite 후 metadata 수행 |
-| metadata 후, confirm 완료 전 | metadata upsert 반복 후 완료 처리 |
-| confirm 완료 후, run 정리 전 | run 정리만 재개 |
+| pending 저장 후, R2 put 전 | 기존 target backup을 재사용해 같은 confirm operation 재개 |
+| 조건부 R2 put 실패 | target을 변경하지 않고 후보와 run을 유지 |
+| R2 put 후 검증 실패 | backup으로 기존 target을 복원하고 후보와 run을 유지 |
+| D1 batch 실패 | R2 target을 복원하고 metadata/confirm/run batch를 rollback |
+| D1 batch 완료 후 cleanup 실패 | 최종 확정은 유지하고 실패한 임시 key만 후속 정리 |
 
 단계별 상태를 여러 번 update하지 않기 위해 confirm payload에는 최소한 `pending`, `completed`, `failed`만 사용한다. `copying`, `metadata_saved`, `cleanup_queued` 중간 상태는 만들지 않는다.
 
@@ -847,6 +847,8 @@ confirm 시작 시 읽은 run revision이 변경되면 최신 run을 다시 읽�
 ### 15.7 cleanup
 
 - 정상 confirm에서는 선택 후보를 포함한 해당 item/generation의 모든 후보 R2 object를 직접 best-effort 삭제한다.
+- 기존 target의 confirm backup은 R2 교체와 D1 batch가 모두 성공한 뒤 후보와 함께 삭제한다.
+- 최종 target 교체가 검증되기 전이나 D1 batch가 실패한 경우에는 후보를 삭제하지 않는다.
 - cleanup 작업을 위해 D1 queue row를 만들지 않는다.
 - 삭제 실패는 R2/Worker log에 남긴다.
 - 정기 cleanup은 deterministic prefix를 기준으로 orphan object를 찾아 처리하되 D1 row를 만들지 않는다.

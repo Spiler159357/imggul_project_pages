@@ -156,14 +156,14 @@ confirm의 정상 순서는 다음으로 고정한다.
 ```text
 1. 선택 candidate와 현재 generation 검증
 2. confirm pending 기록
-3. 선택 후보 binary를 최종 R2 key에 put/overwrite
-4. 선택 후보의 metadata를 최종 file_metadata에 upsert
-5. confirm completed 기록
-6. run에서 item 제거 또는 빈 tombstone으로 전환
-7. 선택 후보를 포함한 해당 item의 모든 임시 후보 R2 object 삭제
+3. 기존 최종 R2 object를 generation별 임시 backup key에 보관하고 검증
+4. 기존 ETag를 조건으로 선택 후보 binary를 최종 R2 key에 put/overwrite
+5. 최종 key의 ETag, operationId, assetId, generationSequence를 `head()`로 재검증
+6. metadata upsert, confirm completed, run item 제거를 하나의 조건부 D1 batch로 처리
+7. 선택 후보와 backup을 포함한 해당 item의 모든 임시 R2 object 삭제
 ```
 
-1~4 중 하나라도 실패하면 binary 또는 metadata 이주가 완료되지 않은 상태이므로 모든 후보를 유지하고 같은 confirm operation으로 재시도한다. 5~6까지 완료되면 최종 binary와 metadata 및 D1 상태가 목적지에 확정됐으므로 후보를 재시도 원본으로 보관할 이유가 없다.
+3~5 중 하나라도 실패하면 최종 target을 기존 backup으로 복원하고 모든 후보와 run을 유지한다. 6의 D1 batch가 실패해도 batch 전체를 rollback하고 최종 target을 복원한다. 6까지 완료된 경우에만 최종 binary와 metadata 및 D1 상태가 함께 확정됐으므로 후보와 backup을 삭제할 수 있다.
 
 7의 삭제 대상은 다음과 같다.
 
