@@ -1,7 +1,7 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=internal-folder-filter-20260721a';
-import { renderSectionHeader } from './manage.js?v=internal-folder-filter-20260721a';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=internal-folder-filter-20260721a';
-import { combinePromptParts, getSituationById } from './situation.js?v=internal-folder-filter-20260721a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-plan-scope-20260810a';
+import { renderSectionHeader } from './manage.js?v=planner-plan-scope-20260810a';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-plan-scope-20260810a';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-plan-scope-20260810a';
 
 const PLANNER_DEFAULT_IMAGE_COUNT = 10;
 const PLANNER_MIN_IMAGE_COUNT = 1;
@@ -25,9 +25,47 @@ const plannerPollingState = {
     running: false
 };
 const plannerScrollStates = new Map();
+const plannerSituationScopeState = {
+    projectId: '',
+    loading: false,
+    loaded: false,
+    operationId: 0,
+    metas: new Map(),
+    errors: new Map()
+};
 let plannerScrollRestoreId = 0;
 let plannerDraftDirty = false;
 let plannerVisibilityHandlerInstalled = false;
+let plannerPlanScopeProjectId = '';
+let plannerBatchPlanCreationRunning = false;
+
+function ensurePlannerPlanScopeProject(project) {
+    const projectId = project?.id || '';
+    if (plannerPlanScopeProjectId === projectId) return;
+    plannerPlanScopeProjectId = projectId;
+    window.PROJECT_PLANNER_PLAN_SCOPE = 'character';
+    window.PROJECT_PLANNER_SELECTED_SITUATION_ID = '';
+    plannerSituationScopeState.projectId = projectId;
+    plannerSituationScopeState.loading = false;
+    plannerSituationScopeState.loaded = false;
+    plannerSituationScopeState.operationId += 1;
+    plannerSituationScopeState.metas = new Map();
+    plannerSituationScopeState.errors = new Map();
+}
+
+export function getPlannerPlanScope(project = getActiveProject()) {
+    ensurePlannerPlanScopeProject(project);
+    return window.PROJECT_PLANNER_PLAN_SCOPE === 'situation' ? 'situation' : 'character';
+}
+
+function getSelectedPlannerSituation(project = getActiveProject()) {
+    ensurePlannerPlanScopeProject(project);
+    const situations = getProjectItems(project, 'situations');
+    const selectedId = window.PROJECT_PLANNER_SELECTED_SITUATION_ID || '';
+    const selected = situations.find(situation => situation.id === selectedId) || situations[0] || null;
+    window.PROJECT_PLANNER_SELECTED_SITUATION_ID = selected?.id || '';
+    return selected;
+}
 
 function clonePlannerMetaValue(meta) {
     if (!meta) return meta;
@@ -281,7 +319,9 @@ export async function savePlannerItem(project, meta, item) {
             ).catch(() => null);
             if (latestMeta) replacePlannerMetaValue(meta, latestMeta);
         }
-        throw new Error(data.error || '플래너 항목 저장에 실패했습니다.');
+        const error = new Error(data.error || '플래너 항목 저장에 실패했습니다.');
+        error.status = res.status;
+        throw error;
     }
     const payload = await res.json().catch(() => ({}));
     const savedMeta = payload?.data
@@ -781,6 +821,10 @@ function updatePlannerQueueMetaCache(project, meta) {
     if (index >= 0) queueMetas[index] = entry;
     else if (meta.items?.length) queueMetas.push(entry);
     window.PROJECT_PLANNER_QUEUE_METAS = queueMetas.filter(entry => entry.meta?.items?.length);
+    if (plannerSituationScopeState.projectId === project.id) {
+        plannerSituationScopeState.metas.set(character.id, meta.items?.length ? clonePlannerMetaValue(meta) : null);
+        plannerSituationScopeState.errors.delete(character.id);
+    }
 }
 
 function getPlannerQueueMetaEntry(project, characterId = '') {
@@ -1114,6 +1158,37 @@ export function getPlannerSituationImage(character, situation, situationIndex) {
 
 export function getPlannerSituationItem(meta, situationId) {
     return meta?.items?.find(item => item.situationId === situationId) || null;
+}
+
+function getPlannerPlanEligibility({ character, situation, situationIndex, meta, loadError = '' }) {
+    if (loadError) {
+        return {
+            eligible: false,
+            hasPlan: false,
+            hasFinalImage: false,
+            reason: 'load_error',
+            label: '확인 필요'
+        };
+    }
+    const hasPlan = !!getPlannerSituationItem(meta, situation?.id);
+    const hasFinalImage = !!getPlannerSituationImage(character, situation, situationIndex);
+    const active = !!meta && (
+        isPlannerActiveStatus(meta.status)
+        || isPlannerActiveStatus(meta.backgroundStatus?.status)
+    );
+    if (hasPlan && hasFinalImage) {
+        return { eligible: false, hasPlan, hasFinalImage, reason: 'plan_and_image', label: '플랜·이미지 있음' };
+    }
+    if (hasPlan) {
+        return { eligible: false, hasPlan, hasFinalImage, reason: 'plan_exists', label: '플랜 있음' };
+    }
+    if (hasFinalImage) {
+        return { eligible: false, hasPlan, hasFinalImage, reason: 'image_exists', label: '이미지 있음' };
+    }
+    if (active) {
+        return { eligible: false, hasPlan, hasFinalImage, reason: 'run_active', label: '생성 진행 중' };
+    }
+    return { eligible: true, hasPlan, hasFinalImage, reason: 'eligible', label: '생성 대상' };
 }
 
 export function getPlannerPromptVariantName(variant) {
@@ -1897,6 +1972,61 @@ export function renderPlannerSituationGrid(project, situations, character, meta,
     `;
 }
 
+function renderPlannerCharacterGridForSituation(project, characters, situation) {
+    if (!situation) return renderEmptyState('플랜을 만들 상황을 선택하세요.');
+    if (!characters.length) return renderEmptyState('먼저 캐릭터를 추가하세요.');
+    if (plannerSituationScopeState.loading && !plannerSituationScopeState.loaded) {
+        return renderEmptyState('캐릭터별 플랜과 이미지 상태를 불러오는 중입니다.');
+    }
+
+    const situations = getProjectItems(project, 'situations');
+    const situationIndex = situations.findIndex(entry => entry.id === situation.id);
+    return `
+        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
+            ${characters.map(character => {
+                const meta = plannerSituationScopeState.metas.has(character.id)
+                    ? plannerSituationScopeState.metas.get(character.id)
+                    : getPlannerMetaForCharacter(project, character.id);
+                const loadError = plannerSituationScopeState.errors.get(character.id) || '';
+                const eligibility = getPlannerPlanEligibility({
+                    character,
+                    situation,
+                    situationIndex,
+                    meta,
+                    loadError
+                });
+                const preserved = eligibility.hasPlan || eligibility.hasFinalImage;
+                const eligibleClass = eligibility.eligible
+                    ? 'border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20'
+                    : eligibility.reason === 'load_error'
+                        ? 'border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-950/20'
+                        : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800';
+                const badgeClass = eligibility.eligible
+                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
+                    : eligibility.reason === 'load_error'
+                        ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                        : preserved
+                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
+                            : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
+                return `
+                    <div class="min-h-[104px] rounded-lg border ${eligibleClass} p-3">
+                        <div class="flex items-start gap-3">
+                            <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900 text-xs font-extrabold text-gray-500 dark:text-gray-400">
+                                <i data-lucide="user" class="h-5 w-5"></i>
+                            </span>
+                            <div class="min-w-0 flex-1">
+                                <p class="truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(character.name || character.folderName || character.id)}</p>
+                                <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${badgeClass}">${escapeHtml(eligibility.label)}</span>
+                                <p class="mt-1 truncate text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(loadError || `${getSituationImageNumber(project, situation)}.webp`)}</p>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('')}
+        </div>
+    `;
+}
+
 export function renderPlannerSituationPlanModal(project, situation, character, meta) {
     if (!situation || !character) return '';
     const characterMeta = character.meta || {};
@@ -2007,6 +2137,8 @@ export function renderPlannerPanel(project, situations) {
         || characters[0];
     const activeCharacterName = activeCharacter ? (activeCharacter.name || activeCharacter.alias || activeCharacter.folderName || activeCharacter.id) : '선택된 캐릭터 없음';
     const view = window.PROJECT_PLANNER_VIEW || 'plan';
+    const planScope = getPlannerPlanScope(project);
+    const selectedSituation = getSelectedPlannerSituation(project);
     const settings = normalizePlannerSettings(window.PROJECT_PLANNER_SETTINGS || {});
     const queueMetas = window.PROJECT_PLANNER_QUEUE_METAS?.length
         ? window.PROJECT_PLANNER_QUEUE_METAS
@@ -2020,6 +2152,17 @@ export function renderPlannerPanel(project, situations) {
             </select>
         </label>
     ` : '';
+    const situationSelector = situations.length ? `
+        <label class="block min-w-[180px] sm:min-w-[240px]">
+            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">대상 상황</span>
+            <select id="planner-situation-scope-select" onchange="window.selectPlannerSituationScope(this.value)" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">
+                ${situations.map(situation => `<option value="${escapeHtml(situation.id)}" ${selectedSituation?.id === situation.id ? 'selected' : ''}>${escapeHtml(getSituationImageNumber(project, situation))}.webp / ${escapeHtml(getSituationDisplayName(situation))}</option>`).join('')}
+            </select>
+        </label>
+    ` : '';
+    const targetSelector = view === 'plan' && planScope === 'situation'
+        ? situationSelector
+        : characterSelector;
 
     const modeButton = (mode, label, icon) => `
         <button type="button" onclick="window.setPlannerView('${mode}')" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${view === mode ? 'bg-indigo-600 text-white' : 'border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-400'}">
@@ -2060,26 +2203,50 @@ export function renderPlannerPanel(project, situations) {
         </div>
     ` : '<div class="flex-1 flex items-center justify-center text-sm font-bold text-gray-500 dark:text-gray-400 text-center">캐릭터와 상황을 선택한 뒤 추가하기를 눌러 플랜 작성안을 만드세요.</div>';
 
+    const scopeButton = (scope, label) => `
+        <button type="button" role="tab" aria-selected="${planScope === scope ? 'true' : 'false'}" onclick="window.setPlannerPlanScope('${scope}')" class="flex-1 px-3 py-1.5 rounded-md text-[11px] font-bold transition ${planScope === scope ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">
+            ${label}
+        </button>
+    `;
+
     const planView = `
+        <div class="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
+            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                <div>
+                    <p class="text-[11px] font-bold text-gray-700 dark:text-gray-200">플랜 작성 기준</p>
+                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${planScope === 'situation' ? '선택한 상황의 캐릭터별 플랜을 관리합니다.' : '선택한 캐릭터의 상황별 플랜을 관리합니다.'}</p>
+                </div>
+                <div role="tablist" aria-label="플랜 작성 기준" class="inline-flex w-full sm:w-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1">
+                    ${scopeButton('character', '캐릭터 기준')}
+                    ${scopeButton('situation', '상황 기준')}
+                </div>
+            </div>
+        </div>
         <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">상황을 선택하면 해당 상황의 플랜을 구성합니다.</p>
+            <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">${planScope === 'situation' ? '선택한 상황에 대해 캐릭터별 생성 가능 여부를 확인합니다.' : '상황을 선택하면 해당 상황의 플랜을 구성합니다.'}</p>
             <div class="flex flex-wrap justify-end gap-2">
-                <button type="button" onclick="window.createMissingPlannerPlans()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
-                    <i data-lucide="image-plus" class="w-4 h-4"></i> 누락 이미지 플랜 생성
+                <button type="button" onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning ? 'disabled' : ''} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <i data-lucide="image-plus" class="w-4 h-4"></i> 누락된 플랜 전체 생성
                 </button>
-                <button type="button" onclick="window.savePlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
-                    <i data-lucide="save" class="w-4 h-4"></i> 플랜 저장하기
-                </button>
-                ${meta?.items?.length ? `
-                    <button type="button" onclick="window.deleteAllPlannerItems()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20">
-                        <i data-lucide="trash-2" class="w-4 h-4"></i> 전체 플랜 삭제
+                ${planScope === 'character' ? `
+                    <button type="button" onclick="window.savePlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
+                        <i data-lucide="save" class="w-4 h-4"></i> 플랜 저장하기
                     </button>
+                    ${meta?.items?.length ? `
+                        <button type="button" onclick="window.deleteAllPlannerItems()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i> 전체 플랜 삭제
+                        </button>
+                    ` : ''}
                 ` : ''}
             </div>
         </div>
         ${!characters.length ? renderEmptyState('플랜을 작성하려면 먼저 캐릭터를 추가하세요.') : ''}
         ${!situations.length ? renderEmptyState('플랜을 작성하려면 먼저 상황을 추가하세요.') : ''}
-        ${characters.length && situations.length ? renderPlannerSituationGrid(project, situations, activeCharacter, meta, 'plan') : ''}
+        ${characters.length && situations.length ? (
+            planScope === 'situation'
+                ? renderPlannerCharacterGridForSituation(project, characters, selectedSituation)
+                : renderPlannerSituationGrid(project, situations, activeCharacter, meta, 'plan')
+        ) : ''}
     `;
 
     const runView = `
@@ -2126,7 +2293,7 @@ export function renderPlannerPanel(project, situations) {
                     <p id="planner-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(meta?.status))}</p>
                 </div>
                 <div class="flex flex-col sm:flex-row sm:items-end gap-2">
-                    ${characterSelector || `<p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(activeCharacterName)}</p>`}
+                    ${targetSelector || `<p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">${escapeHtml(activeCharacterName)}</p>`}
                     <div class="flex items-center justify-end gap-1">
                         <button type="button" onclick="window.openPlannerSettingsModal()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="플래너 설정">
                             <i data-lucide="settings" class="w-4 h-4"></i>
@@ -2317,6 +2484,9 @@ export async function refreshPlannerPanel(options = {}) {
         applyPlannerRefreshData(project, data);
         if (reason === 'manual') clearPlannerDraftDirty();
         renderPlannerSectionByState({ preserveScroll });
+        if ((window.PROJECT_PLANNER_VIEW || 'plan') === 'plan' && getPlannerPlanScope(project) === 'situation') {
+            await loadPlannerSituationScopeData({ force: true });
+        }
         syncPlannerBackgroundPolling();
         setPlannerStatus('최신 정보를 불러왔습니다.');
     } catch (error) {
@@ -2331,6 +2501,82 @@ export function setPlannerView(view = 'plan') {
     window.PROJECT_PLANNER_VIEW = ['plan', 'run', 'result'].includes(view) ? view : 'plan';
     renderPlannerSectionByState({ scroll: 'restore-view', focus: 'reset' });
     syncPlannerBackgroundPolling({ immediate: window.PROJECT_PLANNER_VIEW === 'run' });
+}
+
+async function loadPlannerSituationScopeData({ force = false } = {}) {
+    const project = getActiveProject();
+    if (!project) return;
+    ensurePlannerPlanScopeProject(project);
+    if (!force && plannerSituationScopeState.loaded && plannerSituationScopeState.projectId === project.id) return;
+
+    const characters = getProjectItems(project, 'characters');
+    const operationId = ++plannerSituationScopeState.operationId;
+    plannerSituationScopeState.projectId = project.id;
+    plannerSituationScopeState.loading = true;
+    plannerSituationScopeState.errors = new Map();
+    renderPlannerSectionByState({ preserveScroll: true });
+    setPlannerStatus('캐릭터별 플랜과 이미지 상태를 불러오는 중입니다.');
+
+    const entries = await Promise.all(characters.map(async character => {
+        const results = await Promise.allSettled([
+            loadCharacterFiles(character, { force }),
+            loadCharacterMeta(character, { force }),
+            loadPlannerMeta(project, character.id, { force })
+        ]);
+        const failedLabels = [];
+        if (results[0].status === 'rejected') failedLabels.push('이미지');
+        if (results[1].status === 'rejected') failedLabels.push('캐릭터 설정');
+        if (results[2].status === 'rejected') failedLabels.push('플랜');
+        return {
+            character,
+            meta: results[2].status === 'fulfilled' ? results[2].value : null,
+            error: failedLabels.length ? `${failedLabels.join(', ')} 정보를 불러오지 못했습니다.` : ''
+        };
+    }));
+
+    if (operationId !== plannerSituationScopeState.operationId || project.id !== getActiveProject()?.id) return;
+    const metas = new Map();
+    const errors = new Map();
+    entries.forEach(({ character, meta, error }) => {
+        metas.set(character.id, meta);
+        if (error) errors.set(character.id, error);
+        if (meta?.items?.length) updatePlannerQueueMetaCache(project, meta);
+    });
+    plannerSituationScopeState.metas = metas;
+    plannerSituationScopeState.errors = errors;
+    plannerSituationScopeState.loading = false;
+    plannerSituationScopeState.loaded = true;
+    renderPlannerSectionByState({ preserveScroll: true });
+    setPlannerStatus(errors.size
+        ? `${characters.length - errors.size}명의 상태를 불러왔고 ${errors.size}명은 확인이 필요합니다.`
+        : `${characters.length}명의 플랜과 이미지 상태를 불러왔습니다.`);
+}
+
+export async function setPlannerPlanScope(scope = 'character') {
+    const project = getActiveProject();
+    if (!project) return;
+    ensurePlannerPlanScopeProject(project);
+    window.PROJECT_PLANNER_PLAN_SCOPE = scope === 'situation' ? 'situation' : 'character';
+    if (window.PROJECT_PLANNER_PLAN_SCOPE === 'situation' && !plannerSituationScopeState.loaded) {
+        plannerSituationScopeState.loading = true;
+    }
+    if (window.PROJECT_PLANNER_PLAN_SCOPE === 'character' && plannerSituationScopeState.loading) {
+        plannerSituationScopeState.operationId += 1;
+        plannerSituationScopeState.loading = false;
+    }
+    renderPlannerSectionByState({ scroll: 'preserve', focus: 'reset' });
+    if (window.PROJECT_PLANNER_PLAN_SCOPE === 'situation') {
+        await loadPlannerSituationScopeData();
+    }
+}
+
+export function selectPlannerSituationScope(situationId = '') {
+    const project = getActiveProject();
+    if (!project) return;
+    ensurePlannerPlanScopeProject(project);
+    const situation = getProjectItems(project, 'situations').find(entry => entry.id === situationId);
+    window.PROJECT_PLANNER_SELECTED_SITUATION_ID = situation?.id || getProjectItems(project, 'situations')[0]?.id || '';
+    renderPlannerSectionByState({ preserveScroll: true });
 }
 
 export function setPlannerGenerationMode(mode = 'browser') {
@@ -2879,40 +3125,73 @@ function buildPlannerPlanItemFromSituation({
     };
 }
 
-export async function createMissingPlannerPlans() {
+function createPlannerDraftMeta(project, character, defaultCount) {
+    const now = Date.now();
+    return {
+        projectId: project.id,
+        characterId: character.id,
+        characterPrefix: character.prefix,
+        status: 'draft',
+        defaultCount,
+        createdAt: now,
+        updatedAt: now,
+        items: []
+    };
+}
+
+function addPlannerBatchReason(summary, eligibility) {
+    if (eligibility.hasPlan) summary.existingPlan += 1;
+    else if (eligibility.hasFinalImage) summary.existingImage += 1;
+    else if (eligibility.reason === 'run_active') summary.active += 1;
+    else if (eligibility.reason === 'load_error') summary.failed += 1;
+}
+
+function formatPlannerBatchCreationResult(summary) {
+    const details = [];
+    if (summary.existingPlan) details.push(`기존 플랜 ${summary.existingPlan}개`);
+    if (summary.existingImage) details.push(`완성 이미지 ${summary.existingImage}개`);
+    if (summary.active) details.push(`생성 진행 중 ${summary.active}개`);
+    if (summary.failed) details.push(`실패 또는 확인 필요 ${summary.failed}개`);
+    if (!summary.created) {
+        return details.length
+            ? `새로 만들 누락 플랜이 없습니다. ${details.join(', ')}는 변경하지 않았습니다.`
+            : '새로 만들 누락 플랜이 없습니다.';
+    }
+    const suffix = details.length ? ` ${details.join(', ')}는 변경하지 않았습니다.` : '';
+    return `${summary.created}개 플랜을 생성했습니다.${suffix}`;
+}
+
+async function createMissingPlannerPlansForCharacter() {
     const project = getActiveProject();
-    if (!project) return;
+    if (!project) return '';
     const characterId = getSelectedPlannerCharacterId(project);
     const character = getCharacterById(project, characterId);
     const situations = getProjectItems(project, 'situations');
     if (!character) {
-        setPlannerStatus('플랜을 만들 캐릭터를 선택하세요.');
-        return;
+        return '플랜을 만들 캐릭터를 선택하세요.';
     }
     if (!situations.length) {
-        setPlannerStatus('플랜을 만들 상황이 없습니다.');
-        return;
+        return '플랜을 만들 상황이 없습니다.';
     }
 
-    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project, character.id).catch(() => null);
+    let meta = await loadPlannerMeta(project, character.id, { force: true });
     if (meta && (isPlannerActiveStatus(meta.status) || isPlannerActiveStatus(meta.backgroundStatus?.status))) {
-        setPlannerStatus('생성 중인 플랜이 있을 때는 일괄 생성할 수 없습니다.');
-        return;
+        return '생성 중인 플랜이 있을 때는 일괄 생성할 수 없습니다.';
     }
 
     await Promise.all([
-        loadCharacterFiles(character, true).catch(() => []),
-        loadCharacterMeta(character, true).catch(() => ({}))
+        loadCharacterFiles(character, { force: true }),
+        loadCharacterMeta(character, { force: true })
     ]);
 
-    const existingItems = new Map((meta?.items || []).map(item => [item.situationId, item]));
-    const missingSituations = situations.filter((situation, index) =>
-        !getPlannerSituationImage(character, situation, index)
-        && !existingItems.has(situation.id)
-    );
+    const summary = { created: 0, existingPlan: 0, existingImage: 0, active: 0, failed: 0 };
+    const missingSituations = situations.filter((situation, situationIndex) => {
+        const eligibility = getPlannerPlanEligibility({ character, situation, situationIndex, meta });
+        if (!eligibility.eligible) addPlannerBatchReason(summary, eligibility);
+        return eligibility.eligible;
+    });
     if (!missingSituations.length) {
-        setPlannerStatus('누락된 이미지 중 새로 만들 플랜이 없습니다.');
-        return;
+        return formatPlannerBatchCreationResult(summary);
     }
 
     const [plannerSettings, projectStyle] = await Promise.all([
@@ -2925,16 +3204,7 @@ export async function createMissingPlannerPlans() {
     const defaultCount = clampPlannerImageCount(meta?.defaultCount || PLANNER_DEFAULT_IMAGE_COUNT);
     const defaultBackground = getPlannerBackgroundPromptById(project);
     if (!meta || meta.characterId !== character.id) {
-        meta = {
-            projectId: project.id,
-            characterId: character.id,
-            characterPrefix: character.prefix,
-            status: 'draft',
-            defaultCount,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            items: []
-        };
+        meta = createPlannerDraftMeta(project, character, defaultCount);
     }
 
     const newItems = missingSituations
@@ -2961,8 +3231,147 @@ export async function createMissingPlannerPlans() {
     window.PROJECT_PLANNER_META = meta;
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     updatePlannerQueueMetaCache(project, meta);
+    summary.created = newItems.length;
+    return formatPlannerBatchCreationResult(summary);
+}
+
+async function createMissingPlannerPlansForSituation() {
+    const project = getActiveProject();
+    if (!project) return '';
+    const situation = getSelectedPlannerSituation(project);
+    const characters = getProjectItems(project, 'characters');
+    const situations = getProjectItems(project, 'situations');
+    const situationIndex = situations.findIndex(entry => entry.id === situation?.id);
+    if (!situation) return '플랜을 만들 상황을 선택하세요.';
+    if (!characters.length) return '플랜을 만들 캐릭터가 없습니다.';
+
+    const [plannerSettings, projectStyle] = await Promise.all([
+        loadPlannerSettings(project).catch(() => normalizePlannerSettings()),
+        loadProjectStylePrompt(project).catch(() => ''),
+        loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts())
+    ]);
+    const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
+    const defaultBackground = getPlannerBackgroundPromptById(project);
+    const summary = { created: 0, existingPlan: 0, existingImage: 0, active: 0, failed: 0 };
+
+    for (const character of characters) {
+        let characterMeta;
+        let meta;
+        try {
+            const values = await Promise.all([
+                loadCharacterFiles(character, { force: true }),
+                loadCharacterMeta(character, { force: true }),
+                loadPlannerMeta(project, character.id, { force: true })
+            ]);
+            characterMeta = values[1] || {};
+            meta = values[2] || null;
+            plannerSituationScopeState.errors.delete(character.id);
+        } catch (error) {
+            plannerSituationScopeState.errors.set(character.id, error?.message || '정보를 불러오지 못했습니다.');
+            summary.failed += 1;
+            continue;
+        }
+
+        let eligibility = getPlannerPlanEligibility({ character, situation, situationIndex, meta });
+        if (!eligibility.eligible) {
+            addPlannerBatchReason(summary, eligibility);
+            plannerSituationScopeState.metas.set(character.id, meta);
+            continue;
+        }
+
+        const defaultCount = clampPlannerImageCount(meta?.defaultCount || PLANNER_DEFAULT_IMAGE_COUNT);
+        const item = buildPlannerPlanItemFromSituation({
+            project,
+            situation,
+            character,
+            characterMeta,
+            plannerSettings,
+            currentSettings,
+            projectStyle,
+            backgroundPrompt: defaultBackground.prompt,
+            backgroundPromptId: defaultBackground.id,
+            backgroundPromptName: defaultBackground.name,
+            count: defaultCount
+        });
+        if (!item) {
+            plannerSituationScopeState.errors.set(character.id, '플랜 기본값을 구성하지 못했습니다.');
+            summary.failed += 1;
+            continue;
+        }
+
+        meta = meta && meta.characterId === character.id
+            ? meta
+            : createPlannerDraftMeta(project, character, defaultCount);
+        try {
+            await savePlannerItem(project, meta, item);
+        } catch (error) {
+            if (error?.status !== 409) {
+                plannerSituationScopeState.errors.set(character.id, error?.message || '플랜을 저장하지 못했습니다.');
+                summary.failed += 1;
+                continue;
+            }
+            const latestMeta = await loadPlannerMeta(project, character.id, { force: true }).catch(() => null);
+            eligibility = getPlannerPlanEligibility({ character, situation, situationIndex, meta: latestMeta });
+            if (!eligibility.eligible) {
+                addPlannerBatchReason(summary, eligibility);
+                plannerSituationScopeState.metas.set(character.id, latestMeta);
+                if (latestMeta) setPlannerMetaForCharacter(project, latestMeta);
+                continue;
+            }
+            meta = latestMeta && latestMeta.characterId === character.id
+                ? latestMeta
+                : createPlannerDraftMeta(project, character, defaultCount);
+            try {
+                await savePlannerItem(project, meta, item);
+            } catch (retryError) {
+                plannerSituationScopeState.errors.set(character.id, retryError?.message || '플랜을 저장하지 못했습니다.');
+                summary.failed += 1;
+                continue;
+            }
+        }
+
+        meta.defaultCount = defaultCount;
+        meta.lastSituationId = situation.id;
+        meta.status = 'draft';
+        meta.updatedAt = Date.now();
+        plannerSituationScopeState.metas.set(character.id, clonePlannerMetaValue(meta));
+        plannerSituationScopeState.errors.delete(character.id);
+        setPlannerMetaForCharacter(project, meta);
+        summary.created += 1;
+    }
+
+    plannerSituationScopeState.projectId = project.id;
+    plannerSituationScopeState.loading = false;
+    plannerSituationScopeState.loaded = true;
+    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
+    return formatPlannerBatchCreationResult(summary);
+}
+
+async function runPlannerBatchPlanCreation(scope) {
+    if (plannerBatchPlanCreationRunning) return;
+    plannerBatchPlanCreationRunning = true;
     renderPlannerSectionByState({ preserveScroll: true });
-    setPlannerStatus(`${newItems.length}개 누락 이미지 플랜을 생성했습니다.`);
+    setPlannerStatus('누락된 플랜을 확인하고 있습니다.');
+    let message = '';
+    try {
+        message = scope === 'situation'
+            ? await createMissingPlannerPlansForSituation()
+            : await createMissingPlannerPlansForCharacter();
+    } catch (error) {
+        message = error?.message || '누락된 플랜 생성에 실패했습니다.';
+    } finally {
+        plannerBatchPlanCreationRunning = false;
+        renderPlannerSectionByState({ preserveScroll: true });
+        setPlannerStatus(message);
+    }
+}
+
+export async function createMissingPlannerPlans() {
+    await runPlannerBatchPlanCreation('character');
+}
+
+export async function createAllMissingPlannerPlans() {
+    await runPlannerBatchPlanCreation(getPlannerPlanScope());
 }
 
 export async function savePlannerDraft() {

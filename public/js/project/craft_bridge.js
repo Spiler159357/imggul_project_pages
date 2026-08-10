@@ -1,7 +1,7 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=internal-folder-filter-20260721a';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=internal-folder-filter-20260721a';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=internal-folder-filter-20260721a';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=internal-folder-filter-20260721a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-plan-scope-20260810a';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-plan-scope-20260810a';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-plan-scope-20260810a';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-plan-scope-20260810a';
 
 export function getCraftPromptFields() {
     return {
