@@ -2218,7 +2218,7 @@ export function renderPlannerPanel(project, situations) {
     ` : '<div class="flex-1 flex items-center justify-center text-sm font-bold text-gray-500 dark:text-gray-400 text-center">캐릭터와 상황을 선택한 뒤 추가하기를 눌러 플랜 작성안을 만드세요.</div>';
 
     const scopeButton = (scope, label) => `
-        <button type="button" role="tab" aria-selected="${planScope === scope ? 'true' : 'false'}" onclick="window.setPlannerPlanScope('${scope}')" class="min-w-0 flex-1 whitespace-nowrap px-2 sm:px-3 py-1.5 rounded-md text-[10px] sm:text-[11px] font-bold transition ${planScope === scope ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">
+        <button type="button" role="tab" aria-selected="${planScope === scope ? 'true' : 'false'}" onclick="window.setPlannerPlanScope('${scope}')" class="w-full min-w-0 whitespace-nowrap px-3 py-2 rounded-md text-center text-[10px] sm:text-[11px] font-bold transition ${planScope === scope ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">
             ${label}
         </button>
     `;
@@ -2230,7 +2230,7 @@ export function renderPlannerPanel(project, situations) {
                     <p class="text-[11px] font-bold text-gray-700 dark:text-gray-200">플랜 작성 기준</p>
                     <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${planScope === 'situation' ? '선택한 상황의 캐릭터별 플랜을 관리합니다.' : '선택한 캐릭터의 상황별 플랜을 관리합니다.'}</p>
                 </div>
-                <div role="tablist" aria-label="플랜 작성 기준" class="inline-flex w-full sm:w-auto rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1">
+                <div role="tablist" aria-label="플랜 작성 기준" class="grid w-full grid-cols-2 gap-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1.5 sm:w-auto sm:min-w-[210px]">
                     ${scopeButton('character', '캐릭터 기준')}
                     ${scopeButton('situation', '상황 기준')}
                 </div>
