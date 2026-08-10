@@ -1685,12 +1685,24 @@ export function renderPlannerRunConfirmOverlay() {
     if (window.lucide) lucide.createIcons();
 }
 
+function getPlannerPlanModalCharacterId(project = getActiveProject()) {
+    return window.PLANNER_PLAN_MODAL_CHARACTER_ID || getSelectedPlannerCharacterId(project);
+}
+
+function getPlannerPlanModalMeta(project, characterId) {
+    if (plannerSituationScopeState.projectId === project?.id && plannerSituationScopeState.metas.has(characterId)) {
+        return plannerSituationScopeState.metas.get(characterId);
+    }
+    return getPlannerMetaForCharacter(project, characterId);
+}
+
 export function renderPlannerSituationPlanOverlay() {
     const root = ensurePlannerOverlayRoot('planner-situation-plan-overlay-root');
     const project = getActiveProject();
     const situation = getSituationById(project, window.PLANNER_PLAN_MODAL_SITUATION_ID);
-    const character = getCharacterById(project, getSelectedPlannerCharacterId(project));
-    root.innerHTML = renderPlannerSituationPlanModal(project, situation, character, window.PROJECT_PLANNER_META || null);
+    const characterId = getPlannerPlanModalCharacterId(project);
+    const character = getCharacterById(project, characterId);
+    root.innerHTML = renderPlannerSituationPlanModal(project, situation, character, getPlannerPlanModalMeta(project, characterId));
     document.getElementById('planner-plan-character-variant')?.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('character'));
     document.querySelectorAll('[data-planner-plan-situation-variant]').forEach(input => {
         input.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('situation'));
@@ -1703,7 +1715,7 @@ export function renderPlannerSituationPlanOverlay() {
 export function updatePlannerPlanModalDefaults(scope = 'all') {
     const project = getActiveProject();
     const situation = getSituationById(project, window.PLANNER_PLAN_MODAL_SITUATION_ID);
-    const character = getCharacterById(project, getSelectedPlannerCharacterId(project));
+    const character = getCharacterById(project, getPlannerPlanModalCharacterId(project));
     if (!project || !situation || !character) return;
 
     const characterVariants = normalizeCharacterPromptVariants(character.meta || {});
@@ -2010,7 +2022,7 @@ function renderPlannerCharacterGridForSituation(project, characters, situation) 
                             ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
                             : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
                 return `
-                    <div class="min-h-[104px] rounded-lg border ${eligibleClass} p-3">
+                    <button type="button" onclick="window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id)}')" class="group w-full min-h-[104px] rounded-lg border ${eligibleClass} p-3 text-left hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition">
                         <div class="flex items-start gap-3">
                             <span class="relative flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-gray-900 text-xs font-extrabold text-gray-500 dark:text-gray-400">
                                 ${situationImage ? `<img src="${escapeHtml(getVersionedAssetUrl(situationImage))}" alt="" class="h-full w-full object-cover" loading="lazy" onerror="this.classList.add('hidden'); this.nextElementSibling?.classList.remove('hidden')">` : ''}
@@ -2022,7 +2034,7 @@ function renderPlannerCharacterGridForSituation(project, characters, situation) 
                                 <p class="mt-1 truncate text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(loadError || `${getSituationImageNumber(project, situation)}.webp`)}</p>
                             </div>
                         </div>
-                    </div>
+                    </button>
                 `;
             }).join('')}
         </div>
@@ -2629,6 +2641,7 @@ export async function loadPlannerForSelectedCharacter() {
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
+    window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     window.PROJECT_PLANNER_RUN_CONFIRM = false;
     const character = getCharacterById(project, characterId);
@@ -2655,19 +2668,29 @@ export async function loadPlannerForSelectedCharacter() {
     syncPlannerBackgroundPolling({ immediate: window.PROJECT_PLANNER_VIEW === 'run' });
 }
 
-export async function openPlannerSituationPlanModal(situationId) {
+export async function openPlannerSituationPlanModal(situationId, characterId = '') {
     const project = getActiveProject();
-    const characterId = getSelectedPlannerCharacterId(project);
-    const character = getCharacterById(project, characterId);
-    if (character) await loadCharacterMeta(character).catch(() => ({}));
-    window.PROJECT_PLANNER_PROJECT_STYLE = await loadProjectStylePrompt(project).catch(() => '');
-    await loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts());
+    const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
+    const character = getCharacterById(project, targetCharacterId);
+    if (!project || !character) return;
+    const [meta, projectStyle] = await Promise.all([
+        loadPlannerMeta(project, targetCharacterId, { force: true }).catch(() => null),
+        loadProjectStylePrompt(project).catch(() => ''),
+        loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts()),
+        loadCharacterMeta(character).catch(() => ({}))
+    ]);
+    plannerSituationScopeState.metas.set(targetCharacterId, meta);
+    plannerSituationScopeState.errors.delete(targetCharacterId);
+    if (meta) setPlannerMetaForCharacter(project, meta);
+    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
+    window.PLANNER_PLAN_MODAL_CHARACTER_ID = targetCharacterId;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = situationId;
     renderPlannerSituationPlanOverlay();
 }
 
 export function closePlannerSituationPlanModal(event) {
     if (event && event.target?.id !== 'planner-situation-plan-modal') return;
+    window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     renderPlannerSituationPlanOverlay();
 }
@@ -2915,11 +2938,15 @@ export async function savePlannerSituationPlan() {
     const project = getActiveProject();
     if (!project) return;
     const situation = getSituationById(project, window.PLANNER_PLAN_MODAL_SITUATION_ID);
-    const characterId = getSelectedPlannerCharacterId(project);
+    const characterId = getPlannerPlanModalCharacterId(project);
     const character = getCharacterById(project, characterId);
     const status = document.getElementById('planner-plan-modal-status');
     if (!situation || !character) return;
     if (status) status.textContent = '저장 중...';
+
+    let meta = getPlannerPlanModalMeta(project, characterId);
+    if (meta === undefined) meta = await loadPlannerMeta(project, characterId, { force: true }).catch(() => null);
+    const existingItem = getPlannerSituationItem(meta, situation.id);
 
     const characterMeta = await loadCharacterMeta(character).catch(() => ({}));
     const characterVariants = normalizeCharacterPromptVariants(characterMeta);
@@ -3005,23 +3032,13 @@ export async function savePlannerSituationPlan() {
         variantCounts: Object.fromEntries(variantGenerations.map(entry => [entry.situationPromptVariantId, entry.count])),
         variantGenerations,
         generation: variantGenerations[0]?.generation || {},
-        images: getPlannerSituationItem(window.PROJECT_PLANNER_META, situation.id)?.images || [],
-        selectedImage: getPlannerSituationItem(window.PROJECT_PLANNER_META, situation.id)?.selectedImage || null,
-        selectedAssetId: getPlannerSituationItem(window.PROJECT_PLANNER_META, situation.id)?.selectedAssetId || ''
+        images: existingItem?.images || [],
+        selectedImage: existingItem?.selectedImage || null,
+        selectedAssetId: existingItem?.selectedAssetId || ''
     };
 
-    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project, character.id).catch(() => null);
     if (!meta || meta.characterId !== character.id) {
-        meta = {
-            projectId: project.id,
-            characterId: character.id,
-            characterPrefix: character.prefix,
-            status: 'draft',
-            defaultCount: count,
-            createdAt: Date.now(),
-            updatedAt: Date.now(),
-            items: []
-        };
+        meta = createPlannerDraftMeta(project, character, count);
     }
     const existingIndex = meta.items.findIndex(entry => entry.situationId === situation.id);
     if (existingIndex >= 0) meta.items[existingIndex] = item;
@@ -3032,7 +3049,10 @@ export async function savePlannerSituationPlan() {
     meta.status = 'draft';
     meta.updatedAt = Date.now();
     await savePlannerItem(project, meta, item);
-    window.PROJECT_PLANNER_META = meta;
+    setPlannerMetaForCharacter(project, meta);
+    plannerSituationScopeState.metas.set(characterId, clonePlannerMetaValue(meta));
+    plannerSituationScopeState.errors.delete(characterId);
+    window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     renderPlannerSituationPlanOverlay();
     renderPlannerSectionByState({ preserveScroll: true });
@@ -3395,9 +3415,11 @@ export async function savePlannerDraft() {
     setPlannerStatus('플랜이 저장되었습니다.');
 }
 
-export async function deletePlannerItem(situationId) {
+export async function deletePlannerItem(situationId, characterId = '') {
     const project = getActiveProject();
-    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
+    let meta = getPlannerMetaForCharacter(project, targetCharacterId)
+        || await loadPlannerMeta(project, targetCharacterId).catch(() => null);
     if (!project || !meta?.items?.length) return;
 
     const item = meta.items.find(entry => entry.situationId === situationId);
@@ -3416,10 +3438,13 @@ export async function deletePlannerItem(situationId) {
     meta.updatedAt = Date.now();
     if (meta.items.length) {
         await savePlannerMeta(project, meta);
-        window.PROJECT_PLANNER_META = meta;
+        setPlannerMetaForCharacter(project, meta);
     } else {
-        await deletePlannerMeta(project);
-        window.PROJECT_PLANNER_META = null;
+        await deletePlannerMeta(project, targetCharacterId);
+        updatePlannerQueueMetaCache(project, { ...meta, items: [] });
+        if (getSelectedPlannerCharacterId(project) === targetCharacterId) {
+            window.PROJECT_PLANNER_META = null;
+        }
     }
     clearFolderDataCaches(getPlannerPrefix(project));
     renderPlannerResultOverlay();
@@ -3448,6 +3473,7 @@ export async function deleteAllPlannerItems() {
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_IMAGE_PREVIEW_KEY = null;
     window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
+    window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     clearFolderDataCaches(getPlannerPrefix(project));
     updatePlannerQueueMetaCache(project, { ...meta, items: [] });
@@ -3459,8 +3485,10 @@ export async function deleteAllPlannerItems() {
 }
 
 export async function deletePlannerItemFromModal(situationId) {
-    await deletePlannerItem(situationId);
+    const characterId = getPlannerPlanModalCharacterId();
+    await deletePlannerItem(situationId, characterId);
     if (window.PLANNER_PLAN_MODAL_SITUATION_ID === situationId) {
+        window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
         window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
         renderPlannerSituationPlanOverlay();
     }
