@@ -6,9 +6,9 @@ import * as Explorer from './explorer.js';
 import * as Craft from './craft.js?v=v4-weight-editor-20260810a';
 import * as TempGallery from './temp_gallery.js?v=internal-folder-filter-20260721a';
 import * as Modals from './modals.js';
-import * as Project from './project.js?v=planner-generation-sequence-20260726a';
+import * as Project from './project.js?v=situation-v4-weight-20260810a';
 import * as ImageEditor from './image_editor.js?v=image-editor-history-20260607a';
-import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=v4-weight-editor-20260810a';
+import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=situation-v4-weight-20260810a';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지
 Object.assign(window, Api, Ui, Explorer, Craft, TempGallery, Modals, Project, ImageEditor);

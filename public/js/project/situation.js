@@ -163,7 +163,7 @@ export function renderSituationCharacterProgress(project, situation, state = {})
 export function renderSituationV4PromptRow(row = {}, index = 0) {
     const rowId = index;
     const label = Number.isFinite(Number(index)) && Number(index) < 1000 ? Number(index) + 1 : '새 항목';
-    const inputClass = 'w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
+    const inputClass = 'situation-v4-prompt-input auto-resize-textarea w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
     return `
         <div data-situation-v4-row="${rowId}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-900/40 p-2">
             <div class="flex items-center justify-between gap-2 mb-2">
@@ -173,11 +173,11 @@ export function renderSituationV4PromptRow(row = {}, index = 0) {
                 </button>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <input id="situation-v4-${rowId}-subject" value="${escapeHtml(row.subject || '')}" class="${inputClass}" placeholder="캐릭터">
-                <input id="situation-v4-${rowId}-clothing" value="${escapeHtml(row.clothing || '')}" class="${inputClass}" placeholder="의상">
-                <input id="situation-v4-${rowId}-expression" value="${escapeHtml(row.expression || '')}" class="${inputClass}" placeholder="표정">
-                <input id="situation-v4-${rowId}-action" value="${escapeHtml(row.action || '')}" class="${inputClass}" placeholder="행위">
-                <input id="situation-v4-${rowId}-negative" value="${escapeHtml(row.negative || '')}" class="${inputClass} md:col-span-2" placeholder="부정 프롬프트">
+                <textarea id="situation-v4-${rowId}-subject" rows="1" class="${inputClass}" placeholder="캐릭터">${escapeHtml(row.subject || '')}</textarea>
+                <textarea id="situation-v4-${rowId}-clothing" rows="1" class="${inputClass}" placeholder="의상">${escapeHtml(row.clothing || '')}</textarea>
+                <textarea id="situation-v4-${rowId}-expression" rows="1" class="${inputClass}" placeholder="표정">${escapeHtml(row.expression || '')}</textarea>
+                <textarea id="situation-v4-${rowId}-action" rows="1" class="${inputClass}" placeholder="행위">${escapeHtml(row.action || '')}</textarea>
+                <textarea id="situation-v4-${rowId}-negative" rows="1" class="${inputClass} md:col-span-2" placeholder="부정 프롬프트">${escapeHtml(row.negative || '')}</textarea>
             </div>
         </div>
     `;
@@ -233,6 +233,7 @@ export function addSituationV4PromptRow() {
     const rowId = Date.now();
     container.insertAdjacentHTML('beforeend', renderSituationV4PromptRow({}, rowId));
     syncSituationV4PromptAddButton();
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
     refreshProjectIcons();
 }
 
@@ -440,6 +441,7 @@ export async function renameActiveSituation() {
 export function previewActiveSituationRating(value) {
     const field = document.getElementById('situation-clothing-field');
     if (field) field.classList.toggle('hidden', getSituationRating({ rating: value }) !== 'nsfw');
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
 }
 
 export async function changeActiveSituationPath() {

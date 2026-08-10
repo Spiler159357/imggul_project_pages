@@ -7,6 +7,7 @@ const PROMPT_WEIGHT_SELECTOR = [
     '#character-prompt-clothing-input',
     '#character-prompt-negative-input',
     '#situation-composition-input',
+    '#situation-clothing-input',
     '#situation-expression-input',
     '#situation-action-input',
     '#situation-negative-input',
@@ -18,7 +19,8 @@ const PROMPT_WEIGHT_SELECTOR = [
     '#planner-plan-action',
     '#planner-plan-background',
     '#planner-plan-negative',
-    '.craft-v4-prompt-input'
+    '.craft-v4-prompt-input',
+    '.situation-v4-prompt-input'
 ].join(', ');
 
 const EMPHASIS_STEP = 1.05;
