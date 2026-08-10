@@ -701,11 +701,11 @@ function renderCraftV4PromptRow(id, row = {}) {
     return `<div data-craft-v4-row="${id}" id="char-box-${id}" class="bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 shadow-sm relative">
         <div class="flex justify-between items-center mb-2"><span class="text-[10px] font-bold text-gray-700 dark:text-gray-300">V4 캐릭터</span><button type="button" onclick="window.removeExtraCharacter(${id})" class="text-[10px] text-red-500 hover:text-red-700"><i data-lucide="trash-2" class="w-3 h-3"></i></button></div>
         <div class="space-y-1.5">
-            <input type="text" id="char-subject-${id}" value="${escapeCraftAttr(row.subject)}" oninput="window.saveCraftSettings()" class="w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="캐릭터 (예: 1girl, blonde hair...)">
-            <input type="text" id="char-clothing-${id}" value="${escapeCraftAttr(row.clothing)}" oninput="window.saveCraftSettings()" class="w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="의상 (예: school uniform...)">
-            <input type="text" id="char-expression-${id}" value="${escapeCraftAttr(row.expression)}" oninput="window.saveCraftSettings()" class="w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="표정 (예: smiling, crying...)">
-            <input type="text" id="char-action-${id}" value="${escapeCraftAttr(row.action)}" oninput="window.saveCraftSettings()" class="w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="행위 (예: running, sitting...)">
-            <div class="pt-1 mt-1 border-t border-gray-100 dark:border-gray-600"><input type="text" id="char-negative-${id}" value="${escapeCraftAttr(row.negative)}" oninput="window.saveCraftSettings()" class="w-full p-1.5 text-[10px] border border-red-200 dark:border-red-900 rounded bg-red-50/50 dark:bg-red-900/10 text-red-700 dark:text-red-300" placeholder="전용 부정 프롬프트 (옵션)"></div>
+            <textarea id="char-subject-${id}" rows="1" oninput="window.saveCraftSettings()" class="craft-v4-prompt-input auto-resize-textarea w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="캐릭터 (예: 1girl, blonde hair...)">${escapeCraftAttr(row.subject)}</textarea>
+            <textarea id="char-clothing-${id}" rows="1" oninput="window.saveCraftSettings()" class="craft-v4-prompt-input auto-resize-textarea w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="의상 (예: school uniform...)">${escapeCraftAttr(row.clothing)}</textarea>
+            <textarea id="char-expression-${id}" rows="1" oninput="window.saveCraftSettings()" class="craft-v4-prompt-input auto-resize-textarea w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="표정 (예: smiling, crying...)">${escapeCraftAttr(row.expression)}</textarea>
+            <textarea id="char-action-${id}" rows="1" oninput="window.saveCraftSettings()" class="craft-v4-prompt-input auto-resize-textarea w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="행위 (예: running, sitting...)">${escapeCraftAttr(row.action)}</textarea>
+            <div class="pt-1 mt-1 border-t border-gray-100 dark:border-gray-600"><textarea id="char-negative-${id}" rows="1" oninput="window.saveCraftSettings()" class="craft-v4-prompt-input auto-resize-textarea w-full p-1.5 text-[10px] border border-red-200 dark:border-red-900 rounded bg-red-50/50 dark:bg-red-900/10 text-red-700 dark:text-red-300" placeholder="전용 부정 프롬프트 (옵션)">${escapeCraftAttr(row.negative)}</textarea></div>
         </div>
     </div>`;
 }
@@ -719,6 +719,7 @@ export function addCraftV4PromptRow(row = {}) {
     container.insertAdjacentHTML('beforeend', renderCraftV4PromptRow(id, row));
     window.EXTRA_CHAR_COUNT = currentCount + 1;
     window.saveCraftSettings();
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
     if (window.lucide) lucide.createIcons();
 }
 

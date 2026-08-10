@@ -17,7 +17,8 @@ const PROMPT_WEIGHT_SELECTOR = [
     '#planner-plan-expression',
     '#planner-plan-action',
     '#planner-plan-background',
-    '#planner-plan-negative'
+    '#planner-plan-negative',
+    '.craft-v4-prompt-input'
 ].join(', ');
 
 const EMPHASIS_STEP = 1.05;
