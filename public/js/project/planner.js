@@ -1988,6 +1988,7 @@ function renderPlannerCharacterGridForSituation(project, characters, situation) 
                     ? plannerSituationScopeState.metas.get(character.id)
                     : getPlannerMetaForCharacter(project, character.id);
                 const loadError = plannerSituationScopeState.errors.get(character.id) || '';
+                const situationImage = getPlannerSituationImage(character, situation, situationIndex);
                 const eligibility = getPlannerPlanEligibility({
                     character,
                     situation,
@@ -2011,8 +2012,9 @@ function renderPlannerCharacterGridForSituation(project, characters, situation) 
                 return `
                     <div class="min-h-[104px] rounded-lg border ${eligibleClass} p-3">
                         <div class="flex items-start gap-3">
-                            <span class="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900 text-xs font-extrabold text-gray-500 dark:text-gray-400">
-                                <i data-lucide="user" class="h-5 w-5"></i>
+                            <span class="relative flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-gray-900 text-xs font-extrabold text-gray-500 dark:text-gray-400">
+                                ${situationImage ? `<img src="${escapeHtml(getVersionedAssetUrl(situationImage))}" alt="" class="h-full w-full object-cover" loading="lazy" onerror="this.classList.add('hidden'); this.nextElementSibling?.classList.remove('hidden')">` : ''}
+                                <i data-lucide="user" class="h-5 w-5 ${situationImage ? 'hidden' : ''}" aria-hidden="true"></i>
                             </span>
                             <div class="min-w-0 flex-1">
                                 <p class="truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(character.name || character.folderName || character.id)}</p>
@@ -2204,7 +2206,7 @@ export function renderPlannerPanel(project, situations) {
     ` : '<div class="flex-1 flex items-center justify-center text-sm font-bold text-gray-500 dark:text-gray-400 text-center">캐릭터와 상황을 선택한 뒤 추가하기를 눌러 플랜 작성안을 만드세요.</div>';
 
     const scopeButton = (scope, label) => `
-        <button type="button" role="tab" aria-selected="${planScope === scope ? 'true' : 'false'}" onclick="window.setPlannerPlanScope('${scope}')" class="flex-1 px-3 py-1.5 rounded-md text-[11px] font-bold transition ${planScope === scope ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">
+        <button type="button" role="tab" aria-selected="${planScope === scope ? 'true' : 'false'}" onclick="window.setPlannerPlanScope('${scope}')" class="min-w-0 flex-1 whitespace-nowrap px-2 sm:px-3 py-1.5 rounded-md text-[10px] sm:text-[11px] font-bold transition ${planScope === scope ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">
             ${label}
         </button>
     `;
