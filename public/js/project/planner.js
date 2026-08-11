@@ -1947,41 +1947,51 @@ function renderPlannerCharacterQueue(queueMetas = []) {
     `;
 }
 
+function renderPlannerPlanCard({ image, item, title, fallbackText, clickAction, mode = 'plan' }) {
+    const generatedCount = Array.isArray(item?.images) ? item.images.length : 0;
+    const complete = !!image;
+    const selected = !!item?.selectedImage;
+    const statusText = mode === 'result'
+        ? (selected ? '선택됨' : generatedCount ? `결과 ${generatedCount}` : '결과 없음')
+        : (complete ? '완료' : '미완료');
+    return `
+        <button type="button" onclick="${clickAction}" class="group min-h-[112px] rounded-lg border ${item ? 'border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'} p-3 text-left hover:border-indigo-400 transition">
+            <div class="flex items-start gap-3">
+                <span class="flex h-14 w-14 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-gray-900 text-[11px] font-extrabold text-gray-500 dark:text-gray-400">
+                    ${image ? `<img src="${escapeHtml(getVersionedAssetUrl(image))}" alt="" class="h-full w-full object-cover" loading="lazy" onerror="this.classList.add('hidden'); this.nextElementSibling?.classList.remove('hidden')"><span class="hidden">${escapeHtml(fallbackText)}</span>` : escapeHtml(fallbackText)}
+                </span>
+                <span class="min-w-0 flex-1">
+                    <span class="block truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(title)}</span>
+                    <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${complete || selected ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}">${escapeHtml(statusText)}</span>
+                    ${item ? `<span class="mt-1 block truncate text-[10px] text-gray-500 dark:text-gray-400">플랜 ${escapeHtml(clampPlannerImageCount(item.count))}회 · ${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>` : '<span class="mt-1 block text-[10px] text-gray-400 dark:text-gray-500">플랜 없음</span>'}
+                </span>
+            </div>
+        </button>
+    `;
+}
+
+function renderPlannerPlanCardGrid(cards) {
+    return `<div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">${cards.join('')}</div>`;
+}
+
 export function renderPlannerSituationGrid(project, situations, character, meta, mode = 'plan') {
     if (!character) return renderEmptyState('플래너에 사용할 캐릭터를 선택하세요.');
     if (!situations.length) return renderEmptyState('먼저 상황을 추가하세요.');
 
-    return `
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-            ${situations.map((situation, index) => {
-                const image = getPlannerSituationImage(character, situation, index);
-                const item = getPlannerSituationItem(meta, situation.id);
-                const generatedCount = Array.isArray(item?.images) ? item.images.length : 0;
-                const complete = !!image;
-                const selected = !!item?.selectedImage;
-                const statusText = mode === 'result'
-                    ? (selected ? '선택됨' : generatedCount ? `결과 ${generatedCount}` : '결과 없음')
-                    : (complete ? '완료' : '미완료');
-                const clickAction = mode === 'result'
-                    ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id || '')}')` : `window.setPlannerStatus('이 상황에 저장된 플랜 결과가 없습니다.')`)
-                    : `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}')`;
-                return `
-                    <button type="button" onclick="${clickAction}" class="group min-h-[112px] rounded-lg border ${item ? 'border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'} p-3 text-left hover:border-indigo-400 transition">
-                        <div class="flex items-start gap-3">
-                            <span class="flex h-14 w-14 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-gray-900 text-[11px] font-extrabold text-gray-500 dark:text-gray-400">
-                                ${image ? `<img src="${escapeHtml(getVersionedAssetUrl(image))}" alt="" class="h-full w-full object-cover" loading="lazy">` : escapeHtml(getSituationImageNumber(project, situation))}
-                            </span>
-                            <span class="min-w-0 flex-1">
-                                <span class="block truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(getSituationDisplayName(situation))}</span>
-                                <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${complete || selected ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}">${escapeHtml(statusText)}</span>
-                                ${item ? `<span class="mt-1 block truncate text-[10px] text-gray-500 dark:text-gray-400">플랜 ${escapeHtml(clampPlannerImageCount(item.count))}회 · ${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>` : '<span class="mt-1 block text-[10px] text-gray-400 dark:text-gray-500">플랜 없음</span>'}
-                            </span>
-                        </div>
-                    </button>
-                `;
-            }).join('')}
-        </div>
-    `;
+    return renderPlannerPlanCardGrid(situations.map((situation, index) => {
+        const item = getPlannerSituationItem(meta, situation.id);
+        const clickAction = mode === 'result'
+            ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id || '')}')` : `window.setPlannerStatus('이 상황에 저장된 플랜 결과가 없습니다.')`)
+            : `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}')`;
+        return renderPlannerPlanCard({
+            image: getPlannerSituationImage(character, situation, index),
+            item,
+            title: getSituationDisplayName(situation),
+            fallbackText: getSituationImageNumber(project, situation),
+            clickAction,
+            mode
+        });
+    }));
 }
 
 function renderPlannerCharacterGridForSituation(project, characters, situation) {
@@ -1993,52 +2003,18 @@ function renderPlannerCharacterGridForSituation(project, characters, situation) 
 
     const situations = getProjectItems(project, 'situations');
     const situationIndex = situations.findIndex(entry => entry.id === situation.id);
-    return `
-        <div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">
-            ${characters.map(character => {
-                const meta = plannerSituationScopeState.metas.has(character.id)
-                    ? plannerSituationScopeState.metas.get(character.id)
-                    : getPlannerMetaForCharacter(project, character.id);
-                const loadError = plannerSituationScopeState.errors.get(character.id) || '';
-                const situationImage = getPlannerSituationImage(character, situation, situationIndex);
-                const eligibility = getPlannerPlanEligibility({
-                    character,
-                    situation,
-                    situationIndex,
-                    meta,
-                    loadError
-                });
-                const preserved = eligibility.hasPlan || eligibility.hasFinalImage;
-                const eligibleClass = eligibility.eligible
-                    ? 'border-amber-200 dark:border-amber-800 bg-amber-50/50 dark:bg-amber-950/20'
-                    : eligibility.reason === 'load_error'
-                        ? 'border-red-200 dark:border-red-900 bg-red-50/50 dark:bg-red-950/20'
-                        : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800';
-                const badgeClass = eligibility.eligible
-                    ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'
-                    : eligibility.reason === 'load_error'
-                        ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
-                        : preserved
-                            ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'
-                            : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300';
-                return `
-                    <button type="button" onclick="window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id)}')" class="group w-full min-h-[104px] rounded-lg border ${eligibleClass} p-3 text-left hover:border-indigo-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition">
-                        <div class="flex items-start gap-3">
-                            <span class="relative flex h-12 w-12 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-gray-900 text-xs font-extrabold text-gray-500 dark:text-gray-400">
-                                ${situationImage ? `<img src="${escapeHtml(getVersionedAssetUrl(situationImage))}" alt="" class="h-full w-full object-cover" loading="lazy" onerror="this.classList.add('hidden'); this.nextElementSibling?.classList.remove('hidden')">` : ''}
-                                <i data-lucide="user" class="h-5 w-5 ${situationImage ? 'hidden' : ''}" aria-hidden="true"></i>
-                            </span>
-                            <div class="min-w-0 flex-1">
-                                <p class="truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(character.name || character.folderName || character.id)}</p>
-                                <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${badgeClass}">${escapeHtml(eligibility.label)}</span>
-                                <p class="mt-1 truncate text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(loadError || `${getSituationImageNumber(project, situation)}.webp`)}</p>
-                            </div>
-                        </div>
-                    </button>
-                `;
-            }).join('')}
-        </div>
-    `;
+    return renderPlannerPlanCardGrid(characters.map(character => {
+        const meta = plannerSituationScopeState.metas.has(character.id)
+            ? plannerSituationScopeState.metas.get(character.id)
+            : getPlannerMetaForCharacter(project, character.id);
+        return renderPlannerPlanCard({
+            image: getPlannerSituationImage(character, situation, situationIndex),
+            item: getPlannerSituationItem(meta, situation.id),
+            title: character.name || character.folderName || character.id,
+            fallbackText: getSituationImageNumber(project, situation),
+            clickAction: `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id)}')`
+        });
+    }));
 }
 
 export function renderPlannerSituationPlanModal(project, situation, character, meta) {
