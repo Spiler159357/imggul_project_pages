@@ -1,3 +1,5 @@
+import { makeR2ImageVisibilityMetadata } from './image-serving.js';
+
 const RECORD_TYPES = new Set(["settings", "run", "confirm", "rate"]);
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "paused", "cancel_requested"]);
 const TERMINAL_JOB_STATUSES = new Set(["completed", "partial_failed", "failed", "cancelled"]);
@@ -1409,14 +1411,16 @@ async function preparePlannerCompactTargetWrite(env, {
     const onlyIf = previousTarget
         ? { etagMatches: previousTarget.etag }
         : { etagDoesNotMatch: "*" };
+    const originalTargetMetadata = backup?.customMetadata?.plannerConfirmOriginalMissing === "true"
+        ? {}
+        : (backup?.customMetadata || {});
     const stored = await env.imgBucket.put(targetR2Key, object.body, {
         onlyIf,
         httpMetadata: {
             contentType: candidate.mimeType || object.httpMetadata?.contentType || "image/webp"
         },
         customMetadata: {
-            ispublic: "false",
-            visibilityconfigured: "true",
+            ...makeR2ImageVisibilityMetadata(targetR2Key, originalTargetMetadata),
             plannerConfirmOperationId: operationId,
             plannerAssetId: candidate.assetId,
             plannerGenerationSequence: String(generationSequence)

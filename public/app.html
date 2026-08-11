@@ -1094,6 +1094,13 @@
 
             <div class="p-3 sm:p-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 flex flex-col gap-3 flex-shrink-0">
                 
+                <div class="hidden items-center admin-only-ui" id="image-private-check-wrapper">
+                    <input type="checkbox" id="modal-image-private-check" class="w-4 h-4 text-red-600 border-gray-300 rounded focus:ring-red-500 dark:bg-gray-700 dark:border-gray-600">
+                    <label for="modal-image-private-check" class="ml-2 text-xs sm:text-sm text-gray-700 dark:text-gray-300 flex items-center cursor-pointer">
+                        <i data-lucide="lock" class="w-3 h-3 sm:w-3.5 sm:h-3.5 mr-1"></i> 이 이미지를 비공개로 설정 (게스트에서 숨김)
+                    </label>
+                </div>
+
                 <div class="flex items-center admin-only-ui" id="public-check-wrapper">
                     <input type="checkbox" id="modal-public-check" class="w-4 h-4 text-indigo-600 border-gray-300 rounded focus:ring-indigo-500 dark:bg-gray-700 dark:border-gray-600">
                     <label for="modal-public-check" class="ml-2 text-xs sm:text-sm text-gray-700 dark:text-gray-300 flex items-center cursor-pointer">

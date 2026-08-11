@@ -557,6 +557,8 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                 httpMetadata: { contentType: "image/webp" },
                 customMetadata: {
                     ispublic: "false",
+                    visibilityconfigured: "true",
+                    visibilitysource: "system",
                     plannerCompact: "true",
                     assetId: slot.assetId,
                     generationSequence: String(slot.generationSequence),

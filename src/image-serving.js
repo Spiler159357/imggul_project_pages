@@ -88,6 +88,29 @@ export function isImageObjectKey(key) {
     return Object.prototype.hasOwnProperty.call(IMAGE_CONTENT_TYPES, extension);
 }
 
+export function isExplicitlyPrivateR2ImageObject(key, customMetadata = {}) {
+    return isImageObjectKey(key)
+        && customMetadata?.visibilityconfigured === 'true'
+        && customMetadata?.ispublic === 'false';
+}
+
+export function makeR2ImageVisibilityMetadata(key, customMetadata = {}, {
+    forcePrivate = false,
+    preserveExplicitPrivate = true
+} = {}) {
+    const isPrivate = forcePrivate || (
+        preserveExplicitPrivate
+        && isExplicitlyPrivateR2ImageObject(key, customMetadata)
+    );
+    return {
+        ispublic: isPrivate ? 'false' : 'true',
+        visibilityconfigured: 'true',
+        visibilitysource: isPrivate
+            ? (forcePrivate ? 'system' : (customMetadata?.visibilitysource || 'user'))
+            : 'default'
+    };
+}
+
 function isInternalImageKey(key) {
     const parts = String(key || '').split('/').map(part => part.toLowerCase());
     if (parts.some(part => INTERNAL_PATH_PARTS.has(part))) return true;
@@ -97,7 +120,7 @@ function isInternalImageKey(key) {
 
 export function isPublicR2ImageObject(key, customMetadata = {}) {
     if (!isImageObjectKey(key) || isInternalImageKey(key)) return false;
-    return customMetadata?.ispublic === 'true';
+    return !isExplicitlyPrivateR2ImageObject(key, customMetadata);
 }
 
 function noStoreResponse(status = 404, body = 'Not found') {

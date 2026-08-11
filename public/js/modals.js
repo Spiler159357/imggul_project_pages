@@ -453,14 +453,17 @@ window.openModal = async function(key, url, isImage, isText, isPublic, skipHisto
     
     const imgEl = document.getElementById('modal-img'); const textEl = document.getElementById('modal-text-editor');
     const imgActions = document.getElementById('img-actions'); const textActions = document.getElementById('text-actions'); const guestMsg = document.getElementById('modal-text-message'); const publicCheckWrapper = document.getElementById('public-check-wrapper');
+    const imagePrivateCheckWrapper = document.getElementById('image-private-check-wrapper');
     const publicCheck = document.getElementById('modal-public-check');
+    const imagePrivateCheck = document.getElementById('modal-image-private-check');
     if (publicCheck) { publicCheck.checked = isPublic; publicCheck.onclick = (e) => window.toggleFilePublic(e.target.checked); }
+    if (imagePrivateCheck) { imagePrivateCheck.checked = !isPublic; imagePrivateCheck.onclick = (e) => window.toggleImagePrivate(e.target.checked); }
 
-    if(imgEl) imgEl.classList.add('hidden'); if(textEl) textEl.classList.add('hidden'); if(imgActions) imgActions.classList.add('hidden'); if(textActions) textActions.classList.add('hidden'); if(guestMsg) guestMsg.classList.add('hidden'); if(publicCheckWrapper) publicCheckWrapper.classList.add('hidden'); 
+    if(imgEl) imgEl.classList.add('hidden'); if(textEl) textEl.classList.add('hidden'); if(imgActions) imgActions.classList.add('hidden'); if(textActions) textActions.classList.add('hidden'); if(guestMsg) guestMsg.classList.add('hidden'); if(publicCheckWrapper) publicCheckWrapper.classList.add('hidden'); if(imagePrivateCheckWrapper) { imagePrivateCheckWrapper.classList.add('hidden'); imagePrivateCheckWrapper.classList.remove('flex'); }
 
     if (isImage) {
         if(imgEl) { imgEl.src = url; imgEl.classList.remove('hidden'); }
-        if(window.IS_ADMIN && publicCheckWrapper && /\.(png|jpe?g|webp)$/i.test(fileName)) publicCheckWrapper.classList.remove('hidden');
+        if(window.IS_ADMIN && imagePrivateCheckWrapper && /\.(png|jpe?g|webp)$/i.test(fileName)) { imagePrivateCheckWrapper.classList.remove('hidden'); imagePrivateCheckWrapper.classList.add('flex'); }
         if(imgActions) {
             imgActions.classList.remove('hidden'); imgActions.classList.add('flex');
             if (!document.getElementById('modal-inpaint-craft-btn')) {
@@ -506,6 +509,32 @@ window.toggleFilePublic = async function(isPublic) {
         if (!res.ok) throw new Error('설정 변경 실패');
         alert(isPublic ? "파일이 [공개] 상태로 변경되었습니다." : "파일이 [비공개] 상태로 변경되었습니다."); window.refreshGallery();
     } catch(err) { alert('설정 토글 에러: ' + err.message); const chk = document.getElementById('modal-public-check'); if(chk) chk.checked = !isPublic; }
+};
+
+/**
+ * 역할: 현재 이미지의 명시적 비공개 상태를 서버에 저장하고 갤러리를 갱신한다.
+ * 매개변수: isPrivate - 비공개 체크 여부.
+ * 반환값: 명시 반환 없음.
+ */
+window.toggleImagePrivate = async function(isPrivate) {
+    try {
+        const res = await fetch('/api/manage', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                action: 'toggle_public',
+                key: window.currentFileKey,
+                isPublic: !isPrivate
+            })
+        });
+        if (!res.ok) throw new Error('설정 변경 실패');
+        alert(isPrivate ? '이미지가 [비공개] 상태로 변경되었습니다.' : '이미지가 [공개] 상태로 변경되었습니다.');
+        window.refreshGallery();
+    } catch (err) {
+        alert('설정 토글 에러: ' + err.message);
+        const checkbox = document.getElementById('modal-image-private-check');
+        if (checkbox) checkbox.checked = !isPrivate;
+    }
 };
 
 /**

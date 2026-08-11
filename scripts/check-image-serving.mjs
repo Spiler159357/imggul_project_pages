@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { serveR2Image } from '../src/image-serving.js';
+import { makeR2ImageVisibilityMetadata, serveR2Image } from '../src/image-serving.js';
 
 function makeObject(key, isPublic, body = 'image-data', visibilityWasConfigured = true) {
     return {
@@ -58,8 +58,8 @@ assert.equal(privateAnonymousResponse.status, 404);
 assert.equal(privateAnonymousResponse.headers.get('Cache-Control'), 'no-store');
 
 const legacyResponse = await requestImage(env, 'project/legacy.webp');
-assert.equal(legacyResponse.status, 404);
-assert.equal(legacyResponse.headers.get('Cache-Control'), 'no-store');
+assert.equal(legacyResponse.status, 200);
+assert.equal(legacyResponse.headers.get('Cache-Control'), 'no-cache, must-revalidate');
 
 const privateAdminResponse = await requestImage(env, 'project/private.webp', {
     headers: { Cookie: 'auth=admin-secret' }
@@ -77,5 +77,31 @@ assert.equal(await headResponse.text(), '');
 
 const traversalResponse = await requestImage(env, 'project/../private.webp');
 assert.equal(traversalResponse.status, 404);
+
+assert.deepEqual(makeR2ImageVisibilityMetadata('project/new.webp'), {
+    ispublic: 'true',
+    visibilityconfigured: 'true',
+    visibilitysource: 'default'
+});
+assert.deepEqual(makeR2ImageVisibilityMetadata('project/private.webp', {
+    ispublic: 'false',
+    visibilityconfigured: 'true',
+    visibilitysource: 'user'
+}), {
+    ispublic: 'false',
+    visibilityconfigured: 'true',
+    visibilitysource: 'user'
+});
+assert.deepEqual(makeR2ImageVisibilityMetadata('project/candidate.webp', {}, {
+    forcePrivate: true
+}), {
+    ispublic: 'false',
+    visibilityconfigured: 'true',
+    visibilitysource: 'system'
+});
+assert.equal(makeR2ImageVisibilityMetadata('project/save-as.webp', {
+    ispublic: 'false',
+    visibilityconfigured: 'true'
+}, { preserveExplicitPrivate: false }).ispublic, 'true');
 
 console.log('image-serving checks passed');

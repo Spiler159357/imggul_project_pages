@@ -11,6 +11,7 @@ import {
 import {
     isImageObjectKey,
     isPublicR2ImageObject,
+    makeR2ImageVisibilityMetadata,
     normalizeImageObjectKey,
     serveR2Image
 } from "../src/image-serving.js";
@@ -1815,7 +1816,9 @@ async function saveImageEditorOutput(env, { sourceKey, outputKey, documentId, do
 
     const mergedCustomMetadata = {
         ...(sourceObject.customMetadata || {}),
-        ispublic: (sourceObject.customMetadata?.ispublic === 'true') ? 'true' : 'false',
+        ...makeR2ImageVisibilityMetadata(outputKey, sourceObject.customMetadata, {
+            preserveExplicitPrivate: overwrite
+        }),
         edited: 'true',
         editorDocumentId: documentId || '',
         derivedFromKey: sourceKey
@@ -2649,7 +2652,8 @@ export async function onRequest(context) {
                 const newMetadata = {
                     ...object.customMetadata,
                     ispublic: isPublic ? 'true' : 'false',
-                    visibilityconfigured: 'true'
+                    visibilityconfigured: 'true',
+                    visibilitysource: 'user'
                 };
                 await env.imgBucket.put(key, object.body, {
                     httpMetadata: object.httpMetadata,
@@ -2960,11 +2964,18 @@ export async function onRequest(context) {
                 && plannerGenerationSequence > 0
                 && finalKey.includes('/_planner_temp_image/')
             );
+            const existingImage = isImageUpload
+                ? await env.imgBucket.head(finalKey)
+                : null;
             await env.imgBucket.put(finalKey, request.body, {
               httpMetadata: { contentType: uploadContentType },
               customMetadata: {
-                  ispublic: isPlannerCompactUpload ? 'false' : (isImageUpload ? 'true' : 'false'),
-                  visibilityconfigured: 'true',
+                  ...(existingImage?.customMetadata || {}),
+                  ...(isImageUpload
+                      ? makeR2ImageVisibilityMetadata(finalKey, existingImage?.customMetadata, {
+                          forcePrivate: isPlannerCompactUpload
+                      })
+                      : { ispublic: 'false', visibilityconfigured: 'true' }),
                   ...(isPlannerCompactUpload ? {
                       plannerCompact: 'true',
                       assetId: plannerAssetId,

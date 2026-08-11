@@ -129,13 +129,13 @@ assert.equal(summaryResponse.status, 200);
 assert.equal(summaryResponse.headers.get('Cache-Control'), 'no-store, no-cache, must-revalidate');
 const summary = (await summaryResponse.json()).data;
 assert.equal(summary.characters.length, 1);
-assert.equal(summary.characters[0].imageCount, 1);
+assert.equal(summary.characters[0].imageCount, 3);
 assert.match(summary.characters[0].coverUrl, /file=1\.webp$/);
 
 const detailResponse = await guestRequest('/api/guest/projects/project/characters/character');
 assert.equal(detailResponse.status, 200);
 const detail = (await detailResponse.json()).data;
-assert.deepEqual(detail.images.map(image => image.path), ['1.webp']);
+assert.deepEqual(detail.images.map(image => image.path), ['1.webp', '3.webp', '4.webp']);
 assert.ok(characterListOptions.length >= 2);
 assert.ok(characterListOptions.every(options => options.include?.includes('customMetadata')));
 
@@ -154,12 +154,19 @@ assert.equal(publicHeadResponse.status, 200);
 assert.equal(publicHeadResponse.headers.get('Cache-Control'), 'no-store');
 assert.equal(await publicHeadResponse.text(), '');
 
-for (const file of ['2.webp', '3.webp', '4.webp', '_planner_temp_image%2Finternal.webp']) {
+for (const file of ['2.webp', '_planner_temp_image%2Finternal.webp']) {
     const response = await guestRequest(
         `/api/guest/projects/project/characters/character/image?file=${file}`
     );
     assert.equal(response.status, 404, `${file} must not be available to guests`);
     assert.equal(response.headers.get('Cache-Control'), 'no-store, no-cache, must-revalidate');
+}
+
+for (const file of ['3.webp', '4.webp']) {
+    const response = await guestRequest(
+        `/api/guest/projects/project/characters/character/image?file=${file}`
+    );
+    assert.equal(response.status, 200, `${file} must use the default-public image policy`);
 }
 
 const privateAdminGuestResponse = await guestRequest(
