@@ -51,15 +51,15 @@ const publicResponse = await requestImage(env, 'project/public.webp');
 assert.equal(publicResponse.status, 200);
 assert.equal(publicResponse.headers.get('Content-Type'), 'image/webp');
 assert.equal(publicResponse.headers.get('Access-Control-Allow-Origin'), '*');
-assert.match(publicResponse.headers.get('Cache-Control'), /^public,/);
+assert.equal(publicResponse.headers.get('Cache-Control'), 'no-cache, must-revalidate');
 
 const privateAnonymousResponse = await requestImage(env, 'project/private.webp');
 assert.equal(privateAnonymousResponse.status, 404);
 assert.equal(privateAnonymousResponse.headers.get('Cache-Control'), 'no-store');
 
 const legacyResponse = await requestImage(env, 'project/legacy.webp');
-assert.equal(legacyResponse.status, 200);
-assert.match(legacyResponse.headers.get('Cache-Control'), /^public,/);
+assert.equal(legacyResponse.status, 404);
+assert.equal(legacyResponse.headers.get('Cache-Control'), 'no-store');
 
 const privateAdminResponse = await requestImage(env, 'project/private.webp', {
     headers: { Cookie: 'auth=admin-secret' }

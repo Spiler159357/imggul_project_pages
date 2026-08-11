@@ -1,4 +1,5 @@
 import { jsonResponse } from './worker-utils.js';
+import { isPublicR2ImageObject } from './image-serving.js';
 
 const IMAGE_EXTENSIONS = new Set(['webp', 'png', 'jpg', 'jpeg']);
 const IMAGE_MIME_TYPES = new Set(['image/webp', 'image/png', 'image/jpeg']);
@@ -56,7 +57,9 @@ function apiError(error) {
 function publicJson(data, init = {}) {
     const headers = new Headers(init.headers || {});
     headers.set('Content-Type', 'application/json; charset=utf-8');
-    headers.set('Cache-Control', 'public, max-age=30, must-revalidate');
+    headers.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+    headers.set('Pragma', 'no-cache');
+    headers.set('Expires', '0');
     return new Response(JSON.stringify({ data }), { ...init, headers });
 }
 
@@ -242,10 +245,14 @@ async function getProjectCharacters(env, project, aliases = {}) {
 }
 
 async function getCharacterImages(env, character, situations = { byImageNumber: new Map(), byId: new Map() }, aliases = {}) {
-    const listing = await listAllObjects(env.imgBucket, { prefix: character.prefix }, 5000);
+    const listing = await listAllObjects(env.imgBucket, {
+        prefix: character.prefix,
+        include: ['customMetadata']
+    }, 5000);
     return listing.objects
         .map(object => ({ object, relativePath: object.key.slice(character.prefix.length) }))
         .filter(item => isGuestImageRelativePath(item.relativePath))
+        .filter(item => isPublicR2ImageObject(item.object.key, item.object.customMetadata))
         .sort((a, b) => a.relativePath.localeCompare(b.relativePath, 'ko', { numeric: true }))
         .map(item => {
             const pathParts = item.relativePath.split('/').filter(Boolean);
@@ -300,7 +307,7 @@ async function getCharacterByPath(env, project, rawCharacterPath, aliases = {}) 
 }
 
 function objectResponse(object, {
-    cacheControl = 'public, max-age=300, must-revalidate',
+    cacheControl = 'no-store',
     method = 'GET',
     isPublic = true
 } = {}) {
@@ -328,8 +335,13 @@ async function serveCharacterImage(request, env, project, rawCharacterPath) {
     if (!isGuestImageRelativePath(relativePath)) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
     const key = `${character.prefix}${relativePath}`;
     if (!key.startsWith(character.prefix)) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
-    const object = await env.imgBucket.get(key);
+    const object = request.method === 'HEAD'
+        ? await env.imgBucket.head(key)
+        : await env.imgBucket.get(key);
     if (!object) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
+    if (!isPublicR2ImageObject(key, object.customMetadata)) {
+        throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
+    }
     return objectResponse(object, { method: request.method });
 }
 

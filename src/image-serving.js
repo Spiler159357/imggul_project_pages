@@ -16,7 +16,7 @@ const INTERNAL_PATH_PARTS = new Set([
     '_guest_posts'
 ]);
 
-const PUBLIC_IMAGE_CACHE_CONTROL = 'public, max-age=300, must-revalidate';
+const PUBLIC_IMAGE_CACHE_CONTROL = 'no-cache, must-revalidate';
 const PRIVATE_IMAGE_CACHE_CONTROL = 'private, no-store';
 const NO_STORE_CACHE_CONTROL = 'no-store';
 
@@ -97,8 +97,7 @@ function isInternalImageKey(key) {
 
 export function isPublicR2ImageObject(key, customMetadata = {}) {
     if (!isImageObjectKey(key) || isInternalImageKey(key)) return false;
-    const visibilityWasConfigured = customMetadata?.visibilityconfigured === 'true';
-    return customMetadata?.ispublic === 'true' || !visibilityWasConfigured;
+    return customMetadata?.ispublic === 'true';
 }
 
 function noStoreResponse(status = 404, body = 'Not found') {
