@@ -1,7 +1,7 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-target-picker-20260814a';
-import { renderSectionHeader } from './manage.js?v=planner-target-picker-20260814a';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-target-picker-20260814a';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-target-picker-20260814a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-target-picker-instant-20260814a';
+import { renderSectionHeader } from './manage.js?v=planner-target-picker-instant-20260814a';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-target-picker-instant-20260814a';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-target-picker-instant-20260814a';
 
 const PLANNER_DEFAULT_IMAGE_COUNT = 10;
 const PLANNER_MIN_IMAGE_COUNT = 1;
@@ -45,11 +45,8 @@ function createPlannerTargetPickerState() {
         projectId: '',
         type: 'character',
         selectedId: '',
-        draftId: '',
         rating: 'all',
-        triggerId: '',
-        applying: false,
-        message: ''
+        triggerId: ''
     };
 }
 
@@ -1750,11 +1747,8 @@ export function openPlannerTargetPicker(type = 'character') {
         projectId: project.id,
         type: normalizedType,
         selectedId,
-        draftId: selectedId,
         rating: 'all',
-        triggerId: normalizedType === 'situation' ? 'planner-situation-picker-trigger' : 'planner-character-picker-trigger',
-        applying: false,
-        message: ''
+        triggerId: normalizedType === 'situation' ? 'planner-situation-picker-trigger' : 'planner-character-picker-trigger'
     });
     document.getElementById(state.triggerId)?.setAttribute('aria-expanded', 'true');
     renderPlannerTargetPickerOverlay();
@@ -1772,19 +1766,7 @@ export function setPlannerTargetPickerRating(rating = 'all') {
     const state = getPlannerTargetPickerState();
     if (!state.open || state.type !== 'situation') return;
     state.rating = ['all', 'sfw', 'nsfw'].includes(rating) ? rating : 'all';
-    state.message = '';
     renderPlannerTargetPickerOverlay({ focusTarget: `planner-target-filter-${state.rating}` });
-}
-
-export function selectPlannerTargetPickerDraft(id = '') {
-    const project = getActiveProject();
-    const state = getPlannerTargetPickerState();
-    if (!project || !state.open || state.projectId !== project.id) return;
-    const collection = getProjectItems(project, state.type === 'situation' ? 'situations' : 'characters');
-    if (!collection.some(item => item.id === id)) return;
-    state.draftId = id;
-    state.message = '';
-    renderPlannerTargetPickerOverlay();
 }
 
 export function handlePlannerTargetPickerKeydown(event) {
@@ -1831,17 +1813,17 @@ export function handlePlannerTargetPickerKeydown(event) {
     cards[nextIndex].focus();
 }
 
-export async function applyPlannerTargetPickerSelection() {
+export async function applyPlannerTargetPickerSelection(targetId = '') {
     const project = getActiveProject();
     const state = getPlannerTargetPickerState();
-    if (!project || !state.open || state.applying || state.projectId !== project.id) return;
+    if (!project || !state.open || state.projectId !== project.id) return;
     const triggerId = state.triggerId;
 
     if (state.type === 'situation') {
-        const situation = getProjectItems(project, 'situations').find(item => item.id === state.draftId);
+        const situation = getProjectItems(project, 'situations').find(item => item.id === targetId);
         if (!situation) {
-            state.message = '선택한 상황을 찾을 수 없습니다.';
-            renderPlannerTargetPickerOverlay({ focusTarget: 'planner-target-picker-apply' });
+            closePlannerTargetPicker();
+            setPlannerStatus('선택한 상황을 찾을 수 없습니다.');
             return;
         }
         if (situation.id === state.selectedId) {
@@ -1855,10 +1837,10 @@ export async function applyPlannerTargetPickerSelection() {
         return;
     }
 
-    const character = getProjectItems(project, 'characters').find(item => item.id === state.draftId);
+    const character = getProjectItems(project, 'characters').find(item => item.id === targetId);
     if (!character) {
-        state.message = '선택한 캐릭터를 찾을 수 없습니다.';
-        renderPlannerTargetPickerOverlay({ focusTarget: 'planner-target-picker-apply' });
+        closePlannerTargetPicker();
+        setPlannerStatus('선택한 캐릭터를 찾을 수 없습니다.');
         return;
     }
     if (character.id === state.selectedId) {
@@ -1866,9 +1848,6 @@ export async function applyPlannerTargetPickerSelection() {
         return;
     }
 
-    state.applying = true;
-    state.message = '캐릭터 정보를 불러오는 중입니다.';
-    renderPlannerTargetPickerOverlay({ focusTarget: 'none' });
     window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = character.id;
     setCachedPlannerCharacterId(project, character.id);
     resetPlannerTargetPickerState();
@@ -2375,17 +2354,16 @@ function renderPlannerCharacterPickerCards(characters, state) {
         <div data-planner-target-grid class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             ${characters.map(character => {
                 const id = character.id || '';
-                const selected = id === state.draftId;
                 const current = id === state.selectedId;
                 const title = character.name || character.alias || character.folderName || id;
                 const path = character.folderName || id;
                 return `
-                    <button type="button" data-planner-target-id="${escapeHtml(id)}" onclick="window.selectPlannerTargetPickerDraft('${escapeJsString(id)}')" aria-pressed="${selected ? 'true' : 'false'}" class="group overflow-hidden rounded-lg border text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${selected ? 'border-indigo-500 bg-indigo-50/70 ring-2 ring-indigo-500 dark:bg-indigo-950/30' : 'border-gray-200 bg-white hover:border-indigo-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600'}">
+                    <button type="button" data-planner-target-id="${escapeHtml(id)}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(id)}')" aria-pressed="${current ? 'true' : 'false'}" class="group overflow-hidden rounded-lg border text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${current ? 'border-indigo-500 bg-indigo-50/70 ring-2 ring-indigo-500 dark:bg-indigo-950/30' : 'border-gray-200 bg-white hover:border-indigo-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600'}">
                         <span class="relative block aspect-[4/5] bg-gray-100 dark:bg-gray-900/60">
                             <img src="${escapeHtml(getAssetUrl(character.coverImage))}" alt="" class="absolute inset-0 h-full w-full object-cover" loading="lazy" onerror="this.classList.add('hidden'); this.nextElementSibling?.classList.remove('hidden'); this.nextElementSibling?.classList.add('flex')">
                             <span class="hidden absolute inset-0 items-center justify-center text-gray-300 dark:text-gray-600"><i data-lucide="image-off" class="h-8 w-8"></i></span>
-                            ${selected ? '<span class="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-white shadow"><i data-lucide="check" class="h-4 w-4"></i></span>' : ''}
-                            ${selected || current ? `<span class="absolute bottom-2 left-2 rounded-full px-2 py-1 text-[10px] font-bold ${selected ? 'bg-indigo-600 text-white' : 'bg-gray-900/75 text-white'}">${selected ? '선택됨' : '현재 대상'}</span>` : ''}
+                            ${current ? '<span class="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-white shadow"><i data-lucide="check" class="h-4 w-4"></i></span>' : ''}
+                            ${current ? '<span class="absolute bottom-2 left-2 rounded-full bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white">현재 대상</span>' : ''}
                         </span>
                         <span class="block border-t border-gray-100 p-2.5 dark:border-gray-700">
                             <span class="block truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(title)}</span>
@@ -2413,12 +2391,11 @@ function renderPlannerSituationPickerCards(project, situations, state) {
         <div data-planner-target-grid class="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
             ${filteredSituations.map(situation => {
                 const id = situation.id || '';
-                const selected = id === state.draftId;
                 const current = id === state.selectedId;
                 const imageNumber = getSituationImageNumber(project, situation);
                 const rating = getSituationRating(situation);
                 return `
-                    <button type="button" data-planner-target-id="${escapeHtml(id)}" onclick="window.selectPlannerTargetPickerDraft('${escapeJsString(id)}')" aria-pressed="${selected ? 'true' : 'false'}" class="min-h-[112px] rounded-lg border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${selected ? 'border-indigo-500 bg-indigo-50/70 ring-2 ring-indigo-500 dark:bg-indigo-950/30' : 'border-gray-200 bg-white hover:border-indigo-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600'}">
+                    <button type="button" data-planner-target-id="${escapeHtml(id)}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(id)}')" aria-pressed="${current ? 'true' : 'false'}" class="min-h-[112px] rounded-lg border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${current ? 'border-indigo-500 bg-indigo-50/70 ring-2 ring-indigo-500 dark:bg-indigo-950/30' : 'border-gray-200 bg-white hover:border-indigo-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600'}">
                         <span class="flex items-start gap-3">
                             <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 text-[11px] font-extrabold text-gray-500 dark:bg-gray-900/70 dark:text-gray-400">${escapeHtml(imageNumber)}</span>
                             <span class="min-w-0 flex-1">
@@ -2427,7 +2404,7 @@ function renderPlannerSituationPickerCards(project, situations, state) {
                                     <span class="rounded-full px-2 py-0.5 text-[9px] font-bold ${rating === 'nsfw' ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'}">${rating.toUpperCase()}</span>
                                 </span>
                                 <span class="mt-2 block line-clamp-2 text-xs font-bold leading-5 text-gray-900 dark:text-white">${escapeHtml(getSituationDisplayName(situation))}</span>
-                                ${selected || current ? `<span class="mt-2 inline-flex items-center gap-1 rounded-full px-2 py-1 text-[10px] font-bold ${selected ? 'bg-indigo-600 text-white' : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'}">${selected ? '<i data-lucide="check" class="h-3 w-3"></i> 선택됨' : '현재 대상'}</span>` : ''}
+                                ${current ? '<span class="mt-2 inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white"><i data-lucide="check" class="h-3 w-3"></i> 현재 대상</span>' : ''}
                             </span>
                         </span>
                     </button>
@@ -2435,15 +2412,6 @@ function renderPlannerSituationPickerCards(project, situations, state) {
             }).join('')}
         </div>
     `;
-}
-
-function getPlannerTargetPickerDraftLabel(project, state) {
-    if (state.type === 'character') {
-        const character = getProjectItems(project, 'characters').find(item => item.id === state.draftId);
-        return character ? (character.name || character.alias || character.folderName || character.id) : '';
-    }
-    const situation = getProjectItems(project, 'situations').find(item => item.id === state.draftId);
-    return situation ? getSituationDisplayName(situation) : '';
 }
 
 export function renderPlannerTargetPickerModal() {
@@ -2455,11 +2423,9 @@ export function renderPlannerTargetPickerModal() {
     const isCharacter = state.type === 'character';
     const title = isCharacter ? '대상 캐릭터 선택' : '대상 상황 선택';
     const description = isCharacter
-        ? '플래너에 사용할 캐릭터 한 명을 선택하세요.'
-        : '캐릭터별 플랜과 결과를 확인할 상황 한 개를 선택하세요.';
+        ? '카드를 누르면 플래너 대상 캐릭터가 바로 변경됩니다.'
+        : '카드를 누르면 캐릭터별 플랜과 결과를 확인할 상황이 바로 변경됩니다.';
     const items = getProjectItems(project, isCharacter ? 'characters' : 'situations');
-    const draftLabel = getPlannerTargetPickerDraftLabel(project, state);
-    const statusText = state.message || (draftLabel ? `선택: ${draftLabel}` : '선택된 대상이 없습니다.');
     const filterButton = (rating, label) => `
         <button id="planner-target-filter-${rating}" type="button" onclick="window.setPlannerTargetPickerRating('${rating}')" aria-pressed="${state.rating === rating ? 'true' : 'false'}" class="rounded-md px-3 py-1.5 text-[10px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${state.rating === rating ? 'bg-indigo-600 text-white' : 'border border-gray-200 text-gray-600 hover:border-indigo-400 dark:border-gray-700 dark:text-gray-300'}">${label}</button>
     `;
@@ -2487,13 +2453,6 @@ export function renderPlannerTargetPickerModal() {
                     ${isCharacter
                         ? renderPlannerCharacterPickerCards(items, state)
                         : renderPlannerSituationPickerCards(project, items, state)}
-                </div>
-                <div class="flex flex-shrink-0 flex-col gap-3 border-t border-gray-200 px-4 py-3 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between">
-                    <p id="planner-target-picker-status" aria-live="polite" class="min-w-0 truncate text-[11px] font-bold ${state.message ? 'text-amber-600 dark:text-amber-400' : draftLabel ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400 dark:text-gray-500'}">${escapeHtml(statusText)}</p>
-                    <div class="grid grid-cols-2 gap-2 sm:flex sm:items-center">
-                        <button type="button" onclick="window.closePlannerTargetPicker()" ${state.applying ? 'disabled' : ''} class="rounded-lg border border-gray-200 px-3 py-2 text-xs font-bold text-gray-700 transition hover:bg-gray-50 disabled:opacity-50 dark:border-gray-700 dark:text-gray-200 dark:hover:bg-gray-800">취소</button>
-                        <button id="planner-target-picker-apply" type="button" onclick="window.applyPlannerTargetPickerSelection()" ${draftLabel && !state.applying ? '' : 'disabled'} class="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-40">${state.applying ? '적용 중...' : '선택 적용'}</button>
-                    </div>
                 </div>
             </div>
         </div>

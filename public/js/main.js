@@ -6,7 +6,7 @@ import * as Explorer from './explorer.js';
 import * as Craft from './craft.js?v=v4-weight-editor-20260810a';
 import * as TempGallery from './temp_gallery.js?v=internal-folder-filter-20260721a';
 import * as Modals from './modals.js';
-import * as Project from './project.js?v=planner-target-picker-20260814a';
+import * as Project from './project.js?v=planner-target-picker-instant-20260814a';
 import * as ImageEditor from './image_editor.js?v=image-editor-history-20260607a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=situation-v4-weight-20260810a';
 

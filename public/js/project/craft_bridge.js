@@ -1,7 +1,7 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-target-picker-20260814a';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-target-picker-20260814a';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-target-picker-20260814a';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-target-picker-20260814a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-target-picker-instant-20260814a';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-target-picker-instant-20260814a';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-target-picker-instant-20260814a';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-target-picker-instant-20260814a';
 
 export function getCraftPromptFields() {
     return {
