@@ -1,7 +1,7 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-plan-scope-20260810a';
-import { renderSectionHeader } from './manage.js?v=planner-plan-scope-20260810a';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-plan-scope-20260810a';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-plan-scope-20260810a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, cachePlannerCharacterSelection, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-result-scope-20260814a';
+import { renderSectionHeader } from './manage.js?v=planner-result-scope-20260814a';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-result-scope-20260814a';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-result-scope-20260814a';
 
 const PLANNER_DEFAULT_IMAGE_COUNT = 10;
 const PLANNER_MIN_IMAGE_COUNT = 1;
@@ -1994,8 +1994,8 @@ export function renderPlannerSituationGrid(project, situations, character, meta,
     }));
 }
 
-function renderPlannerCharacterGridForSituation(project, characters, situation) {
-    if (!situation) return renderEmptyState('플랜을 만들 상황을 선택하세요.');
+function renderPlannerCharacterGridForSituation(project, characters, situation, mode = 'plan') {
+    if (!situation) return renderEmptyState(mode === 'result' ? '결과를 확인할 상황을 선택하세요.' : '플랜을 만들 상황을 선택하세요.');
     if (!characters.length) return renderEmptyState('먼저 캐릭터를 추가하세요.');
     if (plannerSituationScopeState.loading && !plannerSituationScopeState.loaded) {
         return renderEmptyState('캐릭터별 플랜과 이미지 상태를 불러오는 중입니다.');
@@ -2007,12 +2007,17 @@ function renderPlannerCharacterGridForSituation(project, characters, situation) 
         const meta = plannerSituationScopeState.metas.has(character.id)
             ? plannerSituationScopeState.metas.get(character.id)
             : getPlannerMetaForCharacter(project, character.id);
+        const item = getPlannerSituationItem(meta, situation.id);
+        const clickAction = mode === 'result'
+            ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id)}')` : `window.setPlannerStatus('이 캐릭터에 저장된 플랜 결과가 없습니다.')`)
+            : `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id)}')`;
         return renderPlannerPlanCard({
             image: getPlannerSituationImage(character, situation, situationIndex),
-            item: getPlannerSituationItem(meta, situation.id),
+            item,
             title: character.name || character.folderName || character.id,
             fallbackText: getSituationImageNumber(project, situation),
-            clickAction: `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id)}')`
+            clickAction,
+            mode
         });
     }));
 }
@@ -2150,7 +2155,7 @@ export function renderPlannerPanel(project, situations) {
             </select>
         </label>
     ` : '';
-    const targetSelector = view === 'plan' && planScope === 'situation'
+    const targetSelector = (view === 'plan' || view === 'result') && planScope === 'situation'
         ? situationSelector
         : characterSelector;
 
@@ -2199,19 +2204,27 @@ export function renderPlannerPanel(project, situations) {
         </button>
     `;
 
-    const planView = `
+    const renderScopeSelector = ({ title, characterDescription, situationDescription }) => `
         <div class="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
             <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
                 <div>
-                    <p class="text-[11px] font-bold text-gray-700 dark:text-gray-200">플랜 작성 기준</p>
-                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${planScope === 'situation' ? '선택한 상황의 캐릭터별 플랜을 관리합니다.' : '선택한 캐릭터의 상황별 플랜을 관리합니다.'}</p>
+                    <p class="text-[11px] font-bold text-gray-700 dark:text-gray-200">${escapeHtml(title)}</p>
+                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(planScope === 'situation' ? situationDescription : characterDescription)}</p>
                 </div>
-                <div role="tablist" aria-label="플랜 작성 기준" class="grid w-full grid-cols-2 gap-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1.5 sm:w-auto sm:min-w-[210px]">
+                <div role="tablist" aria-label="${escapeHtml(title)}" class="grid w-full grid-cols-2 gap-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1.5 sm:w-auto sm:min-w-[210px]">
                     ${scopeButton('character', '캐릭터 기준')}
                     ${scopeButton('situation', '상황 기준')}
                 </div>
             </div>
         </div>
+    `;
+
+    const planView = `
+        ${renderScopeSelector({
+            title: '플랜 작성 기준',
+            characterDescription: '선택한 캐릭터의 상황별 플랜을 관리합니다.',
+            situationDescription: '선택한 상황의 캐릭터별 플랜을 관리합니다.'
+        })}
         <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
             <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">${planScope === 'situation' ? '선택한 상황에 대해 캐릭터별 생성 가능 여부를 확인합니다.' : '상황을 선택하면 해당 상황의 플랜을 구성합니다.'}</p>
             <div class="flex flex-wrap justify-end gap-2">
@@ -2266,13 +2279,20 @@ export function renderPlannerPanel(project, situations) {
     `;
 
     const resultView = `
+        ${renderScopeSelector({
+            title: '결과 확인 기준',
+            characterDescription: '선택한 캐릭터의 상황별 결과를 확인합니다.',
+            situationDescription: '선택한 상황의 캐릭터별 결과를 확인합니다.'
+        })}
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
                 <p class="text-xs font-bold text-gray-900 dark:text-white">결과 확인</p>
-                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">현재 선택한 캐릭터의 상황별 결과를 확인하고 선택합니다.</p>
+                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">${planScope === 'situation' ? '현재 선택한 상황의 캐릭터별 결과를 확인하고 선택합니다.' : '현재 선택한 캐릭터의 상황별 결과를 확인하고 선택합니다.'}</p>
             </div>
         </div>
-        ${renderPlannerSituationGrid(project, situations, activeCharacter, meta, 'result')}
+        ${planScope === 'situation'
+            ? renderPlannerCharacterGridForSituation(project, characters, selectedSituation, 'result')
+            : renderPlannerSituationGrid(project, situations, activeCharacter, meta, 'result')}
     `;
 
     return `
@@ -2474,7 +2494,7 @@ export async function refreshPlannerPanel(options = {}) {
         applyPlannerRefreshData(project, data);
         if (reason === 'manual') clearPlannerDraftDirty();
         renderPlannerSectionByState({ preserveScroll });
-        if ((window.PROJECT_PLANNER_VIEW || 'plan') === 'plan' && getPlannerPlanScope(project) === 'situation') {
+        if (['plan', 'result'].includes(window.PROJECT_PLANNER_VIEW || 'plan') && getPlannerPlanScope(project) === 'situation') {
             await loadPlannerSituationScopeData({ force: true });
         }
         syncPlannerBackgroundPolling();
@@ -2487,9 +2507,18 @@ export async function refreshPlannerPanel(options = {}) {
     }
 }
 
-export function setPlannerView(view = 'plan') {
+export async function setPlannerView(view = 'plan') {
     window.PROJECT_PLANNER_VIEW = ['plan', 'run', 'result'].includes(view) ? view : 'plan';
     renderPlannerSectionByState({ scroll: 'restore-view', focus: 'reset' });
+    const project = getActiveProject();
+    if (
+        window.PROJECT_PLANNER_VIEW === 'result'
+        && getPlannerPlanScope(project) === 'situation'
+        && !plannerSituationScopeState.loaded
+        && !plannerSituationScopeState.loading
+    ) {
+        await loadPlannerSituationScopeData();
+    }
     syncPlannerBackgroundPolling({ immediate: window.PROJECT_PLANNER_VIEW === 'run' });
 }
 

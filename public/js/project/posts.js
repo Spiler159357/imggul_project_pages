@@ -7,7 +7,7 @@ import {
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js?v=planner-plan-scope-20260810a';
+} from './shared.js?v=planner-result-scope-20260814a';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;

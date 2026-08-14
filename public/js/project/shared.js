@@ -1,4 +1,4 @@
-import { loadPlannerForSelectedCharacter } from './planner.js?v=planner-plan-scope-20260810a';
+import { loadPlannerForSelectedCharacter } from './planner.js?v=planner-result-scope-20260814a';
 
 export const EXCLUDED_PROJECT_FOLDERS = new Set([
     'logs',
