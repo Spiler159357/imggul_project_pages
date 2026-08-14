@@ -1,5 +1,3 @@
-import { loadPlannerForSelectedCharacter } from './planner.js?v=planner-result-scope-20260814a';
-
 export const EXCLUDED_PROJECT_FOLDERS = new Set([
     'logs',
     '_temp_craft',
@@ -583,8 +581,7 @@ export function getCachedPlannerCharacterId(project) {
 }
 
 export function getSelectedPlannerCharacterId(project = getActiveProject()) {
-    return document.getElementById('planner-character-select')?.value
-        || window.PROJECT_PLANNER_SELECTED_CHARACTER_ID
+    return window.PROJECT_PLANNER_SELECTED_CHARACTER_ID
         || getCachedPlannerCharacterId(project)
         || window.PROJECT_PLANNER_META?.characterId
         || getProjectItems(project, 'characters')[0]?.id
@@ -598,14 +595,6 @@ export function setCachedPlannerCharacterId(project, characterId) {
     try {
         localStorage.setItem(PLANNER_CHARACTER_CACHE_KEY, JSON.stringify(cache));
     } catch {}
-}
-
-export function cachePlannerCharacterSelection() {
-    const project = getActiveProject();
-    const characterId = document.getElementById('planner-character-select')?.value || '';
-    setCachedPlannerCharacterId(project, characterId);
-    window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = characterId;
-    window.loadPlannerForSelectedCharacter?.();
 }
 
 export function readSituationRatingCache() {

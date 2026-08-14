@@ -1,11 +1,12 @@
-import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=planner-result-scope-20260814a';
-import { renderCharacterSection } from './character.js?v=planner-result-scope-20260814a';
-import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js?v=planner-result-scope-20260814a';
-import { renderSituationSection } from './situation.js?v=planner-result-scope-20260814a';
+import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=planner-target-picker-20260814a';
+import { renderCharacterSection } from './character.js?v=planner-target-picker-20260814a';
+import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js?v=planner-target-picker-20260814a';
+import { renderSituationSection } from './situation.js?v=planner-target-picker-20260814a';
 import { renderImageEditor } from '../image_editor.js';
-import { openProjectPostsSection } from './posts.js?v=planner-result-scope-20260814a';
+import { openProjectPostsSection } from './posts.js?v=planner-target-picker-20260814a';
 
 export async function renderProjectManage(skipHistory = true) {
+    if (window.PROJECT_PLANNER_TARGET_PICKER?.open) window.closePlannerTargetPicker?.(null, false);
     window.PROJECT_VIEW = 'manage';
     window.PROJECT_ACTIVE_SECTION = null;
     window.syncPlannerBackgroundPolling?.();
@@ -168,6 +169,7 @@ export async function submitProjectCreate(event) {
 }
 
 export async function openProjectDetail(projectId = getDefaultProjectId(), skipHistory = false) {
+    if (window.PROJECT_PLANNER_TARGET_PICKER?.open) window.closePlannerTargetPicker?.(null, false);
     if (!Array.isArray(window.PROJECTS)) {
         await loadProjects().catch(() => []);
     }
@@ -386,6 +388,7 @@ export function renderProjectPanelItems(project, section) {
 }
 
 export async function openProjectSection(sectionKey, skipHistory = false) {
+    if (window.PROJECT_PLANNER_TARGET_PICKER?.open) window.closePlannerTargetPicker?.(null, false);
     if (!Array.isArray(window.PROJECTS)) {
         await loadProjects().catch(() => []);
     }
