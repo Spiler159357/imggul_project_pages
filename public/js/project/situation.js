@@ -1,6 +1,6 @@
-import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectSituations, setProjectRoute } from './shared.js?v=situation-hard-delete-20260818a';
-import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=situation-hard-delete-20260818a';
-import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=situation-hard-delete-20260818a';
+import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, invalidateProjectSituationLoads, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectSituations, setProjectRoute } from './shared.js?v=situation-path-state-20260819a';
+import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=situation-path-state-20260819a';
+import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=situation-path-state-20260819a';
 
 export function getSituationPromptIndicator(situation) {
     const prompt = getSituationPrompt(situation);
@@ -12,7 +12,7 @@ export function renderSituationCards(project, situations = []) {
     return situations.map(situation => `
         <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group flex min-h-[112px] w-full flex-col justify-between self-start text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
             <span class="flex items-start justify-between gap-2">
-                <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationStorageName(project, situation))}</span>
+                <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition truncate">${escapeHtml(situation.id)}</span>
                 <span class="min-w-0 text-right text-[10px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition truncate">${escapeHtml(getSituationStorageName(project, situation))}.webp</span>
             </span>
             <span class="mt-3 min-w-0">
@@ -384,11 +384,13 @@ export async function openSituationDetail(projectId = window.PROJECT_ACTIVE_PROJ
     try {
         await Promise.all(getProjectItems(project, 'characters').map(character => loadCharacterFiles(character).catch(() => [])));
         if (window.PROJECT_VIEW === 'situation-detail' && window.PROJECT_ACTIVE_SITUATION_ID === situation.id) {
-            renderSituationDetailShell(project, situation);
+            const latestSituation = getSituationById(project, situation.id);
+            if (latestSituation) renderSituationDetailShell(project, latestSituation);
         }
     } catch (err) {
         if (window.PROJECT_VIEW === 'situation-detail' && window.PROJECT_ACTIVE_SITUATION_ID === situation.id) {
-            renderSituationDetailShell(project, situation, { error: err.message });
+            const latestSituation = getSituationById(project, situation.id);
+            if (latestSituation) renderSituationDetailShell(project, latestSituation, { error: err.message });
         }
     }
 
@@ -469,7 +471,8 @@ export async function changeActiveSituationPath() {
     }
 
     try {
-        await changeSituationStoragePath({
+        invalidateProjectSituationLoads(project);
+        const result = await changeSituationStoragePath({
             projectId: project.id,
             projectPrefix: project.prefix,
             situationId: situation.id,
@@ -478,12 +481,24 @@ export async function changeActiveSituationPath() {
             expectedDocumentUpdatedAt: project.situationsUpdatedAt || ''
         });
 
+        const changedSituation = getSituationById(project, situation.id);
+        if (changedSituation) {
+            changedSituation.storageName = result?.entity?.storageName || folderName;
+            changedSituation.folderName = result?.entity?.folderName || folderName;
+            changedSituation.imageNumber = result?.entity?.imageNumber || folderName;
+            changedSituation.updatedAt = Date.now();
+        }
+        if (result?.entity?.updatedAt) project.situationsUpdatedAt = result.entity.updatedAt;
+        project.situationsLoaded = true;
+        const immediateSituation = getSituationById(project, situation.id);
+        if (immediateSituation) renderSituationDetailShell(project, immediateSituation);
+
         clearFolderDataCacheTree(project.prefix, `${project.prefix}_planner_temp_image/`);
         window.clearPlannerCachesForProject?.(project);
         project.situationsLoaded = false;
         await loadProjectSituations(project, true);
-        const refreshedSituation = getSituationById(project, situation.id);
         await Promise.all(getProjectItems(project, 'characters').map(character => loadCharacterFiles(character, true).catch(() => [])));
+        const refreshedSituation = getSituationById(project, situation.id);
         if (refreshedSituation) renderSituationDetailShell(project, refreshedSituation);
         if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
     } catch (err) {

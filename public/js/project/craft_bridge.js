@@ -1,7 +1,7 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=situation-hard-delete-20260818a';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=situation-hard-delete-20260818a';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=situation-hard-delete-20260818a';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=situation-hard-delete-20260818a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=situation-path-state-20260819a';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=situation-path-state-20260819a';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=situation-path-state-20260819a';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=situation-path-state-20260819a';
 
 export function getCraftPromptFields() {
     return {

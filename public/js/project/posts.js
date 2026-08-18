@@ -7,7 +7,7 @@ import {
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js?v=situation-hard-delete-20260818a';
+} from './shared.js?v=situation-path-state-20260819a';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;

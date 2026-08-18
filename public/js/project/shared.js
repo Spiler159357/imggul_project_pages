@@ -307,6 +307,25 @@ export function getPlannerSettingsKey(project) {
 }
 
 const pathMigrationRequestKeys = new Map();
+const projectSituationLoadStates = new WeakMap();
+
+function getProjectSituationLoadState(project) {
+    let state = projectSituationLoadStates.get(project);
+    if (!state) {
+        state = { requestId: 0, controller: null, promise: null };
+        projectSituationLoadStates.set(project, state);
+    }
+    return state;
+}
+
+export function invalidateProjectSituationLoads(project) {
+    if (!project) return;
+    const state = getProjectSituationLoadState(project);
+    state.requestId += 1;
+    state.controller?.abort();
+    state.controller = null;
+    state.promise = null;
+}
 
 async function requestEntityPathMigration(entityType, payload) {
     const requestKey = [
@@ -833,27 +852,54 @@ export async function loadProjectCharacters(project, force = false) {
 
 export async function loadProjectSituations(project, force = false) {
     if (!project?.prefix) return [];
+    const state = getProjectSituationLoadState(project);
+    if (!force && state.promise) return state.promise;
     if (!force && project.situationsLoaded) return getProjectItems(project, 'situations');
 
+    if (force) state.controller?.abort();
+    const requestId = state.requestId + 1;
+    const controller = new AbortController();
+    state.requestId = requestId;
+    state.controller = controller;
     const metaKey = getSituationMetaKey(project);
-    const res = await fetch(`/api/db/json-document?type=situations_meta&key=${encodeURIComponent(metaKey)}&_t=${Date.now()}`, { cache: 'no-store' });
+    const promise = (async () => {
+        try {
+            const res = await fetch(
+                `/api/db/json-document?type=situations_meta&key=${encodeURIComponent(metaKey)}&_t=${Date.now()}`,
+                { cache: 'no-store', signal: controller.signal }
+            );
 
-    if (res.status === 404) {
-        project.situations = [];
-        project.situationsUpdatedAt = '';
-        project.situationsLoaded = true;
-        return project.situations;
-    }
+            if (requestId !== state.requestId) return getProjectItems(project, 'situations');
+            if (res.status === 404) {
+                project.situations = [];
+                project.situationsUpdatedAt = '';
+                project.situationsLoaded = true;
+                return project.situations;
+            }
 
-    if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
+            if (!res.ok) throw new Error('상황 목록을 불러오지 못했습니다.');
 
-    const payload = await res.json();
-    const data = payload.data || {};
-    project.situations = normalizeProjectSituations(Array.isArray(data.situations) ? data.situations : []);
-    project.situationsUpdatedAt = payload.updatedAt || '';
-    project.situationsLoaded = true;
-
-    return project.situations;
+            const payload = await res.json();
+            if (requestId !== state.requestId) return getProjectItems(project, 'situations');
+            const data = payload.data || {};
+            project.situations = normalizeProjectSituations(Array.isArray(data.situations) ? data.situations : []);
+            project.situationsUpdatedAt = payload.updatedAt || '';
+            project.situationsLoaded = true;
+            return project.situations;
+        } catch (error) {
+            if (controller.signal.aborted || requestId !== state.requestId) {
+                return getProjectItems(project, 'situations');
+            }
+            throw error;
+        } finally {
+            if (requestId === state.requestId) {
+                state.controller = null;
+                state.promise = null;
+            }
+        }
+    })();
+    state.promise = promise;
+    return promise;
 }
 
 export function normalizeProjectSituations(situations) {

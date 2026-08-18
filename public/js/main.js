@@ -3,10 +3,10 @@ import './state.js?v=planner-demo-20260525a';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=planner-sync-preserve-20260608a';
 import * as Explorer from './explorer.js';
-import * as Craft from './craft.js?v=situation-hard-delete-20260818a';
-import * as TempGallery from './temp_gallery.js?v=situation-hard-delete-20260818a';
-import * as Modals from './modals.js?v=situation-hard-delete-20260818a';
-import * as Project from './project.js?v=situation-hard-delete-20260818a';
+import * as Craft from './craft.js?v=situation-path-state-20260819a';
+import * as TempGallery from './temp_gallery.js?v=situation-path-state-20260819a';
+import * as Modals from './modals.js?v=situation-path-state-20260819a';
+import * as Project from './project.js?v=situation-path-state-20260819a';
 import * as ImageEditor from './image_editor.js?v=image-editor-history-20260607a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=situation-v4-weight-20260810a';
 
