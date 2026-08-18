@@ -1956,6 +1956,93 @@ export async function prepareSituationPathPlannerMigration(env, input = {}) {
     return { statements, summary: { changedPlannerRuns: changedRuns } };
 }
 
+export async function prepareSituationDeletePlannerMigration(env, input = {}) {
+    const projectId = asString(input.projectId);
+    const projectPrefix = asString(input.projectPrefix);
+    const situationId = asString(input.situationId);
+    const projectIds = [...new Set([projectId, projectPrefix].filter(Boolean))];
+    if (!situationId || !projectIds.length) {
+        throw plannerError('PLANNER_INVALID_INPUT', 400, 'projectId and situationId are required.');
+    }
+
+    const placeholders = projectIds.map(() => '?').join(', ');
+    const rows = (await env.DB.prepare(`
+        SELECT * FROM planner_compact_records
+        WHERE project_id IN (${placeholders}) AND record_type IN ('run', 'confirm')
+        ORDER BY record_type, record_key
+    `).bind(...projectIds).all()).results || [];
+    const records = rows.map(row => parsePlannerCompactRow(row));
+    const removedItemIds = new Set();
+    const statements = [];
+    let changedRuns = 0;
+    let removedConfirms = 0;
+
+    for (const record of records.filter(entry => entry.recordType === 'run')) {
+        const targetItems = asArray(record.payload.items).filter(item => item.situationId === situationId);
+        if (!targetItems.length) continue;
+        if (ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
+            throw makePlannerMigrationError('PLANNER_RUN_ACTIVE', '플래너 실행 중에는 상황을 삭제할 수 없습니다.');
+        }
+        targetItems.forEach(item => removedItemIds.add(item.itemId));
+        const nextPayload = {
+            ...cloneJson(record.payload),
+            items: asArray(record.payload.items).filter(item => item.situationId !== situationId),
+            status: 'draft',
+            activeJob: null,
+            updatedAt: nowIso()
+        };
+        statements.push(env.DB.prepare(`
+            UPDATE planner_compact_records
+            SET status = 'draft', payload_json = ?, revision = revision + 1, updated_at = ?
+            WHERE record_key = ? AND record_type = 'run' AND revision = ?
+        `).bind(
+            serializePayload(nextPayload, record.recordKey),
+            nowIso(),
+            record.recordKey,
+            record.revision
+        ));
+        statements.push(env.DB.prepare(`
+            SELECT CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM planner_compact_records
+                    WHERE record_key = ? AND record_type = 'run' AND revision = ?
+                ) THEN 1
+                ELSE json_extract('planner_revision_conflict')
+            END AS revision_guard
+        `).bind(record.recordKey, record.revision + 1));
+        changedRuns += 1;
+    }
+
+    for (const record of records.filter(entry => entry.recordType === 'confirm')) {
+        if (!removedItemIds.has(record.payload.itemId)) continue;
+        if (record.payload.status === 'pending') {
+            throw makePlannerMigrationError('PLANNER_CONFIRM_ACTIVE', '이미지 확정 처리 중에는 상황을 삭제할 수 없습니다.');
+        }
+        statements.push(env.DB.prepare(`
+            DELETE FROM planner_compact_records
+            WHERE record_key = ? AND record_type = 'confirm' AND revision = ?
+        `).bind(record.recordKey, record.revision));
+        statements.push(env.DB.prepare(`
+            SELECT CASE
+                WHEN NOT EXISTS (
+                    SELECT 1 FROM planner_compact_records WHERE record_key = ?
+                ) THEN 1
+                ELSE json_extract('planner_revision_conflict')
+            END AS revision_guard
+        `).bind(record.recordKey));
+        removedConfirms += 1;
+    }
+
+    return {
+        statements,
+        summary: {
+            changedPlannerRuns: changedRuns,
+            removedPlannerItems: removedItemIds.size,
+            removedPlannerConfirms: removedConfirms
+        }
+    };
+}
+
 export async function cleanupPlannerCompactAssets(env, options = {}) {
     const keepKeys = new Set(asArray(options.keepKeys).map(asString).filter(Boolean));
     const explicitKeys = asArray(options.keys || options.candidateKeys).map(asString).filter(Boolean);

@@ -1,6 +1,6 @@
-import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectSituations, setProjectRoute } from './shared.js?v=situation-sync-20260818a';
-import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=situation-sync-20260818a';
-import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=situation-sync-20260818a';
+import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectSituations, setProjectRoute } from './shared.js?v=situation-hard-delete-20260818a';
+import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=situation-hard-delete-20260818a';
+import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=situation-hard-delete-20260818a';
 
 export function getSituationPromptIndicator(situation) {
     const prompt = getSituationPrompt(situation);
@@ -500,9 +500,10 @@ export async function deleteActiveSituation() {
 
     if (!confirm(`'${getSituationDisplayName(situation)}' 상황을 삭제하시겠습니까?\n이미 생성된 이미지는 삭제하지 않습니다.`)) return;
 
+    const previousSituations = [...getProjectItems(project, 'situations')];
     try {
         const imageKey = getSituationImageKey(project, situation);
-        project.situations = getProjectItems(project, 'situations').filter(item => item.id !== situation.id);
+        project.situations = previousSituations.filter(item => item.id !== situation.id);
         project.situationsLoaded = true;
         await saveProjectSituations(project, {
             aliasUpdates: [{ key: imageKey, alias: '' }]
@@ -513,6 +514,8 @@ export async function deleteActiveSituation() {
             `#project/${project.id}/situation`
         );
     } catch (err) {
+        project.situations = previousSituations;
+        project.situationsLoaded = true;
         alert(err.message || '상황 삭제에 실패했습니다.');
     }
 }

@@ -910,7 +910,8 @@ export async function saveProjectSituations(project, options = {}) {
             type: 'situations_meta',
             key: metaKey,
             data: { situations: getProjectItems(project, 'situations') },
-            aliasUpdates: Array.isArray(options.aliasUpdates) ? options.aliasUpdates : []
+            aliasUpdates: Array.isArray(options.aliasUpdates) ? options.aliasUpdates : [],
+            expectedUpdatedAt: project.situationsUpdatedAt || ''
         }),
         cache: 'no-store'
     });

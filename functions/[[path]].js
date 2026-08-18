@@ -27,6 +27,7 @@ import {
     getPlannerCompactSettings,
     getPlannerCompactStatus,
     pausePlannerCompactGeneration,
+    prepareSituationDeletePlannerMigration,
     putPlannerCompactItemFromMeta,
     putPlannerCompactRunFromMeta,
     putPlannerCompactSettings,
@@ -58,6 +59,14 @@ function pathMigrationErrorResponse(error) {
         status: error?.status || 500,
         headers: { 'Cache-Control': 'no-store' }
     });
+}
+
+function situationDeleteError(code, status, message, details = {}) {
+    const error = new Error(message);
+    error.code = code;
+    error.status = status;
+    error.details = details;
+    return error;
 }
 
 async function constantTimeTextEqual(left, right) {
@@ -188,7 +197,7 @@ async function getJsonDocument(env, docType, objectKey, fallbackKey = objectKey,
 async function putJsonDocument(env, docType, objectKey, value, source = 'db', options = {}) {
     await ensureJsonDbSchema(env);
     const timestamp = nowIso();
-    const documentStatement = env.DB.prepare(`
+    let documentStatement = env.DB.prepare(`
         INSERT INTO json_documents (doc_type, object_key, data_json, source, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(doc_type, object_key) DO UPDATE SET
@@ -199,23 +208,52 @@ async function putJsonDocument(env, docType, objectKey, value, source = 'db', op
 
     if (docType === 'situations_meta') {
         const previousRow = await env.DB.prepare(
-            'SELECT data_json FROM json_documents WHERE doc_type = ? AND object_key = ?'
+            'SELECT data_json, updated_at FROM json_documents WHERE doc_type = ? AND object_key = ?'
         ).bind(docType, objectKey).first();
+        if (options.expectedUpdatedAt && previousRow?.updated_at !== options.expectedUpdatedAt) {
+            throw situationDeleteError(
+                'SITUATION_REVISION_CONFLICT',
+                409,
+                '다른 화면에서 상황 정보가 변경되었습니다. 새로고침 후 다시 시도하세요.'
+            );
+        }
         const previousValue = source === 'r2_import'
             ? {}
             : parseJsonField(previousRow?.data_json, {});
-        const mirrorStatements = buildSituationMirrorStatements(env, objectKey, previousValue, value || {}, timestamp);
-        const aliasStatements = buildAliasMutationStatements(env, options.aliasUpdates, timestamp);
-        const statements = [...mirrorStatements, ...aliasStatements, documentStatement];
-
-        if (statements.length <= 50) {
-            await env.DB.batch(statements);
-        } else {
-            for (let i = 0; i < mirrorStatements.length; i += 50) {
-                await env.DB.batch(mirrorStatements.slice(i, i + 50));
-            }
-            await env.DB.batch([...aliasStatements, documentStatement]);
+        let revisionGuardStatement = null;
+        if (options.expectedUpdatedAt) {
+            documentStatement = env.DB.prepare(`
+                UPDATE json_documents
+                SET data_json = ?, source = ?, updated_at = ?
+                WHERE doc_type = ? AND object_key = ? AND updated_at = ?
+            `).bind(
+                JSON.stringify(value || {}),
+                source,
+                timestamp,
+                docType,
+                objectKey,
+                options.expectedUpdatedAt
+            );
+            revisionGuardStatement = env.DB.prepare(`
+                SELECT CASE
+                    WHEN EXISTS (
+                        SELECT 1 FROM json_documents
+                        WHERE doc_type = ? AND object_key = ? AND updated_at = ?
+                    ) THEN 1
+                    ELSE json_extract('revision_conflict')
+                END AS revision_guard
+            `).bind(docType, objectKey, timestamp);
         }
+        const mirrorStatements = await buildSituationMirrorStatements(env, objectKey, previousValue, value || {}, timestamp);
+        const aliasStatements = buildAliasMutationStatements(env, options.aliasUpdates, timestamp);
+        const statements = [
+            ...mirrorStatements,
+            ...aliasStatements,
+            documentStatement,
+            ...(revisionGuardStatement ? [revisionGuardStatement] : [])
+        ];
+
+        await env.DB.batch(statements);
     } else {
         await documentStatement.run();
         await mirrorJsonDocumentToV2(env, docType, objectKey, value || {});
@@ -251,7 +289,18 @@ function getSituationMirrorId(objectKey, situation, index) {
     return situation?.id || situation?.folderName || makeStableDbId('situation', `${objectKey}:${index}`);
 }
 
-function buildSituationMirrorStatements(env, objectKey, previousValue, nextValue, timestamp = nowIso()) {
+async function getExistingDbTableNames(env, names = []) {
+    const uniqueNames = [...new Set(names.filter(Boolean))];
+    if (!uniqueNames.length) return new Set();
+    const placeholders = uniqueNames.map(() => '?').join(', ');
+    const rows = (await env.DB.prepare(`
+        SELECT name FROM sqlite_master
+        WHERE type = 'table' AND name IN (${placeholders})
+    `).bind(...uniqueNames).all()).results || [];
+    return new Set(rows.map(row => row.name));
+}
+
+async function buildSituationMirrorStatements(env, objectKey, previousValue, nextValue, timestamp = nowIso()) {
     const projectPrefix = getProjectPrefixFromDocumentKey(objectKey);
     const projectId = projectPrefix || makeStableDbId('project', objectKey);
     const { changed, removed } = getSituationDocumentChanges(
@@ -314,18 +363,229 @@ function buildSituationMirrorStatements(env, objectKey, previousValue, nextValue
         ));
     });
 
-    removed.forEach(({ situationId }) => {
+    const optionalTables = removed.length
+        ? await getExistingDbTableNames(env, [
+            'planner_items',
+            'planner_metas',
+            'planner_item_v4_rows',
+            'planner_item_images',
+            'planner_item_image_snapshots',
+            'planner_background_jobs',
+            'planner_background_items',
+            'planner_background_queue',
+            'v2_planner_items',
+            'v2_planner_generated_images'
+        ])
+        : new Set();
+
+    const projectName = projectPrefix.split('/').filter(Boolean)[0] || '';
+    for (const { situationId, situation, index } of removed) {
+        const storageName = String(
+            situation?.storageName
+            || situation?.folderName
+            || String(situation?.imageNumber ?? index)
+        );
+        const activeLegacyJob = await env.DB.prepare(`
+            SELECT job.id
+            FROM planner_v3_jobs job
+            LEFT JOIN planner_v3_job_tasks task ON task.job_id = job.id
+            LEFT JOIN planner_v3_items item ON item.id = task.item_id
+            WHERE job.project_id IN (?, ?)
+              AND job.status IN ('queued', 'running', 'paused', 'cancel_requested')
+              AND (job.target_situation_id = ? OR item.situation_id = ?)
+            LIMIT 1
+        `).bind(projectId, projectId.replace(/\/$/, ''), situationId, situationId).first();
+        if (activeLegacyJob) {
+            throw situationDeleteError(
+                'PLANNER_RUN_ACTIVE',
+                409,
+                '플래너 실행 중에는 상황을 삭제할 수 없습니다.',
+                { jobId: activeLegacyJob.id, situationId }
+            );
+        }
+        if (optionalTables.has('planner_background_jobs')) {
+            const activeBackgroundJob = await env.DB.prepare(`
+                SELECT job.id
+                FROM planner_background_jobs job
+                ${optionalTables.has('planner_background_items')
+                    ? 'LEFT JOIN planner_background_items item ON item.job_id = job.id'
+                    : ''}
+                WHERE job.status IN ('queued', 'running', 'paused', 'cancel_requested')
+                  AND (job.target_situation_id = ?
+                    ${optionalTables.has('planner_background_items') ? 'OR item.situation_id = ?' : ''})
+                LIMIT 1
+            `).bind(...(optionalTables.has('planner_background_items')
+                ? [situationId, situationId]
+                : [situationId])).first();
+            if (activeBackgroundJob) {
+                throw situationDeleteError(
+                    'PLANNER_RUN_ACTIVE',
+                    409,
+                    '플래너 실행 중에는 상황을 삭제할 수 없습니다.',
+                    { jobId: activeBackgroundJob.id, situationId }
+                );
+            }
+        }
+        const planner = await prepareSituationDeletePlannerMigration(env, {
+            projectId: projectId.replace(/\/$/, ''),
+            projectPrefix,
+            situationId
+        });
+        statements.push(...planner.statements);
+
+        if (optionalTables.has('planner_items')) {
+            if (optionalTables.has('planner_metas')) {
+                statements.push(env.DB.prepare(`
+                    UPDATE planner_metas
+                    SET running_situation_ids_json = COALESCE((
+                            SELECT json_group_array(value)
+                            FROM json_each(planner_metas.running_situation_ids_json)
+                            WHERE CAST(value AS TEXT) <> ?
+                        ), '[]'),
+                        updated_at = ?
+                    WHERE EXISTS (
+                        SELECT 1 FROM planner_items
+                        WHERE planner_items.meta_object_key = planner_metas.object_key
+                          AND planner_items.situation_id = ?
+                    )
+                `).bind(situationId, timestamp, situationId));
+            }
+            for (const childTable of [
+                'planner_item_image_snapshots',
+                'planner_item_images',
+                'planner_item_v4_rows'
+            ]) {
+                if (!optionalTables.has(childTable)) continue;
+                statements.push(env.DB.prepare(`
+                    DELETE FROM ${childTable}
+                    WHERE item_id IN (
+                        SELECT id FROM planner_items WHERE situation_id = ?
+                    )
+                `).bind(situationId));
+            }
+            statements.push(env.DB.prepare(`
+                DELETE FROM planner_items WHERE situation_id = ?
+            `).bind(situationId));
+        }
+        if (optionalTables.has('planner_background_items')) {
+            if (optionalTables.has('planner_background_queue')) {
+                statements.push(env.DB.prepare(`
+                    DELETE FROM planner_background_queue
+                    WHERE item_id IN (
+                        SELECT id FROM planner_background_items WHERE situation_id = ?
+                    )
+                `).bind(situationId));
+            }
+            statements.push(env.DB.prepare(`
+                DELETE FROM planner_background_items WHERE situation_id = ?
+            `).bind(situationId));
+        }
+        if (optionalTables.has('planner_background_jobs')) {
+            if (optionalTables.has('planner_background_queue')) {
+                statements.push(env.DB.prepare(`
+                    DELETE FROM planner_background_queue
+                    WHERE job_id IN (
+                        SELECT id FROM planner_background_jobs WHERE target_situation_id = ?
+                    )
+                `).bind(situationId));
+            }
+            if (optionalTables.has('planner_background_items')) {
+                statements.push(env.DB.prepare(`
+                    DELETE FROM planner_background_items
+                    WHERE job_id IN (
+                        SELECT id FROM planner_background_jobs WHERE target_situation_id = ?
+                    )
+                `).bind(situationId));
+            }
+            statements.push(env.DB.prepare(`
+                DELETE FROM planner_background_jobs WHERE target_situation_id = ?
+            `).bind(situationId));
+        }
+        if (optionalTables.has('v2_planner_items')) {
+            if (optionalTables.has('v2_planner_generated_images')) {
+                statements.push(env.DB.prepare(`
+                    DELETE FROM v2_planner_generated_images
+                    WHERE planner_item_id IN (
+                        SELECT id FROM v2_planner_items WHERE situation_id = ?
+                    )
+                `).bind(situationId));
+            }
+            statements.push(env.DB.prepare(`
+                DELETE FROM v2_assets
+                WHERE owner_type = 'planner_item'
+                  AND owner_id IN (
+                      SELECT id FROM v2_planner_items WHERE situation_id = ?
+                )
+            `).bind(situationId));
+            statements.push(env.DB.prepare(`
+                DELETE FROM v2_planner_items WHERE situation_id = ?
+            `).bind(situationId));
+        }
+
         statements.push(env.DB.prepare(`
-            UPDATE v2_situations
-            SET is_active = 0, updated_at = ?
+            DELETE FROM planner_v3_asset_cleanup_queue
+            WHERE source_item_id IN (
+                SELECT item.id
+                FROM planner_v3_items item
+                JOIN planner_v3_runs run ON run.id = item.run_id
+                WHERE item.situation_id = ? AND run.project_id IN (?, ?)
+            )
+        `).bind(situationId, projectId, projectId.replace(/\/$/, '')));
+        statements.push(env.DB.prepare(`
+            DELETE FROM planner_v3_jobs
+            WHERE target_situation_id = ? AND project_id IN (?, ?)
+        `).bind(situationId, projectId, projectId.replace(/\/$/, '')));
+        statements.push(env.DB.prepare(`
+            DELETE FROM planner_v3_items
+            WHERE situation_id = ?
+              AND run_id IN (
+                  SELECT id FROM planner_v3_runs WHERE project_id IN (?, ?)
+              )
+        `).bind(situationId, projectId, projectId.replace(/\/$/, '')));
+        statements.push(env.DB.prepare(`
+            UPDATE planner_v3_runs
+            SET running_situation_ids_json = COALESCE((
+                    SELECT json_group_array(value)
+                    FROM json_each(planner_v3_runs.running_situation_ids_json)
+                    WHERE CAST(value AS TEXT) <> ?
+                ), '[]'),
+                updated_at = ?
+            WHERE project_id IN (?, ?)
+        `).bind(situationId, timestamp, projectId, projectId.replace(/\/$/, '')));
+        statements.push(env.DB.prepare(`
+            DELETE FROM v2_prompt_v4_rows
+            WHERE prompt_set_id IN (
+                SELECT id FROM v2_prompt_sets
+                WHERE owner_type = 'situation' AND owner_id = ?
+            )
+        `).bind(situationId));
+        statements.push(env.DB.prepare(`
+            DELETE FROM v2_prompt_parts
+            WHERE prompt_set_id IN (
+                SELECT id FROM v2_prompt_sets
+                WHERE owner_type = 'situation' AND owner_id = ?
+            )
+        `).bind(situationId));
+        statements.push(env.DB.prepare(`
+            DELETE FROM v2_prompt_sets
+            WHERE owner_type = 'situation' AND owner_id = ?
+        `).bind(situationId));
+        statements.push(env.DB.prepare(`
+            DELETE FROM aliases
+            WHERE scope = 'project' AND project_name = ?
+              AND target_key IN (?, ?, ?, ?)
+        `).bind(
+            projectName,
+            `${storageName}.png`,
+            `${storageName}.jpg`,
+            `${storageName}.jpeg`,
+            `${storageName}.webp`
+        ));
+        statements.push(env.DB.prepare(`
+            DELETE FROM v2_situations
             WHERE id = ? AND project_id = ?
-        `).bind(timestamp, situationId, projectId));
-        statements.push(env.DB.prepare(`
-            UPDATE v2_prompt_sets
-            SET is_active = 0, updated_at = ?
-            WHERE owner_type = 'situation' AND owner_id = ? AND kind = 'default'
-        `).bind(timestamp, situationId));
-    });
+        `).bind(situationId, projectId));
+    }
 
     return statements;
 }
@@ -2427,11 +2687,16 @@ export async function onRequest(context) {
                 return jsonResponse({ error: 'planner_meta is only available through /api/planner/meta' }, { status: 410 });
             }
             const updatedAt = await putJsonDocument(env, body.type, body.key, body.data || {}, 'db', {
-                aliasUpdates: body.aliasUpdates
+                aliasUpdates: body.aliasUpdates,
+                expectedUpdatedAt: body.expectedUpdatedAt
             });
             return jsonResponse({ success: true, updatedAt });
         } catch (e) {
-            return jsonResponse({ error: e.message }, { status: 500 });
+            return jsonResponse({
+                error: e.message,
+                code: e?.code || undefined,
+                details: e?.details || undefined
+            }, { status: e?.status || 500 });
         }
     }
 
