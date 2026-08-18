@@ -393,9 +393,18 @@ async function readSituationDocument(env, input, migration) {
 
 async function commitSituationD1(env, migration, input, manifest, document) {
     const timestamp = nowIso();
+    const previousDisplayName = String(document.target.name || '');
+    const previousAlias = String(document.target.alias || '');
+    const pathDerivedDisplayName = !previousAlias && (
+        !previousDisplayName
+        || previousDisplayName === input.oldStorageName
+        || previousDisplayName === input.situationId
+    );
     document.target.storageName = input.newStorageName;
     document.target.folderName = input.newStorageName;
     document.target.imageNumber = input.newStorageName;
+    if (pathDerivedDisplayName) document.target.name = input.newStorageName;
+    if (previousAlias === input.oldStorageName) document.target.alias = input.newStorageName;
     document.target.updatedAt = Date.now();
     const planner = await prepareSituationPathPlannerMigration(env, {
         projectId: input.projectId,
@@ -410,10 +419,15 @@ async function commitSituationD1(env, migration, input, manifest, document) {
         `).bind(JSON.stringify(document.data), timestamp, document.key, document.row.updated_at),
         env.DB.prepare(`
             UPDATE v2_situations
-            SET storage_name = ?, image_number = ?, updated_at = ?
+            SET storage_name = ?, image_number = ?,
+                name = CASE WHEN name = ? OR name = ? THEN ? ELSE name END,
+                updated_at = ?
             WHERE id = ? AND project_id IN (?, ?)
         `).bind(
             input.newStorageName,
+            input.newStorageName,
+            input.oldStorageName,
+            input.situationId,
             input.newStorageName,
             timestamp,
             input.situationId,
@@ -447,9 +461,19 @@ async function commitSituationD1(env, migration, input, manifest, document) {
     const projectName = input.projectPrefix.split('/').filter(Boolean)[0] || '';
     for (const extension of IMAGE_EXTENSIONS) {
         statements.push(env.DB.prepare(`
-            UPDATE aliases SET target_key = ?, updated_at = ?
+            UPDATE aliases
+            SET target_key = ?,
+                alias = CASE WHEN alias = ? THEN ? ELSE alias END,
+                updated_at = ?
             WHERE scope = 'project' AND project_name = ? AND target_key = ?
-        `).bind(`${input.newStorageName}.${extension}`, timestamp, projectName, `${input.oldStorageName}.${extension}`));
+        `).bind(
+            `${input.newStorageName}.${extension}`,
+            input.oldStorageName,
+            input.newStorageName,
+            timestamp,
+            projectName,
+            `${input.oldStorageName}.${extension}`
+        ));
     }
     statements.push(env.DB.prepare(`
         UPDATE path_migrations

@@ -1,7 +1,7 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=path-migration-20260818a';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=path-migration-20260818a';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=path-migration-20260818a';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=path-migration-20260818a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=path-migration-20260818b';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=path-migration-20260818b';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=path-migration-20260818b';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=path-migration-20260818b';
 
 export function getCraftPromptFields() {
     return {

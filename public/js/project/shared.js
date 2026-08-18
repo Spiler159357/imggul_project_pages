@@ -1032,7 +1032,19 @@ export function getVersionedAssetUrl(file) {
 }
 
 export function getSituationDisplayName(situation) {
-    return situation?.alias || situation?.name || situation?.id || '상황 이름';
+    const alias = String(situation?.alias || '').trim();
+    const legacyPathAlias = Boolean(
+        alias
+        && alias !== String(situation?.storageName || '')
+        && alias === String(situation?.name || '')
+        && alias === String(situation?.id || '')
+    );
+    return (!legacyPathAlias && alias)
+        || situation?.storageName
+        || situation?.folderName
+        || situation?.name
+        || situation?.id
+        || '상황 이름';
 }
 
 export function getSituationImageNumber(project, situation) {
