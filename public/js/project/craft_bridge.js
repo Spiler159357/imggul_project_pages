@@ -1,7 +1,7 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-target-picker-instant-20260814a';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-target-picker-instant-20260814a';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-target-picker-instant-20260814a';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-target-picker-instant-20260814a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=path-migration-20260818a';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=path-migration-20260818a';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=path-migration-20260818a';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=path-migration-20260818a';
 
 export function getCraftPromptFields() {
     return {
@@ -109,9 +109,9 @@ function setCraftSaveListEmpty(id, message) {
 }
 
 function getSituationSaveLabel(situation, index) {
-    const number = Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index;
-    const name = situation?.alias || situation?.name || situation?.id || `상황 ${number}`;
-    return `${number} - ${name}`;
+    const storageName = String(situation?.storageName || situation?.folderName || (situation?.imageNumber ?? index));
+    const name = situation?.alias || situation?.name || situation?.id || `상황 ${storageName}`;
+    return `${storageName} - ${name}`;
 }
 
 function setCraftSaveVariantSelect(type, variants = [], selectedId = '') {

@@ -265,6 +265,16 @@ export function clearFolderDataCaches(...prefixes) {
     });
 }
 
+export function clearFolderDataCacheTree(...prefixes) {
+    if (!window.FOLDER_DATA_CACHE) return;
+    const normalizedPrefixes = prefixes.map(prefix => String(prefix || '')).filter(Boolean);
+    Object.keys(window.FOLDER_DATA_CACHE).forEach(cacheKey => {
+        if (normalizedPrefixes.some(prefix => cacheKey === prefix || cacheKey.startsWith(prefix))) {
+            delete window.FOLDER_DATA_CACHE[cacheKey];
+        }
+    });
+}
+
 export function normalizeProjectFolderName(value) {
     return value.trim().replace(/^\/+|\/+$/g, '');
 }
@@ -294,6 +304,43 @@ export function getPlannerMetaKey(project, characterId = '') {
 
 export function getPlannerSettingsKey(project) {
     return `${getPlannerPrefix(project)}_planner_settings.json`;
+}
+
+const pathMigrationRequestKeys = new Map();
+
+async function requestEntityPathMigration(entityType, payload) {
+    const requestKey = [
+        entityType,
+        payload.projectId || payload.projectPrefix || '',
+        payload.characterId || payload.situationId || '',
+        payload.oldPrefix || payload.oldStorageName || '',
+        payload.newPrefix || payload.newStorageName || ''
+    ].join(':');
+    const idempotencyKey = pathMigrationRequestKeys.get(requestKey) || crypto.randomUUID();
+    pathMigrationRequestKeys.set(requestKey, idempotencyKey);
+    const res = await fetch(`/api/path-migrations/${entityType}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...payload, idempotencyKey }),
+        cache: 'no-store'
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const error = new Error(data.error || '경로 변경에 실패했습니다.');
+        error.code = data.code || '';
+        error.migrationId = data.migrationId || data.details?.migrationId || '';
+        throw error;
+    }
+    pathMigrationRequestKeys.delete(requestKey);
+    return data;
+}
+
+export function changeCharacterStoragePath(payload) {
+    return requestEntityPathMigration('character', payload);
+}
+
+export function changeSituationStoragePath(payload) {
+    return requestEntityPathMigration('situation', payload);
 }
 
 export function getProjectBackgroundPromptsKey(project) {
@@ -597,6 +644,29 @@ export function setCachedPlannerCharacterId(project, characterId) {
     } catch {}
 }
 
+export function replaceCachedPlannerCharacterId(project, oldCharacterId, newCharacterId) {
+    if (!project?.id || !newCharacterId) return;
+    const cache = readPlannerCharacterCache();
+    if (cache[project.id] === oldCharacterId) cache[project.id] = newCharacterId;
+    try {
+        localStorage.setItem(PLANNER_CHARACTER_CACHE_KEY, JSON.stringify(cache));
+    } catch {}
+    if (window.PROJECT_PLANNER_SELECTED_CHARACTER_ID === oldCharacterId) {
+        window.PROJECT_PLANNER_SELECTED_CHARACTER_ID = newCharacterId;
+    }
+}
+
+export function replaceCachedCraftCharacterPath(project, oldPrefix, newPrefix) {
+    if (!project?.prefix || !newPrefix) return;
+    try {
+        const storageKey = 'imggul_craft_upload_context';
+        const cache = JSON.parse(localStorage.getItem(storageKey) || '{}') || {};
+        const projectCache = cache.byProject?.[project.prefix];
+        if (projectCache?.characterPath === oldPrefix) projectCache.characterPath = newPrefix;
+        localStorage.setItem(storageKey, JSON.stringify(cache));
+    } catch {}
+}
+
 export function readSituationRatingCache() {
     try {
         return JSON.parse(localStorage.getItem(SITUATION_RATING_CACHE_KEY) || '{}') || {};
@@ -730,8 +800,8 @@ export async function loadProjectCharacters(project, force = false) {
     if (!force && project.charactersLoaded) return getProjectItems(project, 'characters');
 
     const [listRes, aliasRes] = await Promise.all([
-        fetch(`/api/list?prefix=${encodeURIComponent(project.prefix)}`),
-        fetch(`/api/aliases?prefix=${encodeURIComponent(project.prefix)}`)
+        fetch(`/api/list?prefix=${encodeURIComponent(project.prefix)}&_t=${Date.now()}`, { cache: 'no-store' }),
+        fetch(`/api/aliases?prefix=${encodeURIComponent(project.prefix)}&_t=${Date.now()}`, { cache: 'no-store' })
     ]);
 
     if (!listRes.ok) throw new Error('캐릭터 목록을 불러오지 못했습니다.');
@@ -770,6 +840,7 @@ export async function loadProjectSituations(project, force = false) {
 
     if (res.status === 404) {
         project.situations = [];
+        project.situationsUpdatedAt = '';
         project.situationsLoaded = true;
         return project.situations;
     }
@@ -779,6 +850,7 @@ export async function loadProjectSituations(project, force = false) {
     const payload = await res.json();
     const data = payload.data || {};
     project.situations = normalizeProjectSituations(Array.isArray(data.situations) ? data.situations : []);
+    project.situationsUpdatedAt = payload.updatedAt || '';
     project.situationsLoaded = true;
 
     return project.situations;
@@ -787,6 +859,14 @@ export async function loadProjectSituations(project, force = false) {
 export function normalizeProjectSituations(situations) {
     return situations.map((situation, index) => {
         const id = situation?.id || situation?.folderName || `situation-${index + 1}`;
+        const legacyStorageName = situation?.imageNumber !== undefined && situation?.imageNumber !== null
+            ? String(situation.imageNumber)
+            : String(index);
+        const storageName = String(
+            situation?.storageName
+            || situation?.folderName
+            || legacyStorageName
+        ).trim();
         const alias = situation?.alias || '';
         const name = situation?.name || alias || id;
         const generation = getSituationGeneration(situation);
@@ -802,11 +882,12 @@ export function normalizeProjectSituations(situations) {
         return {
             ...situation,
             id,
-            folderName: situation?.folderName || id,
+            storageName,
+            folderName: storageName,
             name,
             alias,
             rating: getSituationRating(situation),
-            imageNumber: Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index,
+            imageNumber: storageName,
             prompt,
             promptVariants: normalizeSituationPromptVariants({ ...situation, prompt }),
             generation,
@@ -837,6 +918,8 @@ export async function saveProjectSituations(project) {
         const data = await res.json().catch(() => ({}));
         throw new Error(data.error || '상황 저장 실패');
     }
+    const payload = await res.json().catch(() => ({}));
+    project.situationsUpdatedAt = payload.updatedAt || project.situationsUpdatedAt || '';
 }
 
 export async function loadProjectBackgroundPrompts(project, options = {}) {
@@ -953,10 +1036,18 @@ export function getSituationDisplayName(situation) {
 }
 
 export function getSituationImageNumber(project, situation) {
+    return getSituationStorageName(project, situation);
+}
+
+export function getSituationStorageName(project, situation) {
     const situations = getProjectItems(project, 'situations');
     const index = situations.findIndex(item => item.id === situation?.id);
-    const imageNumber = Number(situation?.imageNumber);
-    return Number.isFinite(imageNumber) ? imageNumber : (index >= 0 ? index : situations.length);
+    const storageName = String(
+        situation?.storageName
+        || situation?.folderName
+        || (situation?.imageNumber ?? '')
+    ).trim();
+    return storageName || String(index >= 0 ? index : situations.length);
 }
 
 export function getSituationImageKey(project, situation) {
@@ -965,19 +1056,13 @@ export function getSituationImageKey(project, situation) {
 
 export function getNextSituationImageNumber(project) {
     const usedNumbers = getProjectItems(project, 'situations')
-        .map(situation => Number(situation.imageNumber))
+        .map(situation => Number(getSituationStorageName(project, situation)))
         .filter(number => Number.isFinite(number));
-    return usedNumbers.length ? Math.max(...usedNumbers) + 1 : getProjectItems(project, 'situations').length;
+    return String(usedNumbers.length ? Math.max(...usedNumbers) + 1 : getProjectItems(project, 'situations').length);
 }
 
 export function getNextSituationFolderName(project) {
-    const usedNumbers = getProjectItems(project, 'situations')
-        .map(situation => String(situation.folderName || situation.id || '').trim())
-        .filter(value => /^\d+$/.test(value))
-        .map(value => Number.parseInt(value, 10))
-        .filter(number => Number.isFinite(number));
-    const nextNumber = usedNumbers.length ? Math.max(...usedNumbers) + 1 : getProjectItems(project, 'situations').length;
-    return String(nextNumber);
+    return getNextSituationImageNumber(project);
 }
 
 export function getSituationFolderNumber(value) {

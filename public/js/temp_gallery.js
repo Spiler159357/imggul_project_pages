@@ -1,5 +1,5 @@
 // 6. temp_gallery.js: 임시 보관함 및 변환 유예 관리
-import { getProjectByPrefix, getProjectItems, loadProjectCharacters, loadProjectSituations, loadProjects } from './project/shared.js?v=internal-folder-filter-20260721a';
+import { getProjectByPrefix, getProjectItems, loadProjectCharacters, loadProjectSituations, loadProjects } from './project/shared.js?v=path-migration-20260818a';
 /**
  * 역할: Vibe 참조 이미지를 초기화하고 관련 미리보기/슬라이더 UI를 숨긴다.
  * 매개변수: 없음.
@@ -1049,9 +1049,9 @@ function isVisibleUploadFolder(folderPrefix) {
 }
 
 function getSituationUploadLabel(situation, index) {
-    const imageNumber = Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index;
-    const name = situation?.alias || situation?.name || situation?.id || `상황 ${imageNumber}`;
-    return `${imageNumber} - ${name}`;
+    const storageName = String(situation?.storageName || situation?.folderName || (situation?.imageNumber ?? index));
+    const name = situation?.alias || situation?.name || situation?.id || `상황 ${storageName}`;
+    return `${storageName} - ${name}`;
 }
 
 function makeUploadPickerItem({ type, label, subLabel = '', active = false, onClick }) {
@@ -1131,11 +1131,7 @@ async function getCraftUploadSituation(projectPath, situationId) {
 }
 
 function getCraftUploadSituationImageNumber(situation, fallbackId) {
-    const imageNumber = Number(situation?.imageNumber);
-    if (Number.isFinite(imageNumber)) return String(imageNumber);
-
-    const fallbackNumber = Number(fallbackId);
-    return Number.isFinite(fallbackNumber) ? String(fallbackNumber) : '';
+    return String(situation?.storageName || situation?.folderName || (situation?.imageNumber ?? fallbackId ?? '')).trim();
 }
 
 /**

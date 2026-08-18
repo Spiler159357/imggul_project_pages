@@ -1,10 +1,13 @@
-import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renameProjectFolder, renderCharacterName, renderEmptyState, renderProjectShell, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js?v=planner-target-picker-instant-20260814a';
-import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=planner-target-picker-instant-20260814a';
-import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js?v=planner-target-picker-instant-20260814a';
+import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, changeCharacterStoragePath, clearFolderDataCacheTree, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderCharacterName, renderEmptyState, renderProjectShell, replaceCachedCraftCharacterPath, replaceCachedPlannerCharacterId, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js?v=path-migration-20260818a';
+import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=path-migration-20260818a';
+import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js?v=path-migration-20260818a';
 
 export function getSituationImageCandidates(situation, index) {
-    const imageNumber = Number(situation?.imageNumber);
-    const values = [String(Number.isFinite(imageNumber) ? imageNumber : index)];
+    const legacyStorageName = situation?.imageNumber !== undefined && situation?.imageNumber !== null
+        ? situation.imageNumber
+        : index;
+    const storageName = String(situation?.storageName || situation?.folderName || legacyStorageName);
+    const values = [storageName];
 
     return values
         .filter(Boolean)
@@ -282,8 +285,8 @@ export async function uploadCharacterSituationImage(file, projectId = window.PRO
     const situation = getProjectItems(project, 'situations')[situationIndex];
     if (!project || !character || !situation) return alert('업로드할 캐릭터 또는 상황을 찾지 못했습니다.');
 
-    const imageNumber = getSituationImageNumber(project, situation);
-    const fileName = `${imageNumber}.webp`;
+    const storageName = getSituationStorageName(project, situation);
+    const fileName = `${storageName}.webp`;
     const finalPath = `${character.prefix}${fileName}`;
 
     try {
@@ -314,6 +317,7 @@ export async function uploadCharacterSituationImage(file, projectId = window.PRO
         if (!res.ok) throw new Error(`서버 응답 오류 (${res.status})`);
         if (metadata && window.saveMetadataToDB) await window.saveMetadataToDB(character.prefix, fileName, metadata);
 
+        clearFolderDataCacheTree(character.prefix);
         clearProjectCaches(character.prefix);
         character.filesLoaded = false;
         await loadCharacterFiles(character, true).catch(() => []);
@@ -646,11 +650,19 @@ export async function changeActiveCharacterPath() {
     const newPrefix = `${project.prefix}${folderName}/`;
 
     try {
-        if (folderChanged) {
-            await renameProjectFolder(oldPrefix, newPrefix);
-        }
+        await changeCharacterStoragePath({
+            projectId: project.id,
+            projectPrefix: project.prefix,
+            characterId: oldPrefix,
+            oldPrefix,
+            newPrefix
+        });
 
+        clearFolderDataCacheTree(oldPrefix, newPrefix, `${project.prefix}_planner_temp_image/`);
         clearProjectCaches(project.prefix, oldPrefix, newPrefix);
+        replaceCachedCraftCharacterPath(project, oldPrefix, newPrefix);
+        replaceCachedPlannerCharacterId(project, oldPrefix, newPrefix);
+        window.clearPlannerCachesForProject?.(project);
         project.charactersLoaded = false;
         await loadProjectCharacters(project, true);
         await openCharacterDetail(project.id, newPrefix, true);
@@ -860,22 +872,21 @@ export async function createCharacter(project, folderName, alias) {
     if (window.loadPath && window.currentPrefix === project.prefix) window.loadPath(project.prefix, true);
 }
 
-export async function createSituation(project, situationId, alias, rating = 'sfw') {
+export async function createSituation(project, storageName, alias, rating = 'sfw') {
     if (!project.situationsLoaded) await loadProjectSituations(project);
-    if (getProjectItems(project, 'situations').some(situation => situation.id === situationId)) {
+    if (getProjectItems(project, 'situations').some(situation => getSituationStorageName(project, situation) === storageName)) {
         throw new Error('이미 존재하는 상황 경로입니다.');
     }
 
-    const folderNumber = getSituationFolderNumber(situationId);
-    const imageNumber = Number.isFinite(folderNumber) ? folderNumber : getNextSituationImageNumber(project);
-    const name = alias || situationId;
+    const name = alias || storageName;
     const situation = {
-        id: situationId,
-        folderName: situationId,
+        id: crypto.randomUUID(),
+        storageName,
+        folderName: storageName,
         name,
         alias,
         rating: getSituationRating({ rating }),
-        imageNumber,
+        imageNumber: storageName,
         prompt: {
             composition: '',
             clothing: '',

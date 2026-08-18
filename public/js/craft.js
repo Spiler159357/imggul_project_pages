@@ -50,9 +50,9 @@ async function loadCraftSituations(projectPrefix) {
 }
 
 function getCraftSituationDisplayName(situation, index) {
-    const imageNumber = Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index;
-    const name = situation?.alias || situation?.name || situation?.id || `상황 ${imageNumber}`;
-    return `${imageNumber} - ${name}`;
+    const storageName = String(situation?.storageName || situation?.folderName || (situation?.imageNumber ?? index));
+    const name = situation?.alias || situation?.name || situation?.id || `상황 ${storageName}`;
+    return `${storageName} - ${name}`;
 }
 
 function normalizeCraftPath(path) {

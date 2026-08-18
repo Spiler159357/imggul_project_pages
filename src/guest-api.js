@@ -199,15 +199,16 @@ async function getProjectAliases(env, project) {
 async function getProjectSituations(env, project) {
     try {
         const rows = (await env.DB.prepare(`
-            SELECT id, name, image_number
+            SELECT id, name, COALESCE(storage_name, image_number) AS storage_name
             FROM v2_situations
             WHERE project_id = ?
-            ORDER BY sort_order ASC, image_number ASC
+            ORDER BY sort_order ASC, COALESCE(storage_name, image_number) ASC
         `).bind(project.id).all()).results || [];
         const byImageNumber = new Map();
         const byId = new Map();
         for (const row of rows) {
-            const situation = { id: String(row.id || ''), name: row.name || row.id || '', imageNumber: String(row.image_number ?? '') };
+            const storageName = String(row.storage_name ?? '');
+            const situation = { id: String(row.id || ''), name: row.name || row.id || '', storageName, imageNumber: storageName };
             if (situation.imageNumber) byImageNumber.set(situation.imageNumber, situation);
             if (situation.id) byId.set(situation.id, situation);
         }

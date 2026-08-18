@@ -34,6 +34,11 @@ import {
     startPlannerCompactGeneration,
     updatePlannerCompactItem
 } from "../src/planner-compact.js";
+import {
+    changeCharacterPath,
+    changeSituationPath,
+    getPathMigration
+} from "../src/path-migration.js";
 // Cloudflare Pages Functions - Catch-all 라우터 및 API 서버리스 핸들러
 
 function plannerApiErrorResponse(error) {
@@ -41,6 +46,17 @@ function plannerApiErrorResponse(error) {
         error: error?.message || String(error || "Planner request failed"),
         code: error?.code || undefined
     }, { status: error?.status || 500 });
+}
+
+function pathMigrationErrorResponse(error) {
+    return jsonResponse({
+        error: error?.message || String(error || 'Path migration failed'),
+        code: error?.code || 'PATH_MIGRATION_FAILED',
+        details: error?.details || undefined
+    }, {
+        status: error?.status || 500,
+        headers: { 'Cache-Control': 'no-store' }
+    });
 }
 
 async function constantTimeTextEqual(left, right) {
@@ -180,6 +196,7 @@ async function putJsonDocument(env, docType, objectKey, value, source = 'db') {
             updated_at = excluded.updated_at
     `).bind(docType, objectKey, JSON.stringify(value || {}), source, timestamp, timestamp).run();
     await mirrorJsonDocumentToV2(env, docType, objectKey, value || {}).catch(() => null);
+    return timestamp;
 }
 
 function getProjectPrefixFromDocumentKey(key = '') {
@@ -237,13 +254,21 @@ async function mirrorJsonDocumentToV2(env, docType, objectKey, value) {
         const statements = [];
         situations.forEach((situation, index) => {
             const situationId = situation?.id || situation?.folderName || makeStableDbId('situation', `${objectKey}:${index}`);
+            const storageName = String(
+                situation?.storageName
+                || situation?.folderName
+                || String(situation?.imageNumber ?? index)
+            );
             statements.push(env.DB.prepare(`
-                INSERT INTO v2_situations (id, project_id, name, image_number, rating, sort_order, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT INTO v2_situations (
+                    id, project_id, name, image_number, storage_name,
+                    rating, sort_order, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     project_id = excluded.project_id,
                     name = excluded.name,
                     image_number = excluded.image_number,
+                    storage_name = excluded.storage_name,
                     rating = excluded.rating,
                     sort_order = excluded.sort_order,
                     updated_at = excluded.updated_at
@@ -251,7 +276,8 @@ async function mirrorJsonDocumentToV2(env, docType, objectKey, value) {
                 situationId,
                 projectId,
                 situation?.name || situation?.alias || situationId,
-                String(situation?.imageNumber ?? index),
+                storageName,
+                storageName,
                 situation?.rating === 'nsfw' ? 'nsfw' : 'sfw',
                 index,
                 timestamp,
@@ -2305,7 +2331,12 @@ export async function onRequest(context) {
             }
             const data = await getJsonDocument(env, docType, key, fallbackKey, null);
             if (data === null || data === undefined) return jsonResponse({ data: null }, { status: 404 });
-            return jsonResponse({ data });
+            const row = await env.DB.prepare(
+                'SELECT updated_at FROM json_documents WHERE doc_type = ? AND object_key = ?'
+            ).bind(docType, key).first();
+            return jsonResponse({ data, updatedAt: row?.updated_at || '' }, {
+                headers: { 'Cache-Control': 'no-store' }
+            });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
         }
@@ -2319,8 +2350,8 @@ export async function onRequest(context) {
             if (body.type === 'planner_meta') {
                 return jsonResponse({ error: 'planner_meta is only available through /api/planner/meta' }, { status: 410 });
             }
-            await putJsonDocument(env, body.type, body.key, body.data || {});
-            return jsonResponse({ success: true });
+            const updatedAt = await putJsonDocument(env, body.type, body.key, body.data || {});
+            return jsonResponse({ success: true, updatedAt });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });
         }
@@ -2626,6 +2657,42 @@ export async function onRequest(context) {
         }
     }
 
+    if (path === "/api/path-migrations/character" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            return jsonResponse(await changeCharacterPath(env, body || {}), {
+                headers: { 'Cache-Control': 'no-store' }
+            });
+        } catch (e) {
+            return pathMigrationErrorResponse(e);
+        }
+    }
+
+    if (path === "/api/path-migrations/situation" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            return jsonResponse(await changeSituationPath(env, body || {}), {
+                headers: { 'Cache-Control': 'no-store' }
+            });
+        } catch (e) {
+            return pathMigrationErrorResponse(e);
+        }
+    }
+
+    const pathMigrationMatch = path.match(/^\/api\/path-migrations\/([^/]+)$/);
+    if (pathMigrationMatch && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            return jsonResponse({ data: await getPathMigration(env, decodeURIComponent(pathMigrationMatch[1])) }, {
+                headers: { 'Cache-Control': 'no-store' }
+            });
+        } catch (e) {
+            return pathMigrationErrorResponse(e);
+        }
+    }
+
     if (path === "/api/manage" && method === "POST") {
         if (!isAdmin) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 403 });
 
@@ -2746,8 +2813,11 @@ export async function onRequest(context) {
                         if (object) {
                             await env.imgBucket.put(targetKey, object.body, {
                                 httpMetadata: object.httpMetadata,
-                                customMetadata: object.customMetadata
+                                customMetadata: object.customMetadata,
+                                storageClass: object.storageClass
                             });
+                            const copied = await env.imgBucket.head(targetKey);
+                            if (!copied || copied.size !== object.size) throw new Error(`Failed to verify copied object: ${targetKey}`);
                             movedKeys.push(objectInfo.key);
                         }
                     }
@@ -2785,7 +2855,7 @@ export async function onRequest(context) {
                     `).bind(newPrefix, oldPrefix, timestamp, `${oldPrefix}%`)
                 ]);
 
-                return new Response(JSON.stringify({ success: true, newKey: newPrefix }));
+                return new Response(JSON.stringify({ success: true, newKey: newPrefix, deprecatedForEntityPathChanges: true }));
             }
 
             if (action === 'move') {

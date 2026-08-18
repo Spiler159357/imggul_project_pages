@@ -7,7 +7,7 @@ import {
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js?v=planner-target-picker-instant-20260814a';
+} from './shared.js?v=path-migration-20260818a';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;

@@ -1,7 +1,7 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-target-picker-instant-20260814a';
-import { renderSectionHeader } from './manage.js?v=planner-target-picker-instant-20260814a';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-target-picker-instant-20260814a';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-target-picker-instant-20260814a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=path-migration-20260818a';
+import { renderSectionHeader } from './manage.js?v=path-migration-20260818a';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=path-migration-20260818a';
+import { combinePromptParts, getSituationById } from './situation.js?v=path-migration-20260818a';
 
 const PLANNER_DEFAULT_IMAGE_COUNT = 10;
 const PLANNER_MIN_IMAGE_COUNT = 1;
@@ -132,6 +132,17 @@ function writePlannerMetaCache(key, meta) {
 
 function deletePlannerMetaCache(key) {
     if (key) plannerMetaMemoryCache.delete(key);
+}
+
+export function clearPlannerCachesForProject(project) {
+    if (!project?.prefix) return;
+    for (const key of plannerMetaMemoryCache.keys()) {
+        if (key.startsWith(project.prefix)) plannerMetaMemoryCache.delete(key);
+    }
+    if (window.PROJECT_ACTIVE_PROJECT_ID === project.id) {
+        window.PROJECT_PLANNER_META = null;
+        window.PROJECT_PLANNER_PLAN_META = null;
+    }
 }
 
 function setPlannerPendingAction(action) {

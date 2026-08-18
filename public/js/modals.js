@@ -838,9 +838,9 @@ function setImportListMessage(id, message) {
 }
 
 function getImportSituationLabel(situation, index) {
-    const number = Number.isFinite(Number(situation?.imageNumber)) ? Number(situation.imageNumber) : index;
-    const name = situation?.alias || situation?.name || situation?.id || `상황 ${number}`;
-    return `${number} - ${name}`;
+    const storageName = String(situation?.storageName || situation?.folderName || (situation?.imageNumber ?? index));
+    const name = situation?.alias || situation?.name || situation?.id || `상황 ${storageName}`;
+    return `${storageName} - ${name}`;
 }
 
 function getSelectedImportCharacter(state = window.IMPORT_PROJECT_PICKER_STATE || {}) {

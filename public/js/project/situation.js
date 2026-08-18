@@ -1,6 +1,6 @@
-import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationFolderNumber, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js?v=planner-target-picker-instant-20260814a';
-import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=planner-target-picker-instant-20260814a';
-import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=planner-target-picker-instant-20260814a';
+import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js?v=path-migration-20260818a';
+import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=path-migration-20260818a';
+import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=path-migration-20260818a';
 
 export function getSituationPromptIndicator(situation) {
     const prompt = getSituationPrompt(situation);
@@ -12,8 +12,8 @@ export function renderSituationCards(project, situations = []) {
     return situations.map(situation => `
         <button type="button" onclick="window.openSituationDetail('${escapeJsString(project.id)}', '${escapeJsString(situation.id)}')" class="group flex min-h-[112px] w-full flex-col justify-between self-start text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3.5 py-3 hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition">
             <span class="flex items-start justify-between gap-2">
-                <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationImageNumber(project, situation))}</span>
-                <span class="min-w-0 text-right text-[10px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition truncate">${escapeHtml(getSituationImageNumber(project, situation))}.webp</span>
+                <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 dark:bg-gray-900/70 text-[11px] font-extrabold text-gray-500 dark:text-gray-400 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition">${escapeHtml(getSituationStorageName(project, situation))}</span>
+                <span class="min-w-0 text-right text-[10px] font-bold text-gray-300 dark:text-gray-600 group-hover:text-indigo-400 dark:group-hover:text-indigo-500 transition truncate">${escapeHtml(getSituationStorageName(project, situation))}.webp</span>
             </span>
             <span class="mt-3 min-w-0">
                 <span class="mb-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${getSituationRating(situation) === 'nsfw' ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'}">${getSituationRating(situation).toUpperCase()}</span>
@@ -248,7 +248,7 @@ export function renderSituationDetailShell(project, situation, state = {}) {
     const prompt = getSituationPrompt(situation);
     const promptVariants = normalizeSituationPromptVariants(situation);
     const activePromptVariant = getActiveSituationPromptVariant(situation);
-    const imageNumber = getSituationImageNumber(project, situation);
+    const storageName = getSituationStorageName(project, situation);
     const generation = getSituationGeneration(situation);
     const resolution = generation.res || DEFAULT_PLANNER_RESOLUTION;
     const rating = getSituationRating(situation);
@@ -262,7 +262,7 @@ export function renderSituationDetailShell(project, situation, state = {}) {
                 </button>
                 <div class="min-w-0">
                     <h1 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(getSituationDisplayName(situation))}</h1>
-                    <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${escapeHtml(project.name)} / 상황 상세 / ${escapeHtml(imageNumber)}.webp</p>
+                    <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${escapeHtml(project.name)} / 상황 상세 / ${escapeHtml(storageName)}.webp</p>
                 </div>
             </div>
             <div class="relative flex-shrink-0">
@@ -451,7 +451,8 @@ export async function changeActiveSituationPath() {
     const situation = getSituationById(project, window.PROJECT_ACTIVE_SITUATION_ID);
     if (!project || !situation) return;
 
-    const nextPath = prompt('상황 경로를 입력하세요.', situation.folderName || situation.id);
+    const oldStorageName = getSituationStorageName(project, situation);
+    const nextPath = prompt('상황 경로를 입력하세요.', oldStorageName);
     if (nextPath === null) return;
 
     const folderName = normalizeProjectFolderName(nextPath);
@@ -460,44 +461,31 @@ export async function changeActiveSituationPath() {
         return;
     }
 
-    const oldId = situation.id;
-    if (folderName === oldId && folderName === situation.folderName) return;
-    if (getProjectItems(project, 'situations').some(item => item !== situation && (item.id === folderName || item.folderName === folderName))) {
+    if (folderName === oldStorageName) return;
+    if (getProjectItems(project, 'situations').some(item => item !== situation && getSituationStorageName(project, item) === folderName)) {
         alert('이미 존재하는 상황 경로입니다.');
         return;
     }
 
-    const previousActiveId = window.PROJECT_ACTIVE_SITUATION_ID;
-    const previousId = situation.id;
-    const previousFolderName = situation.folderName;
-    const previousImageNumber = situation.imageNumber;
-
     try {
-        const previousImageKey = getSituationImageKey(project, situation);
-        const folderNumber = getSituationFolderNumber(folderName);
-        situation.id = folderName;
-        situation.folderName = folderName;
-        if (Number.isFinite(folderNumber)) situation.imageNumber = folderNumber;
-        project.situationsLoaded = true;
-        window.PROJECT_ACTIVE_SITUATION_ID = situation.id;
+        await changeSituationStoragePath({
+            projectId: project.id,
+            projectPrefix: project.prefix,
+            situationId: situation.id,
+            oldStorageName,
+            newStorageName: folderName,
+            expectedDocumentUpdatedAt: project.situationsUpdatedAt || ''
+        });
 
-        await saveProjectSituations(project);
-        const nextImageKey = getSituationImageKey(project, situation);
-        if (previousImageKey !== nextImageKey) {
-            const displayName = getSituationDisplayName(situation);
-            await saveProjectAlias(previousImageKey, '');
-            await saveProjectAlias(nextImageKey, displayName);
-        }
-        renderSituationDetailShell(project, situation);
-        replaceProjectRoute(
-            { projectView: 'situation-detail', projectId: project.id, situationId: situation.id },
-            `#project/${project.id}/situation/${encodeURIComponent(situation.id)}`
-        );
+        clearFolderDataCacheTree(project.prefix, `${project.prefix}_planner_temp_image/`);
+        window.clearPlannerCachesForProject?.(project);
+        project.situationsLoaded = false;
+        await loadProjectSituations(project, true);
+        const refreshedSituation = getSituationById(project, situation.id);
+        await Promise.all(getProjectItems(project, 'characters').map(character => loadCharacterFiles(character, true).catch(() => [])));
+        if (refreshedSituation) renderSituationDetailShell(project, refreshedSituation);
+        if (window.currentPrefix === project.prefix && window.loadPath) window.loadPath(project.prefix, true);
     } catch (err) {
-        window.PROJECT_ACTIVE_SITUATION_ID = previousActiveId;
-        situation.id = previousId;
-        situation.folderName = previousFolderName;
-        situation.imageNumber = previousImageNumber;
         alert(err.message || '상황 경로 변경에 실패했습니다.');
     }
 }

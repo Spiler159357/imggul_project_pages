@@ -1,4 +1,5 @@
 import { makeR2ImageVisibilityMetadata } from './image-serving.js';
+import { isSafePathSegment } from './path-utils.js';
 
 const RECORD_TYPES = new Set(["settings", "run", "confirm", "rate"]);
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "paused", "cancel_requested"]);
@@ -1667,6 +1668,9 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
     if (!run) throw plannerError("PLANNER_RUN_NOT_FOUND", 404, "Planner run not found.");
     const item = run.payload.items.find(entry => entry.itemId === itemId);
     if (!item) throw plannerError("PLANNER_ITEM_NOT_FOUND", 404, "Planner item not found.");
+    if (!isSafePathSegment(item.imageNumber)) {
+        throw plannerError("PLANNER_INVALID_STORAGE_NAME", 400, "Invalid situation storage name.");
+    }
     const candidate = item.candidates.find(entry => entry.assetId === assetId);
     if (!candidate) throw plannerError("PLANNER_ASSET_NOT_FOUND", 404, "Planner asset not found.");
     const generationSequence = asNonNegativeInteger(candidate.generationSequence, 0);
@@ -1805,6 +1809,151 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
         if (rollbackError) throw rollbackError;
         throw error;
     }
+}
+
+function makePlannerMigrationError(code, message) {
+    return plannerError(code, 409, message);
+}
+
+function mapPlannerR2Key(key, mappings = new Map()) {
+    return mappings.get(asString(key)) || asString(key);
+}
+
+export async function prepareCharacterPathPlannerMigration(env, input = {}) {
+    const projectId = asString(input.projectId);
+    const oldCharacterId = asString(input.oldCharacterId || input.oldPrefix);
+    const newCharacterId = asString(input.newCharacterId || input.newPrefix);
+    const rows = (await env.DB.prepare(`
+        SELECT * FROM planner_compact_records
+        WHERE project_id = ? AND character_id = ? AND record_type IN ('run', 'confirm')
+        ORDER BY record_type, record_key
+    `).bind(projectId, oldCharacterId).all()).results || [];
+    const records = rows.map(row => parsePlannerCompactRow(row));
+    for (const record of records) {
+        if (record.recordType === 'run' && ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
+            throw makePlannerMigrationError('PLANNER_RUN_ACTIVE', '플래너 실행 중에는 캐릭터 경로를 변경할 수 없습니다.');
+        }
+        if (record.recordType === 'confirm' && record.payload.status === 'pending') {
+            throw makePlannerMigrationError('PLANNER_CONFIRM_ACTIVE', '이미지 확정 처리 중에는 캐릭터 경로를 변경할 수 없습니다.');
+        }
+    }
+
+    const r2Mappings = new Map(asArray(input.manifest).map(entry => [entry.sourceKey, entry.targetKey]));
+    const statements = [];
+    let changedRuns = 0;
+    let removedConfirms = 0;
+    for (const record of records) {
+        if (record.recordType === 'confirm') {
+            statements.push(env.DB.prepare('DELETE FROM planner_compact_records WHERE record_key = ? AND revision = ?')
+                .bind(record.recordKey, record.revision));
+            removedConfirms += 1;
+            continue;
+        }
+
+        const nextPayload = cloneJson(record.payload);
+        nextPayload.characterId = newCharacterId;
+        nextPayload.characterPrefix = asString(input.newPrefix);
+        const runIds = makePlannerCompactIds(nextPayload);
+        nextPayload.runId = runIds.runId;
+        nextPayload.activeJob = null;
+        nextPayload.status = ['queued', 'running', 'paused'].includes(nextPayload.status) ? 'draft' : nextPayload.status;
+        nextPayload.items = asArray(nextPayload.items).map(item => {
+            const itemIds = makePlannerCompactIds({
+                ...nextPayload,
+                ...item,
+                projectId,
+                characterId: newCharacterId
+            });
+            const variantMap = new Map();
+            const variants = asArray(item.variants).map(variant => {
+                const variantIds = makePlannerCompactIds({
+                    ...nextPayload,
+                    ...item,
+                    ...variant,
+                    projectId,
+                    characterId: newCharacterId,
+                    itemId: itemIds.itemId
+                });
+                variantMap.set(variant.variantId, variantIds.variantId);
+                return { ...variant, variantId: variantIds.variantId };
+            });
+            const candidates = asArray(item.candidates).map(candidate => {
+                const nextCandidate = {
+                    ...candidate,
+                    itemId: itemIds.itemId,
+                    variantId: variantMap.get(candidate.variantId) || candidate.variantId,
+                    r2Key: mapPlannerR2Key(candidate.r2Key, r2Mappings)
+                };
+                nextCandidate.assetId = makePlannerCompactAssetId(nextCandidate);
+                return nextCandidate;
+            });
+            return { ...item, itemId: itemIds.itemId, variants, candidates };
+        });
+        nextPayload.updatedAt = nowIso();
+        const nextRecordKey = makePlannerCompactKey('run', nextPayload);
+        if (nextRecordKey !== record.recordKey) {
+            const collision = await env.DB.prepare('SELECT record_key FROM planner_compact_records WHERE record_key = ?')
+                .bind(nextRecordKey)
+                .first();
+            if (collision) throw makePlannerMigrationError('PLANNER_PATH_DESTINATION_EXISTS', '새 캐릭터 경로에 플래너 데이터가 이미 존재합니다.');
+        }
+        statements.push(env.DB.prepare(`
+            UPDATE planner_compact_records
+            SET record_key = ?, character_id = ?, status = ?, payload_json = ?,
+                revision = revision + 1, updated_at = ?
+            WHERE record_key = ? AND revision = ?
+        `).bind(
+            nextRecordKey,
+            newCharacterId,
+            nextPayload.status,
+            serializePayload(nextPayload, nextRecordKey),
+            nowIso(),
+            record.recordKey,
+            record.revision
+        ));
+        changedRuns += 1;
+    }
+    return {
+        statements,
+        summary: { changedPlannerRuns: changedRuns, removedPlannerConfirms: removedConfirms }
+    };
+}
+
+export async function prepareSituationPathPlannerMigration(env, input = {}) {
+    const projectId = asString(input.projectId);
+    const situationId = asString(input.situationId);
+    const rows = (await env.DB.prepare(`
+        SELECT * FROM planner_compact_records
+        WHERE project_id = ? AND record_type = 'run'
+        ORDER BY record_key
+    `).bind(projectId).all()).results || [];
+    const statements = [];
+    let changedRuns = 0;
+    for (const row of rows) {
+        const record = parsePlannerCompactRow(row, 'run');
+        const hasSituation = asArray(record.payload.items).some(item => item.situationId === situationId);
+        if (!hasSituation) continue;
+        if (ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
+            throw makePlannerMigrationError('PLANNER_RUN_ACTIVE', '플래너 실행 중에는 상황 경로를 변경할 수 없습니다.');
+        }
+        const nextPayload = cloneJson(record.payload);
+        nextPayload.items = asArray(nextPayload.items).map(item => item.situationId === situationId
+            ? { ...item, imageNumber: asString(input.newStorageName) }
+            : item);
+        nextPayload.updatedAt = nowIso();
+        statements.push(env.DB.prepare(`
+            UPDATE planner_compact_records
+            SET payload_json = ?, revision = revision + 1, updated_at = ?
+            WHERE record_key = ? AND revision = ?
+        `).bind(
+            serializePayload(nextPayload, record.recordKey),
+            nowIso(),
+            record.recordKey,
+            record.revision
+        ));
+        changedRuns += 1;
+    }
+    return { statements, summary: { changedPlannerRuns: changedRuns } };
 }
 
 export async function cleanupPlannerCompactAssets(env, options = {}) {
