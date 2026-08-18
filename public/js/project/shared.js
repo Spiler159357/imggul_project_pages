@@ -899,7 +899,7 @@ export function normalizeProjectSituations(situations) {
     });
 }
 
-export async function saveProjectSituations(project) {
+export async function saveProjectSituations(project, options = {}) {
     const metaKey = getSituationMetaKey(project);
     const res = await fetch('/api/db/json-document?_t=' + Date.now(), {
         method: 'PUT',
@@ -909,7 +909,8 @@ export async function saveProjectSituations(project) {
         body: JSON.stringify({
             type: 'situations_meta',
             key: metaKey,
-            data: { situations: getProjectItems(project, 'situations') }
+            data: { situations: getProjectItems(project, 'situations') },
+            aliasUpdates: Array.isArray(options.aliasUpdates) ? options.aliasUpdates : []
         }),
         cache: 'no-store'
     });

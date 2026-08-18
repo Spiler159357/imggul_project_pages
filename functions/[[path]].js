@@ -39,6 +39,7 @@ import {
     changeSituationPath,
     getPathMigration
 } from "../src/path-migration.js";
+import { getSituationDocumentChanges } from "../src/situation-sync.js";
 // Cloudflare Pages Functions - Catch-all 라우터 및 API 서버리스 핸들러
 
 function plannerApiErrorResponse(error) {
@@ -184,18 +185,41 @@ async function getJsonDocument(env, docType, objectKey, fallbackKey = objectKey,
     return fallbackValue;
 }
 
-async function putJsonDocument(env, docType, objectKey, value, source = 'db') {
+async function putJsonDocument(env, docType, objectKey, value, source = 'db', options = {}) {
     await ensureJsonDbSchema(env);
     const timestamp = nowIso();
-    await env.DB.prepare(`
+    const documentStatement = env.DB.prepare(`
         INSERT INTO json_documents (doc_type, object_key, data_json, source, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(doc_type, object_key) DO UPDATE SET
             data_json = excluded.data_json,
             source = excluded.source,
             updated_at = excluded.updated_at
-    `).bind(docType, objectKey, JSON.stringify(value || {}), source, timestamp, timestamp).run();
-    await mirrorJsonDocumentToV2(env, docType, objectKey, value || {}).catch(() => null);
+    `).bind(docType, objectKey, JSON.stringify(value || {}), source, timestamp, timestamp);
+
+    if (docType === 'situations_meta') {
+        const previousRow = await env.DB.prepare(
+            'SELECT data_json FROM json_documents WHERE doc_type = ? AND object_key = ?'
+        ).bind(docType, objectKey).first();
+        const previousValue = source === 'r2_import'
+            ? {}
+            : parseJsonField(previousRow?.data_json, {});
+        const mirrorStatements = buildSituationMirrorStatements(env, objectKey, previousValue, value || {}, timestamp);
+        const aliasStatements = buildAliasMutationStatements(env, options.aliasUpdates, timestamp);
+        const statements = [...mirrorStatements, ...aliasStatements, documentStatement];
+
+        if (statements.length <= 50) {
+            await env.DB.batch(statements);
+        } else {
+            for (let i = 0; i < mirrorStatements.length; i += 50) {
+                await env.DB.batch(mirrorStatements.slice(i, i + 50));
+            }
+            await env.DB.batch([...aliasStatements, documentStatement]);
+        }
+    } else {
+        await documentStatement.run();
+        await mirrorJsonDocumentToV2(env, docType, objectKey, value || {});
+    }
     return timestamp;
 }
 
@@ -223,6 +247,89 @@ async function upsertV2PromptSnapshot(env, ownerType, ownerId, kind, compiledPro
     return promptSetId;
 }
 
+function getSituationMirrorId(objectKey, situation, index) {
+    return situation?.id || situation?.folderName || makeStableDbId('situation', `${objectKey}:${index}`);
+}
+
+function buildSituationMirrorStatements(env, objectKey, previousValue, nextValue, timestamp = nowIso()) {
+    const projectPrefix = getProjectPrefixFromDocumentKey(objectKey);
+    const projectId = projectPrefix || makeStableDbId('project', objectKey);
+    const { changed, removed } = getSituationDocumentChanges(
+        previousValue,
+        nextValue,
+        (situation, index) => getSituationMirrorId(objectKey, situation, index)
+    );
+    const statements = [env.DB.prepare(`
+        INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
+    `).bind(projectId, projectPrefix || projectId, projectPrefix || projectId, timestamp, timestamp)];
+
+    changed.forEach(({ situationId, situation, index }) => {
+        const storageName = String(
+            situation?.storageName
+            || situation?.folderName
+            || String(situation?.imageNumber ?? index)
+        );
+        statements.push(env.DB.prepare(`
+            INSERT INTO v2_situations (
+                id, project_id, name, image_number, storage_name,
+                rating, sort_order, is_active, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 1, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                project_id = excluded.project_id,
+                name = excluded.name,
+                image_number = excluded.image_number,
+                storage_name = excluded.storage_name,
+                rating = excluded.rating,
+                sort_order = excluded.sort_order,
+                is_active = 1,
+                updated_at = excluded.updated_at
+        `).bind(
+            situationId,
+            projectId,
+            situation?.name || situation?.alias || situationId,
+            storageName,
+            storageName,
+            situation?.rating === 'nsfw' ? 'nsfw' : 'sfw',
+            index,
+            timestamp,
+            timestamp
+        ));
+        statements.push(env.DB.prepare(`
+            INSERT INTO v2_prompt_sets (
+                id, owner_type, owner_id, kind, name, is_active, sort_order,
+                compiled_prompt_json, created_at, updated_at
+            ) VALUES (?, 'situation', ?, 'default', '', 1, 0, ?, ?, ?)
+            ON CONFLICT(id) DO UPDATE SET
+                compiled_prompt_json = excluded.compiled_prompt_json,
+                is_active = 1,
+                updated_at = excluded.updated_at
+        `).bind(
+            makeStableDbId('prompt', `situation:${situationId}:default`),
+            situationId,
+            JSON.stringify(situation || {}),
+            timestamp,
+            timestamp
+        ));
+    });
+
+    removed.forEach(({ situationId }) => {
+        statements.push(env.DB.prepare(`
+            UPDATE v2_situations
+            SET is_active = 0, updated_at = ?
+            WHERE id = ? AND project_id = ?
+        `).bind(timestamp, situationId, projectId));
+        statements.push(env.DB.prepare(`
+            UPDATE v2_prompt_sets
+            SET is_active = 0, updated_at = ?
+            WHERE owner_type = 'situation' AND owner_id = ? AND kind = 'default'
+        `).bind(timestamp, situationId));
+    });
+
+    return statements;
+}
+
 async function mirrorJsonDocumentToV2(env, docType, objectKey, value) {
     if (!env?.DB) return;
     const timestamp = nowIso();
@@ -241,61 +348,6 @@ async function mirrorJsonDocumentToV2(env, docType, objectKey, value) {
             ON CONFLICT(id) DO UPDATE SET project_id = excluded.project_id, prefix = excluded.prefix, updated_at = excluded.updated_at
         `).bind(characterId, projectId, value?.name || characterId, characterId, timestamp, timestamp).run();
         await upsertV2PromptSnapshot(env, 'character', characterId, 'default', value, timestamp);
-    }
-    if (docType === 'situations_meta') {
-        const projectPrefix = getProjectPrefixFromDocumentKey(objectKey);
-        const projectId = projectPrefix || makeStableDbId('project', objectKey);
-        await env.DB.prepare(`
-            INSERT INTO v2_projects (id, name, prefix, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET prefix = excluded.prefix, updated_at = excluded.updated_at
-        `).bind(projectId, projectPrefix || projectId, projectPrefix || projectId, timestamp, timestamp).run();
-        const situations = Array.isArray(value?.situations) ? value.situations : [];
-        const statements = [];
-        situations.forEach((situation, index) => {
-            const situationId = situation?.id || situation?.folderName || makeStableDbId('situation', `${objectKey}:${index}`);
-            const storageName = String(
-                situation?.storageName
-                || situation?.folderName
-                || String(situation?.imageNumber ?? index)
-            );
-            statements.push(env.DB.prepare(`
-                INSERT INTO v2_situations (
-                    id, project_id, name, image_number, storage_name,
-                    rating, sort_order, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    project_id = excluded.project_id,
-                    name = excluded.name,
-                    image_number = excluded.image_number,
-                    storage_name = excluded.storage_name,
-                    rating = excluded.rating,
-                    sort_order = excluded.sort_order,
-                    updated_at = excluded.updated_at
-            `).bind(
-                situationId,
-                projectId,
-                situation?.name || situation?.alias || situationId,
-                storageName,
-                storageName,
-                situation?.rating === 'nsfw' ? 'nsfw' : 'sfw',
-                index,
-                timestamp,
-                timestamp
-            ));
-            statements.push(env.DB.prepare(`
-                INSERT INTO v2_prompt_sets (
-                    id, owner_type, owner_id, kind, name, is_active, sort_order,
-                    compiled_prompt_json, created_at, updated_at
-                ) VALUES (?, 'situation', ?, 'default', '', 1, 0, ?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                    compiled_prompt_json = excluded.compiled_prompt_json,
-                    updated_at = excluded.updated_at
-            `).bind(makeStableDbId('prompt', `situation:${situationId}:default`), situationId, JSON.stringify(situation || {}), timestamp, timestamp));
-        });
-        for (let i = 0; i < statements.length; i += 50) {
-            await env.DB.batch(statements.slice(i, i + 50));
-        }
     }
 }
 
@@ -1593,22 +1645,46 @@ async function getDbAliases(env, scope, projectName = '') {
     return Object.fromEntries((rows.results || []).map(row => [row.target_key, row.alias]));
 }
 
-async function putDbAlias(env, scope, projectName, targetKey, alias) {
-    await ensureJsonDbSchema(env);
+function prepareDbAliasMutation(env, scope, projectName, targetKey, alias, timestamp = nowIso()) {
     if (!alias) {
-        await env.DB.prepare(
+        return env.DB.prepare(
             'DELETE FROM aliases WHERE scope = ? AND project_name = ? AND target_key = ?'
-        ).bind(scope, projectName || '', targetKey).run();
-        return;
+        ).bind(scope, projectName || '', targetKey);
     }
-    const timestamp = nowIso();
-    await env.DB.prepare(`
+    return env.DB.prepare(`
         INSERT INTO aliases (scope, project_name, target_key, alias, created_at, updated_at)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT(scope, project_name, target_key) DO UPDATE SET
             alias = excluded.alias,
             updated_at = excluded.updated_at
-    `).bind(scope, projectName || '', targetKey, alias, timestamp, timestamp).run();
+    `).bind(scope, projectName || '', targetKey, alias, timestamp, timestamp);
+}
+
+function buildAliasMutationStatements(env, aliasUpdates, timestamp = nowIso()) {
+    if (!Array.isArray(aliasUpdates)) return [];
+    return aliasUpdates.map(update => {
+        const fullPath = String(update?.key || '');
+        const parts = fullPath.split('/').filter(Boolean);
+        if (parts.length === 1) {
+            return prepareDbAliasMutation(env, 'global', '', fullPath, update?.alias, timestamp);
+        }
+        if (parts.length > 1) {
+            return prepareDbAliasMutation(
+                env,
+                'project',
+                parts[0],
+                parts[parts.length - 1],
+                update?.alias,
+                timestamp
+            );
+        }
+        throw new Error('Invalid alias path');
+    });
+}
+
+async function putDbAlias(env, scope, projectName, targetKey, alias) {
+    await ensureJsonDbSchema(env);
+    await prepareDbAliasMutation(env, scope, projectName, targetKey, alias).run();
 }
 
 async function deleteAliasPrefix(env, prefix) {
@@ -2350,7 +2426,9 @@ export async function onRequest(context) {
             if (body.type === 'planner_meta') {
                 return jsonResponse({ error: 'planner_meta is only available through /api/planner/meta' }, { status: 410 });
             }
-            const updatedAt = await putJsonDocument(env, body.type, body.key, body.data || {});
+            const updatedAt = await putJsonDocument(env, body.type, body.key, body.data || {}, 'db', {
+                aliasUpdates: body.aliasUpdates
+            });
             return jsonResponse({ success: true, updatedAt });
         } catch (e) {
             return jsonResponse({ error: e.message }, { status: 500 });

@@ -7,7 +7,7 @@ import {
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js?v=path-migration-20260818b';
+} from './shared.js?v=situation-sync-20260818a';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;

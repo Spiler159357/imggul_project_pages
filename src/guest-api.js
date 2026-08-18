@@ -201,7 +201,7 @@ async function getProjectSituations(env, project) {
         const rows = (await env.DB.prepare(`
             SELECT id, name, COALESCE(storage_name, image_number) AS storage_name
             FROM v2_situations
-            WHERE project_id = ?
+            WHERE project_id = ? AND is_active = 1
             ORDER BY sort_order ASC, COALESCE(storage_name, image_number) ASC
         `).bind(project.id).all()).results || [];
         const byImageNumber = new Map();

@@ -1,6 +1,6 @@
-import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, changeCharacterStoragePath, clearFolderDataCacheTree, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderCharacterName, renderEmptyState, renderProjectShell, replaceCachedCraftCharacterPath, replaceCachedPlannerCharacterId, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js?v=path-migration-20260818b';
-import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=path-migration-20260818b';
-import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js?v=path-migration-20260818b';
+import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, changeCharacterStoragePath, clearFolderDataCacheTree, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderCharacterName, renderEmptyState, renderProjectShell, replaceCachedCraftCharacterPath, replaceCachedPlannerCharacterId, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js?v=situation-sync-20260818a';
+import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=situation-sync-20260818a';
+import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js?v=situation-sync-20260818a';
 
 export function getSituationImageCandidates(situation, index) {
     const legacyStorageName = situation?.imageNumber !== undefined && situation?.imageNumber !== null
@@ -911,8 +911,12 @@ export async function createSituation(project, storageName, alias, rating = 'sfw
         situation
     ];
     project.situationsLoaded = true;
-    await saveProjectSituations(project);
-    await saveProjectAlias(getSituationImageKey(project, situation), getSituationDisplayName(situation));
+    await saveProjectSituations(project, {
+        aliasUpdates: [{
+            key: getSituationImageKey(project, situation),
+            alias: getSituationDisplayName(situation)
+        }]
+    });
 }
 
 export function renderCharacterSection(section, state = {}) {

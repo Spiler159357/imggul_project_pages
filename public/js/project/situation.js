@@ -1,6 +1,6 @@
-import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectAlias, saveProjectSituations, setProjectRoute } from './shared.js?v=path-migration-20260818b';
-import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=path-migration-20260818b';
-import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=path-migration-20260818b';
+import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectSituations, setProjectRoute } from './shared.js?v=situation-sync-20260818a';
+import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=situation-sync-20260818a';
+import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=situation-sync-20260818a';
 
 export function getSituationPromptIndicator(situation) {
     const prompt = getSituationPrompt(situation);
@@ -430,8 +430,9 @@ export async function renameActiveSituation() {
     situation.alias = name;
 
     try {
-        await saveProjectSituations(project);
-        await saveProjectAlias(getSituationImageKey(project, situation), name);
+        await saveProjectSituations(project, {
+            aliasUpdates: [{ key: getSituationImageKey(project, situation), alias: name }]
+        });
         renderSituationDetailShell(project, situation);
     } catch (err) {
         alert(err.message || '상황 이름 변경에 실패했습니다.');
@@ -503,8 +504,9 @@ export async function deleteActiveSituation() {
         const imageKey = getSituationImageKey(project, situation);
         project.situations = getProjectItems(project, 'situations').filter(item => item.id !== situation.id);
         project.situationsLoaded = true;
-        await saveProjectSituations(project);
-        await saveProjectAlias(imageKey, '');
+        await saveProjectSituations(project, {
+            aliasUpdates: [{ key: imageKey, alias: '' }]
+        });
         await openProjectSection('situation', true);
         replaceProjectRoute(
             { projectView: 'section', projectId: project.id, projectSection: 'situation' },

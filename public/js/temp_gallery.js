@@ -1,5 +1,5 @@
 // 6. temp_gallery.js: 임시 보관함 및 변환 유예 관리
-import { getProjectByPrefix, getProjectItems, loadProjectCharacters, loadProjectSituations, loadProjects } from './project/shared.js?v=path-migration-20260818b';
+import { getProjectByPrefix, getProjectItems, loadProjectCharacters, loadProjectSituations, loadProjects } from './project/shared.js?v=situation-sync-20260818a';
 /**
  * 역할: Vibe 참조 이미지를 초기화하고 관련 미리보기/슬라이더 UI를 숨긴다.
  * 매개변수: 없음.
