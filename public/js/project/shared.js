@@ -308,7 +308,7 @@ export function getPlannerSettingsKey(project) {
 
 const pathMigrationRequestKeys = new Map();
 const projectSituationLoadStates = new WeakMap();
-const PATH_MIGRATION_CLIENT_TIMEOUT_MS = 110_000;
+const PATH_MIGRATION_CLIENT_TIMEOUT_MS = 220_000;
 
 function logPathMigration(requestId, stage, details = {}) {
     console.info(`[path-migration:${requestId}] ${stage}`, {

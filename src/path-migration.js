@@ -12,7 +12,7 @@ import {
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp']);
 const R2_OPERATION_CONCURRENCY = 4;
-const PATH_MIGRATION_TIME_BUDGET_MS = 90_000;
+const PATH_MIGRATION_TIME_BUDGET_MS = 200_000;
 
 function nowIso() {
     return new Date().toISOString();
