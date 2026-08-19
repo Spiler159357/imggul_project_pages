@@ -433,40 +433,38 @@ function isSafeNestedPathSegment(value) {
     }
 }
 
-async function loadTrackedSituationAssets(env, input, report) {
+async function loadTrackedSituationFiles(env, input, report) {
     const projectIds = getProjectIdCandidates(input);
     const fileNames = [...IMAGE_EXTENSIONS].map(extension => `${input.oldStorageName}.${extension}`);
-    const projectPlaceholders = projectIds.map(() => '?').join(', ');
     const filePlaceholders = fileNames.map(() => '?').join(', ');
     reportMigration(report, 'manifest.situation.d1-query.start', {
         projectIdCount: projectIds.length,
         fileNameCount: fileNames.length
     });
-    const [assetResult, characterResult] = await Promise.all([
+    const [fileResult, characterResult] = await Promise.all([
         env.DB.prepare(`
-            SELECT id, project_id, r2_key, file_name
-            FROM v2_assets
-            WHERE project_id IN (${projectPlaceholders})
-              AND status = 'active'
-              AND kind = 'image'
-              AND file_name IN (${filePlaceholders})
-        `).bind(...projectIds, ...fileNames).all(),
+            SELECT folder_prefix, file_name
+            FROM file_metadata
+            WHERE file_name IN (${filePlaceholders})
+              AND folder_prefix >= ?
+              AND folder_prefix < ?
+        `).bind(...fileNames, input.projectPrefix, `${input.projectPrefix}\uffff`).all(),
         env.DB.prepare(`
             SELECT id, prefix
             FROM v2_characters
-            WHERE project_id IN (${projectPlaceholders})
+            WHERE project_id IN (${projectIds.map(() => '?').join(', ')})
         `).bind(...projectIds).all()
     ]);
-    const assets = assetResult.results || [];
+    const files = fileResult.results || [];
     const characters = (characterResult.results || [])
         .map(character => ({ ...character, prefix: normalizePrefix(character.prefix) }))
         .filter(character => character.prefix.startsWith(input.projectPrefix))
         .sort((left, right) => right.prefix.length - left.prefix.length);
     reportMigration(report, 'manifest.situation.d1-query.complete', {
-        trackedAssetCount: assets.length,
+        trackedFileCount: files.length,
         characterCount: characters.length
     });
-    return { assets, characters };
+    return { files, characters };
 }
 
 async function buildSituationManifest(env, input, report) {
@@ -476,40 +474,39 @@ async function buildSituationManifest(env, input, report) {
         oldStorageName: input.oldStorageName,
         newStorageName: input.newStorageName
     });
-    const { assets, characters } = await loadTrackedSituationAssets(env, input, report);
+    const { files, characters } = await loadTrackedSituationFiles(env, input, report);
     const trackedEntries = [];
-    for (const asset of assets) {
-        const character = characters.find(candidate => asset.r2_key.startsWith(candidate.prefix));
+    for (const file of files) {
+        const folderPrefix = normalizePrefix(file.folder_prefix);
+        const sourceKey = `${folderPrefix}${file.file_name}`;
+        const character = characters.find(candidate => folderPrefix.startsWith(candidate.prefix));
         if (!character) continue;
-        const relativeParts = asset.r2_key.slice(character.prefix.length).split('/').filter(Boolean);
-        if (relativeParts.length !== 1 && relativeParts.length !== 2) continue;
-        if (!relativeParts.every(isSafeNestedPathSegment)) continue;
-        if (relativeParts.at(-1) !== asset.file_name) continue;
+        const nestedFolders = folderPrefix.slice(character.prefix.length).split('/').filter(Boolean);
+        if (nestedFolders.length > 1 || !nestedFolders.every(isSafeNestedPathSegment)) continue;
+        if (!isSafeNestedPathSegment(file.file_name)) continue;
         const targetKey = replaceExactBasename(
-            asset.r2_key,
+            sourceKey,
             input.oldStorageName,
             input.newStorageName,
             IMAGE_EXTENSIONS
         );
         if (!targetKey) continue;
         trackedEntries.push({
-            assetId: asset.id,
-            sourceKey: asset.r2_key,
+            sourceKey,
             targetKey,
             kind: 'situation-image',
             characterId: character.id,
-            pathMode: relativeParts.length === 1 ? 'character' : 'outfit'
+            pathMode: nestedFolders.length === 0 ? 'character' : 'outfit'
         });
     }
     reportMigration(report, 'manifest.situation.r2-head.start', {
-        eligibleAssetCount: trackedEntries.length,
-        ignoredTrackedAssetCount: assets.length - trackedEntries.length
+        eligibleFileCount: trackedEntries.length,
+        ignoredTrackedFileCount: files.length - trackedEntries.length
     });
     await runWithConcurrency(trackedEntries, R2_OPERATION_CONCURRENCY, async entry => {
         const object = await env.imgBucket.head(entry.sourceKey);
         if (!object) {
             throw pathMigrationError('PATH_SOURCE_MISSING', 409, 'D1에 등록된 원본 파일을 R2에서 찾지 못했습니다.', {
-                assetId: entry.assetId,
                 sourceKey: entry.sourceKey
             });
         }
@@ -518,7 +515,7 @@ async function buildSituationManifest(env, input, report) {
     });
     entries.push(...trackedEntries);
     reportMigration(report, 'manifest.situation.r2-head.complete', {
-        eligibleAssetCount: trackedEntries.length,
+        eligibleFileCount: trackedEntries.length,
         characterPathCount: trackedEntries.filter(entry => entry.pathMode === 'character').length,
         outfitPathCount: trackedEntries.filter(entry => entry.pathMode === 'outfit').length
     });
@@ -709,20 +706,6 @@ async function commitSituationD1(env, migration, input, manifest, document) {
         const moveKey = `${oldPath.prefix}\u0000${oldPath.fileName}`;
         metadataMoves.set(moveKey, { oldPath, newPath });
         statements.push(env.DB.prepare(`
-            UPDATE v2_assets
-            SET r2_key = ?, file_name = ?, updated_at = ?
-            WHERE id = ? AND r2_key = ? AND status = 'active'
-        `).bind(entry.targetKey, newPath.fileName, timestamp, entry.assetId, entry.sourceKey));
-        statements.push(env.DB.prepare(`
-            SELECT CASE
-                WHEN EXISTS (
-                    SELECT 1 FROM v2_assets
-                    WHERE id = ? AND r2_key = ? AND status = 'active'
-                ) THEN 1
-                ELSE json_extract('asset_revision_conflict')
-            END AS asset_revision_guard
-        `).bind(entry.assetId, entry.targetKey));
-        statements.push(env.DB.prepare(`
             UPDATE image_editor_documents SET status = 'stale_path_migration', updated_at = ?
             WHERE status IN ('draft', 'saved') AND (source_key = ? OR output_key = ? OR preview_key = ?)
         `).bind(timestamp, entry.sourceKey, entry.sourceKey, entry.sourceKey));
@@ -732,6 +715,15 @@ async function commitSituationD1(env, migration, input, manifest, document) {
             UPDATE file_metadata SET file_name = ?, updated_at = ?
             WHERE folder_prefix = ? AND file_name = ?
         `).bind(newPath.fileName, timestamp, oldPath.prefix, oldPath.fileName));
+        statements.push(env.DB.prepare(`
+            SELECT CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM file_metadata
+                    WHERE folder_prefix = ? AND file_name = ?
+                ) THEN 1
+                ELSE json_extract('file_metadata_revision_conflict')
+            END AS file_metadata_revision_guard
+        `).bind(newPath.prefix, newPath.fileName));
     }
 
     const projectName = input.projectPrefix.split('/').filter(Boolean)[0] || '';
@@ -816,7 +808,6 @@ async function completeMigration(env, migration, manifest, summary, entity, repo
 async function runMigration(env, migration, input, buildManifest, commitD1, entityFactory, report) {
     const deadline = Date.now() + PATH_MIGRATION_TIME_BUDGET_MS;
     const attemptedTargetKeys = new Set();
-    let d1CommitStarted = false;
     try {
         reportMigration(report, 'migration.run.start', {
             migrationId: migration.id,
@@ -854,7 +845,6 @@ async function runMigration(env, migration, input, buildManifest, commitD1, enti
         await copyManifestObjects(env, migration, manifest, deadline, attemptedTargetKeys, report);
         assertMigrationTimeRemaining(deadline);
         reportMigration(report, 'd1-commit.start', { migrationId: migration.id });
-        d1CommitStarted = true;
         const summary = await commitD1(env, migration, input, manifest);
         reportMigration(report, 'd1-commit.complete', { migrationId: migration.id });
         return await completeMigration(env, migration, manifest, summary, entityFactory(summary), report);
@@ -869,7 +859,7 @@ async function runMigration(env, migration, input, buildManifest, commitD1, enti
             .bind(migration.id)
             .first()
             .catch(() => null);
-        const d1Committed = d1CommitStarted || ['committed', 'cleaning'].includes(latest?.status);
+        const d1Committed = ['committed', 'cleaning'].includes(latest?.status);
         if (!d1Committed && attemptedTargetKeys.size) {
             try {
                 reportMigration(report, 'rollback.targets.start', {

@@ -309,11 +309,7 @@ export async function uploadCharacterSituationImage(file, projectId = window.PRO
             headers: {
                 'X-File-Name': encodeURIComponent(fileName),
                 'Content-Type': 'image/webp',
-                'X-Absolute-Path': encodeURIComponent(finalPath),
-                'X-Asset-Owner-Type': 'situation',
-                'X-Project-Id': encodeURIComponent(project.prefix || project.id),
-                'X-Character-Id': encodeURIComponent(character.id),
-                'X-Situation-Id': encodeURIComponent(situation.id)
+                'X-Absolute-Path': encodeURIComponent(finalPath)
             },
             body: buffer,
             cache: 'no-store'

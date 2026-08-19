@@ -218,29 +218,6 @@ function nowIso() {
     return toKstIso();
 }
 
-async function markV2AssetsDeleted(env, keys = []) {
-    const uniqueKeys = [...new Set(keys.map(key => String(key || '')).filter(Boolean))];
-    const timestamp = nowIso();
-    for (let offset = 0; offset < uniqueKeys.length; offset += 100) {
-        const chunk = uniqueKeys.slice(offset, offset + 100);
-        const placeholders = chunk.map(() => '?').join(', ');
-        await env.DB.prepare(`
-            UPDATE v2_assets
-            SET status = 'deleted', deleted_at = ?, updated_at = ?
-            WHERE r2_key IN (${placeholders}) AND status = 'active'
-        `).bind(timestamp, timestamp, ...chunk).run();
-    }
-}
-
-async function moveV2AssetRecord(env, oldKey, newKey) {
-    const { fileName } = splitPath(newKey);
-    await env.DB.prepare(`
-        UPDATE v2_assets
-        SET r2_key = ?, file_name = ?, updated_at = ?
-        WHERE r2_key = ? AND status = 'active'
-    `).bind(newKey, fileName, nowIso(), oldKey).run();
-}
-
 async function ensureJsonDbSchema(env) {
     if (!env.DB) throw new Error('DB binding is not configured');
     await env.DB.batch([
@@ -677,12 +654,6 @@ async function buildSituationMirrorStatements(env, objectKey, previousValue, nex
             DELETE FROM v2_prompt_sets
             WHERE owner_type = 'situation' AND owner_id = ?
         `).bind(situationId));
-        statements.push(env.DB.prepare(`
-            DELETE FROM v2_assets
-            WHERE owner_type = 'situation'
-              AND owner_id = ?
-              AND project_id IN (?, ?)
-        `).bind(situationId, projectId, projectId.replace(/\/$/, '')));
         statements.push(env.DB.prepare(`
             DELETE FROM aliases
             WHERE scope = 'project' AND project_name = ?
@@ -3216,14 +3187,12 @@ export async function onRequest(context) {
                     }
                 }
                 await env.imgBucket.delete(key);
-                await markV2AssetsDeleted(env, [key]);
                 return new Response(JSON.stringify({ success: true }));
             }
 
             if (action === 'delete_multiple') {
                 if (Array.isArray(body.keys) && body.keys.length > 0) {
                     await env.imgBucket.delete(body.keys);
-                    await markV2AssetsDeleted(env, body.keys);
                 }
                 return new Response(JSON.stringify({ success: true }));
             }
@@ -3239,7 +3208,6 @@ export async function onRequest(context) {
                     const keysToDelete = list.objects.map(o => o.key);
                     if (keysToDelete.length > 0) {
                         await env.imgBucket.delete(keysToDelete);
-                        await markV2AssetsDeleted(env, keysToDelete);
                     }
                 }
                 try {
@@ -3375,7 +3343,6 @@ export async function onRequest(context) {
                         customMetadata: object.customMetadata
                     });
                     await env.imgBucket.delete(key);
-                    await moveV2AssetRecord(env, key, newKey);
                 } else if (!movedVirtual) {
                     throw new Error('File not found');
                 }
@@ -3503,59 +3470,6 @@ export async function onRequest(context) {
             const uploadContentType = request.headers.get('Content-Type') || 'application/octet-stream';
             const isImageUpload = /^image\/(?:webp|png|jpeg)$/i.test(uploadContentType)
                 && isImageObjectKey(finalKey);
-            const assetOwnerType = decodeURIComponent(request.headers.get('X-Asset-Owner-Type') || '').trim();
-            const trackedProjectId = decodeURIComponent(request.headers.get('X-Project-Id') || '').trim();
-            const trackedCharacterId = decodeURIComponent(request.headers.get('X-Character-Id') || '').trim();
-            const trackedSituationId = decodeURIComponent(request.headers.get('X-Situation-Id') || '').trim();
-            const isTrackedSituationUpload = isImageUpload && assetOwnerType === 'situation';
-            let trackedUpload = null;
-            if (isTrackedSituationUpload) {
-                if (!trackedProjectId || !trackedCharacterId || !trackedSituationId) {
-                    return jsonResponse({ error: '상황 이미지의 D1 추적 정보가 누락되었습니다.' }, { status: 400 });
-                }
-                const projectIds = [...new Set([
-                    trackedProjectId,
-                    trackedProjectId.replace(/\/$/, ''),
-                    trackedProjectId.endsWith('/') ? trackedProjectId : `${trackedProjectId}/`
-                ].filter(Boolean))];
-                const placeholders = projectIds.map(() => '?').join(', ');
-                const [character, situation] = await Promise.all([
-                    env.DB.prepare(`
-                        SELECT id, project_id, prefix FROM v2_characters
-                        WHERE id = ? AND project_id IN (${placeholders})
-                    `).bind(trackedCharacterId, ...projectIds).first(),
-                    env.DB.prepare(`
-                        SELECT id, project_id, storage_name, image_number FROM v2_situations
-                        WHERE id = ? AND project_id IN (${placeholders})
-                    `).bind(trackedSituationId, ...projectIds).first()
-                ]);
-                if (!character || !situation || character.project_id !== situation.project_id) {
-                    return jsonResponse({ error: '상황 이미지에 연결할 D1 프로젝트 정보를 찾지 못했습니다.' }, { status: 409 });
-                }
-                const characterPrefix = String(character.prefix || '').replace(/\\/g, '/').replace(/\/+$/, '') + '/';
-                if (!finalKey.startsWith(characterPrefix)) {
-                    return jsonResponse({ error: '상황 이미지 경로가 선택한 캐릭터의 하위 경로가 아닙니다.' }, { status: 400 });
-                }
-                const relativeParts = finalKey.slice(characterPrefix.length).split('/').filter(Boolean);
-                if (relativeParts.length !== 1 && relativeParts.length !== 2) {
-                    return jsonResponse({ error: '상황 이미지는 캐릭터 또는 복장 폴더의 바로 아래에만 저장할 수 있습니다.' }, { status: 400 });
-                }
-                if (relativeParts.some(part => part === '.' || part === '..' || part.includes('\\'))) {
-                    return jsonResponse({ error: '상황 이미지 경로에 사용할 수 없는 폴더명이 포함되어 있습니다.' }, { status: 400 });
-                }
-                const expectedStorageName = String(situation.storage_name || situation.image_number || '');
-                const uploadedFileName = relativeParts.at(-1);
-                const uploadedBaseName = uploadedFileName.replace(/\.(?:webp|png|jpe?g)$/i, '');
-                if (!expectedStorageName || uploadedBaseName !== expectedStorageName) {
-                    return jsonResponse({ error: '업로드 파일명이 현재 상황 경로명과 일치하지 않습니다.' }, { status: 409 });
-                }
-                trackedUpload = {
-                    projectId: character.project_id,
-                    characterId: character.id,
-                    situationId: situation.id,
-                    fileName: uploadedFileName
-                };
-            }
             const plannerAssetId = decodeURIComponent(request.headers.get('X-Planner-Asset-Id') || '').trim();
             const plannerGenerationSequence = Number.parseInt(
                 request.headers.get('X-Planner-Generation-Sequence') || '',
@@ -3570,7 +3484,7 @@ export async function onRequest(context) {
             const existingImage = isImageUpload
                 ? await env.imgBucket.head(finalKey)
                 : null;
-            const storedObject = await env.imgBucket.put(finalKey, request.body, {
+            await env.imgBucket.put(finalKey, request.body, {
               httpMetadata: { contentType: uploadContentType },
               customMetadata: {
                   ...(existingImage?.customMetadata || {}),
@@ -3586,41 +3500,6 @@ export async function onRequest(context) {
                   } : {})
               }
             });
-            if (trackedUpload) {
-                const timestamp = nowIso();
-                try {
-                    await env.DB.prepare(`
-                        INSERT INTO v2_assets (
-                            id, project_id, owner_type, owner_id, r2_key, file_name, mime_type,
-                            byte_size, kind, status, is_public, sort_order, deleted_at, created_at, updated_at
-                        ) VALUES (?, ?, 'situation', ?, ?, ?, ?, ?, 'image', 'active', 0, 0, NULL, ?, ?)
-                        ON CONFLICT(r2_key) DO UPDATE SET
-                            project_id = excluded.project_id,
-                            owner_type = excluded.owner_type,
-                            owner_id = excluded.owner_id,
-                            file_name = excluded.file_name,
-                            mime_type = excluded.mime_type,
-                            byte_size = excluded.byte_size,
-                            kind = 'image',
-                            status = 'active',
-                            deleted_at = NULL,
-                            updated_at = excluded.updated_at
-                    `).bind(
-                        getAssetIdFromKey(finalKey),
-                        trackedUpload.projectId,
-                        trackedUpload.situationId,
-                        finalKey,
-                        trackedUpload.fileName,
-                        uploadContentType,
-                        storedObject?.size ?? null,
-                        timestamp,
-                        timestamp
-                    ).run();
-                } catch (trackingError) {
-                    if (!existingImage) await env.imgBucket.delete(finalKey).catch(() => {});
-                    throw new Error(`D1 상황 이미지 등록 실패: ${trackingError?.message || trackingError}`);
-                }
-            }
             return new Response(JSON.stringify({ success: true, url: `/${finalKey}` }), { headers: { 'Content-Type': 'application/json' } });
         }
       } catch (err) {
