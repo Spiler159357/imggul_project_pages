@@ -337,21 +337,24 @@ async function requestEntityPathMigration(entityType, payload) {
     ].join(':');
     const idempotencyKey = pathMigrationRequestKeys.get(requestKey) || crypto.randomUUID();
     pathMigrationRequestKeys.set(requestKey, idempotencyKey);
-    const res = await fetch(`/api/path-migrations/${entityType}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...payload, idempotencyKey }),
-        cache: 'no-store'
-    });
-    const data = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        const error = new Error(data.error || '경로 변경에 실패했습니다.');
-        error.code = data.code || '';
-        error.migrationId = data.migrationId || data.details?.migrationId || '';
-        throw error;
+    try {
+        const res = await fetch(`/api/path-migrations/${entityType}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ...payload, idempotencyKey }),
+            cache: 'no-store'
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            const error = new Error(data.error || '경로 변경에 실패했습니다.');
+            error.code = data.code || '';
+            error.migrationId = data.migrationId || data.details?.migrationId || '';
+            throw error;
+        }
+        return data;
+    } finally {
+        pathMigrationRequestKeys.delete(requestKey);
     }
-    pathMigrationRequestKeys.delete(requestKey);
-    return data;
 }
 
 export function changeCharacterStoragePath(payload) {

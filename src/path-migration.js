@@ -12,6 +12,8 @@ import {
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp']);
 const INTERNAL_PROJECT_FOLDERS = new Set(['_planner_temp_image', '_guest_posts', '__editor_sessions', '__editor_backups']);
+const R2_OPERATION_CONCURRENCY = 4;
+const PATH_MIGRATION_TIME_BUDGET_MS = 90_000;
 
 function nowIso() {
     return new Date().toISOString();
@@ -35,6 +37,7 @@ function parseJson(value, fallback) {
 
 async function listAllR2Objects(bucket, options = {}) {
     const objects = [];
+    const seenCursors = new Set();
     let cursor;
     let truncated = true;
     while (truncated) {
@@ -45,9 +48,46 @@ async function listAllR2Objects(bucket, options = {}) {
         });
         objects.push(...(page.objects || []));
         truncated = page.truncated === true;
-        cursor = truncated ? page.cursor : undefined;
+        if (!truncated) break;
+        if (!page.cursor || seenCursors.has(page.cursor)) {
+            throw pathMigrationError('PATH_R2_CURSOR_STALLED', 500, 'R2 파일 목록 조회가 같은 위치에서 반복되었습니다.');
+        }
+        seenCursors.add(page.cursor);
+        cursor = page.cursor;
     }
     return objects;
+}
+
+async function runWithConcurrency(items, concurrency, worker) {
+    if (!items.length) return;
+    let nextIndex = 0;
+    let firstError = null;
+    const workers = Array.from(
+        { length: Math.min(Math.max(1, concurrency), items.length) },
+        async () => {
+            while (!firstError) {
+                const index = nextIndex;
+                nextIndex += 1;
+                if (index >= items.length) return;
+                try {
+                    await worker(items[index], index);
+                } catch (error) {
+                    firstError ||= error;
+                }
+            }
+        }
+    );
+    await Promise.all(workers);
+    if (firstError) throw firstError;
+}
+
+function assertMigrationTimeRemaining(deadline) {
+    if (Date.now() < deadline) return;
+    throw pathMigrationError(
+        'PATH_MIGRATION_TIME_BUDGET_EXCEEDED',
+        503,
+        '경로 변경 안전 제한 시간을 초과하여 변경 내용을 되돌렸습니다. 다시 시도하세요.'
+    );
 }
 
 function uniqueManifest(entries = []) {
@@ -64,15 +104,14 @@ function legacyPlannerCharacterRef(value = '') {
 }
 
 async function assertNoDestinationObjects(bucket, manifest) {
-    for (const entry of manifest) {
+    await runWithConcurrency(manifest, R2_OPERATION_CONCURRENCY, async entry => {
         const destination = await bucket.head(entry.targetKey);
-        if (!destination) continue;
-        if (destination.size === entry.size && entry.copied === true) continue;
+        if (!destination) return;
         throw pathMigrationError('PATH_DESTINATION_EXISTS', 409, '변경할 경로에 이미 파일이 존재합니다.', {
             sourceKey: entry.sourceKey,
             targetKey: entry.targetKey
         });
-    }
+    });
 }
 
 async function updateMigration(env, id, fields = {}) {
@@ -86,34 +125,27 @@ async function updateMigration(env, id, fields = {}) {
         .run();
 }
 
-async function copyManifestObjects(env, migration, manifest) {
+async function copyManifestObjects(env, migration, manifest, deadline, attemptedTargetKeys) {
     await updateMigration(env, migration.id, { status: 'copying' });
-    let copiedCount = migration.copied_count || 0;
-    for (let index = 0; index < manifest.length; index += 1) {
-        const entry = manifest[index];
-        const existing = await env.imgBucket.head(entry.targetKey);
-        if (existing?.size === entry.size) {
-            entry.copied = true;
-            copiedCount = Math.max(copiedCount, index + 1);
-            continue;
-        }
-        if (existing) {
-            throw pathMigrationError('PATH_DESTINATION_EXISTS', 409, '변경할 경로에 이미 다른 파일이 존재합니다.', {
-                targetKey: entry.targetKey
-            });
-        }
+    let copiedCount = 0;
+    await runWithConcurrency(manifest, R2_OPERATION_CONCURRENCY, async entry => {
+        assertMigrationTimeRemaining(deadline);
         const source = await env.imgBucket.get(entry.sourceKey);
         if (!source) {
             throw pathMigrationError('PATH_SOURCE_MISSING', 409, '이동할 원본 파일을 찾지 못했습니다.', {
                 sourceKey: entry.sourceKey
             });
         }
-        await env.imgBucket.put(entry.targetKey, source.body, {
+        if (Date.now() >= deadline) {
+            await source.body.cancel().catch(() => {});
+        }
+        assertMigrationTimeRemaining(deadline);
+        attemptedTargetKeys.add(entry.targetKey);
+        const copied = await env.imgBucket.put(entry.targetKey, source.body, {
             httpMetadata: source.httpMetadata,
             customMetadata: source.customMetadata,
             storageClass: source.storageClass
         });
-        const copied = await env.imgBucket.head(entry.targetKey);
         if (!copied || copied.size !== source.size) {
             throw pathMigrationError('PATH_COPY_VERIFY_FAILED', 500, '복사된 파일 검증에 실패했습니다.', {
                 sourceKey: entry.sourceKey,
@@ -121,13 +153,22 @@ async function copyManifestObjects(env, migration, manifest) {
             });
         }
         entry.copied = true;
-        copiedCount = index + 1;
-        await updateMigration(env, migration.id, {
-            manifest_json: JSON.stringify(manifest),
-            copied_count: copiedCount
-        });
-    }
+        copiedCount += 1;
+    });
+    await updateMigration(env, migration.id, {
+        manifest_json: JSON.stringify(manifest),
+        copied_count: copiedCount
+    });
     return copiedCount;
+}
+
+async function rollbackCopiedTargets(env, targetKeys) {
+    const keys = [...targetKeys];
+    for (let index = 0; index < keys.length; index += 1000) {
+        const chunk = keys.slice(index, index + 1000);
+        if (chunk.length) await env.imgBucket.delete(chunk);
+    }
+    return keys.length;
 }
 
 async function deleteManifestSources(env, migration, manifest) {
@@ -151,7 +192,15 @@ async function createOrResumeMigration(env, input) {
         if (existing.entity_type !== input.entityType || existing.entity_key !== input.entityKey) {
             throw pathMigrationError('PATH_IDEMPOTENCY_CONFLICT', 409, '이미 다른 경로 변경에 사용된 요청 키입니다.');
         }
-        return existing;
+        if (existing.status === 'completed') return existing;
+        if (existing.status === 'failed') {
+            throw pathMigrationError('PATH_MIGRATION_RETRY_REQUIRED', 409, '이전 경로 변경은 실패했습니다. 새 요청으로 처음부터 다시 시도하세요.', {
+                migrationId: existing.id
+            });
+        }
+        throw pathMigrationError('PATH_MIGRATION_ACTIVE', 409, '같은 경로 변경 요청이 이미 진행 중입니다.', {
+            migrationId: existing.id
+        });
     }
 
     const active = await env.DB.prepare(`
@@ -168,22 +217,37 @@ async function createOrResumeMigration(env, input) {
 
     const timestamp = nowIso();
     const id = crypto.randomUUID();
-    await env.DB.prepare(`
-        INSERT INTO path_migrations (
-            id, idempotency_key, entity_type, entity_key, project_id,
-            old_path, new_path, status, manifest_json, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'prepared', '[]', ?, ?)
-    `).bind(
-        id,
-        input.idempotencyKey,
-        input.entityType,
-        input.entityKey,
-        input.projectId,
-        input.oldPath,
-        input.newPath,
-        timestamp,
-        timestamp
-    ).run();
+    try {
+        await env.DB.prepare(`
+            INSERT INTO path_migrations (
+                id, idempotency_key, entity_type, entity_key, project_id,
+                old_path, new_path, status, manifest_json, created_at, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, 'prepared', '[]', ?, ?)
+        `).bind(
+            id,
+            input.idempotencyKey,
+            input.entityType,
+            input.entityKey,
+            input.projectId,
+            input.oldPath,
+            input.newPath,
+            timestamp,
+            timestamp
+        ).run();
+    } catch (error) {
+        const concurrent = await env.DB.prepare(`
+            SELECT id FROM path_migrations
+            WHERE entity_type = ? AND entity_key = ?
+              AND status IN ('prepared', 'copying', 'committed', 'cleaning')
+            LIMIT 1
+        `).bind(input.entityType, input.entityKey).first().catch(() => null);
+        if (concurrent) {
+            throw pathMigrationError('PATH_MIGRATION_ACTIVE', 409, '같은 대상의 경로 변경이 이미 진행 중입니다.', {
+                migrationId: concurrent.id
+            });
+        }
+        throw error;
+    }
     return await env.DB.prepare('SELECT * FROM path_migrations WHERE id = ?').bind(id).first();
 }
 
@@ -500,7 +564,20 @@ async function commitSituationD1(env, migration, input, manifest, document) {
 }
 
 async function completeMigration(env, migration, manifest, summary, entity) {
-    const deletedCount = await deleteManifestSources(env, migration, manifest);
+    let deletedCount;
+    try {
+        deletedCount = await deleteManifestSources(env, migration, manifest);
+    } catch (error) {
+        throw pathMigrationError(
+            'PATH_SOURCE_CLEANUP_FAILED',
+            500,
+            '경로 정보는 변경되었지만 기존 파일 정리에 실패했습니다. 기존 파일을 수동으로 확인해 주세요.',
+            {
+                d1Committed: true,
+                cause: error?.message || String(error)
+            }
+        );
+    }
     const timestamp = nowIso();
     await updateMigration(env, migration.id, {
         status: 'completed',
@@ -522,6 +599,9 @@ async function completeMigration(env, migration, manifest, summary, entity) {
 }
 
 async function runMigration(env, migration, input, buildManifest, commitD1, entityFactory) {
+    const deadline = Date.now() + PATH_MIGRATION_TIME_BUDGET_MS;
+    const attemptedTargetKeys = new Set();
+    let d1CommitStarted = false;
     try {
         let manifest = parseJson(migration.manifest_json, []);
         if (migration.status === 'completed') {
@@ -536,28 +616,48 @@ async function runMigration(env, migration, input, buildManifest, commitD1, enti
                 }
             };
         }
-        if (!manifest.length && ['prepared', 'failed'].includes(migration.status)) {
-            manifest = await buildManifest(env, input);
-            await assertNoDestinationObjects(env.imgBucket, manifest);
-            await updateMigration(env, migration.id, { manifest_json: JSON.stringify(manifest) });
+        if (migration.status !== 'prepared') {
+            throw pathMigrationError('PATH_MIGRATION_ACTIVE', 409, '경로 변경 요청이 이미 진행 중입니다.', {
+                migrationId: migration.id
+            });
         }
-        if (!['committed', 'cleaning'].includes(migration.status)) {
-            await copyManifestObjects(env, migration, manifest);
-            const summary = await commitD1(env, migration, input, manifest);
-            return await completeMigration(env, migration, manifest, summary, entityFactory(summary));
-        }
-        return await completeMigration(env, migration, manifest, {}, entityFactory({}));
+        assertMigrationTimeRemaining(deadline);
+        manifest = await buildManifest(env, input);
+        assertMigrationTimeRemaining(deadline);
+        await assertNoDestinationObjects(env.imgBucket, manifest);
+        await updateMigration(env, migration.id, { manifest_json: JSON.stringify(manifest) });
+        assertMigrationTimeRemaining(deadline);
+        await copyManifestObjects(env, migration, manifest, deadline, attemptedTargetKeys);
+        assertMigrationTimeRemaining(deadline);
+        d1CommitStarted = true;
+        const summary = await commitD1(env, migration, input, manifest);
+        return await completeMigration(env, migration, manifest, summary, entityFactory(summary));
     } catch (error) {
         error.details = { ...(error?.details || {}), migrationId: migration.id };
-        const latest = await env.DB.prepare('SELECT status FROM path_migrations WHERE id = ?')
+        const latest = await env.DB.prepare('SELECT status, copied_count FROM path_migrations WHERE id = ?')
             .bind(migration.id)
             .first()
             .catch(() => null);
+        const d1Committed = d1CommitStarted || ['committed', 'cleaning'].includes(latest?.status);
+        if (!d1Committed && attemptedTargetKeys.size) {
+            try {
+                const rolledBackCount = await rollbackCopiedTargets(env, attemptedTargetKeys);
+                error.details.rollback = { success: true, deletedTargets: rolledBackCount };
+            } catch (rollbackError) {
+                error.details.rollback = {
+                    success: false,
+                    attemptedTargets: attemptedTargetKeys.size,
+                    message: rollbackError?.message || String(rollbackError)
+                };
+            }
+        }
         await updateMigration(env, migration.id, {
-            status: ['committed', 'cleaning'].includes(latest?.status) ? latest.status : 'failed',
+            status: 'failed',
+            copied_count: d1Committed ? (latest?.copied_count || 0) : 0,
             error_json: JSON.stringify({
                 code: error?.code || 'PATH_MIGRATION_FAILED',
-                message: error?.message || String(error)
+                message: error?.message || String(error),
+                details: error.details
             })
         }).catch(() => null);
         throw error;
