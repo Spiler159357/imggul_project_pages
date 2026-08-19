@@ -38,6 +38,7 @@ import {
 import {
     changeCharacterPath,
     changeSituationPath,
+    garbageCollectPathMigration,
     getPathMigration
 } from "../src/path-migration.js";
 import { getSituationDocumentChanges } from "../src/situation-sync.js";
@@ -58,6 +59,89 @@ function pathMigrationErrorResponse(error) {
     }, {
         status: error?.status || 500,
         headers: { 'Cache-Control': 'no-store' }
+    });
+}
+
+function pathMigrationDiagnosticResponse(execute) {
+    const encoder = new TextEncoder();
+    const startedAt = Date.now();
+    let closed = false;
+    let cancellationSignaled = false;
+    const stream = new ReadableStream({
+        start(controller) {
+            const send = payload => {
+                if (closed) return;
+                try {
+                    controller.enqueue(encoder.encode(`${JSON.stringify(payload)}\n`));
+                } catch {
+                    closed = true;
+                }
+            };
+            const report = event => {
+                if (closed) {
+                    if (!cancellationSignaled) {
+                        cancellationSignaled = true;
+                        const error = new Error('브라우저 진단 연결이 종료되어 경로 변경을 중단합니다.');
+                        error.code = 'PATH_DIAGNOSTIC_CLIENT_DISCONNECTED';
+                        error.status = 499;
+                        throw error;
+                    }
+                    return;
+                }
+                send({ type: 'progress', ...event });
+            };
+            send({
+                type: 'progress',
+                stage: 'diagnostic-stream.open',
+                timestamp: new Date().toISOString()
+            });
+            const heartbeat = setInterval(() => {
+                send({
+                    type: 'progress',
+                    stage: 'diagnostic-stream.heartbeat',
+                    timestamp: new Date().toISOString(),
+                    elapsedMs: Date.now() - startedAt
+                });
+            }, 10_000);
+            void (async () => {
+                try {
+                    const data = await execute(report);
+                    send({ type: 'result', data });
+                } catch (error) {
+                    send({
+                        type: 'error',
+                        error: {
+                            message: error?.message || String(error || 'Path migration failed'),
+                            code: error?.code || 'PATH_MIGRATION_FAILED',
+                            status: error?.status || 500,
+                            details: error?.details || undefined
+                        }
+                    });
+                } finally {
+                    clearInterval(heartbeat);
+                    if (!closed) {
+                        closed = true;
+                        controller.close();
+                    }
+                }
+            })();
+        },
+        cancel(reason) {
+            closed = true;
+            console.log(JSON.stringify({
+                scope: 'path-migration',
+                stage: 'diagnostic-stream.cancelled',
+                timestamp: new Date().toISOString(),
+                reason: String(reason || '')
+            }));
+        }
+    });
+    return new Response(stream, {
+        headers: {
+            'Content-Type': 'application/x-ndjson; charset=utf-8',
+            'Cache-Control': 'no-store, no-transform',
+            'X-Accel-Buffering': 'no'
+        }
     });
 }
 
@@ -3004,6 +3088,9 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
+            if (body?.diagnostics === true) {
+                return pathMigrationDiagnosticResponse(report => changeCharacterPath(env, body || {}, report));
+            }
             return jsonResponse(await changeCharacterPath(env, body || {}), {
                 headers: { 'Cache-Control': 'no-store' }
             });
@@ -3016,7 +3103,22 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
+            if (body?.diagnostics === true) {
+                return pathMigrationDiagnosticResponse(report => changeSituationPath(env, body || {}, report));
+            }
             return jsonResponse(await changeSituationPath(env, body || {}), {
+                headers: { 'Cache-Control': 'no-store' }
+            });
+        } catch (e) {
+            return pathMigrationErrorResponse(e);
+        }
+    }
+
+    if (path === "/api/path-migrations/garbage-collect" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            return jsonResponse(await garbageCollectPathMigration(env, body?.idempotencyKey), {
                 headers: { 'Cache-Control': 'no-store' }
             });
         } catch (e) {

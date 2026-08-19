@@ -308,6 +308,88 @@ export function getPlannerSettingsKey(project) {
 
 const pathMigrationRequestKeys = new Map();
 const projectSituationLoadStates = new WeakMap();
+const PATH_MIGRATION_CLIENT_TIMEOUT_MS = 110_000;
+
+function logPathMigration(requestId, stage, details = {}) {
+    console.info(`[path-migration:${requestId}] ${stage}`, {
+        timestamp: new Date().toISOString(),
+        ...details
+    });
+}
+
+async function readPathMigrationDiagnosticStream(res, requestId) {
+    const reader = res.body?.getReader();
+    if (!reader) {
+        const error = new Error('경로 변경 진단 스트림을 읽을 수 없습니다.');
+        error.code = 'PATH_DIAGNOSTIC_STREAM_MISSING';
+        throw error;
+    }
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let result;
+    let terminalError;
+    const processLine = line => {
+        if (!line.trim()) return;
+        const event = JSON.parse(line);
+        if (event.type === 'progress') {
+            const { type, stage, ...details } = event;
+            logPathMigration(requestId, stage || 'progress', details);
+            return;
+        }
+        if (event.type === 'result') {
+            result = event.data;
+            logPathMigration(requestId, 'diagnostic-stream.result', { result });
+            return;
+        }
+        if (event.type === 'error') {
+            terminalError = new Error(event.error?.message || '경로 변경에 실패했습니다.');
+            terminalError.code = event.error?.code || 'PATH_MIGRATION_FAILED';
+            terminalError.status = event.error?.status || 500;
+            terminalError.migrationId = event.error?.details?.migrationId || '';
+            terminalError.details = event.error?.details || {};
+            console.error(`[path-migration:${requestId}] diagnostic-stream.error`, event.error);
+        }
+    };
+
+    while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+        for (const line of lines) processLine(line);
+    }
+    buffer += decoder.decode();
+    if (buffer.trim()) processLine(buffer);
+    if (terminalError) throw terminalError;
+    if (result === undefined) {
+        const error = new Error('경로 변경 진단 스트림이 결과 없이 종료되었습니다.');
+        error.code = 'PATH_DIAGNOSTIC_STREAM_INCOMPLETE';
+        throw error;
+    }
+    return result;
+}
+
+async function garbageCollectTimedOutPathMigration(idempotencyKey, requestId) {
+    logPathMigration(requestId, 'garbage-collection.request.start');
+    const res = await fetch('/api/path-migrations/garbage-collect', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idempotencyKey }),
+        cache: 'no-store'
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        console.error(`[path-migration:${requestId}] garbage-collection.request.error`, {
+            status: res.status,
+            code: data.code || '',
+            message: data.error || '경로 변경 정리에 실패했습니다.',
+            details: data.details || {}
+        });
+        return;
+    }
+    logPathMigration(requestId, 'garbage-collection.request.complete', data);
+}
 
 function getProjectSituationLoadState(project) {
     let state = projectSituationLoadStates.get(project);
@@ -336,14 +418,46 @@ async function requestEntityPathMigration(entityType, payload) {
         payload.newPrefix || payload.newStorageName || ''
     ].join(':');
     const idempotencyKey = pathMigrationRequestKeys.get(requestKey) || crypto.randomUUID();
+    const requestId = idempotencyKey.slice(0, 8);
     pathMigrationRequestKeys.set(requestKey, idempotencyKey);
+    const startedAt = Date.now();
+    const controller = new AbortController();
+    let timedOut = false;
+    let response = null;
+    logPathMigration(requestId, 'request.start', {
+        entityType,
+        entityId: payload.characterId || payload.situationId || '',
+        oldPath: payload.oldPrefix || payload.oldStorageName || '',
+        newPath: payload.newPrefix || payload.newStorageName || ''
+    });
+    const waitingLog = setInterval(() => {
+        logPathMigration(requestId, 'request.waiting', { elapsedMs: Date.now() - startedAt });
+    }, 10_000);
+    const timeout = setTimeout(() => {
+        timedOut = true;
+        console.error(`[path-migration:${requestId}] request.timeout`, {
+            elapsedMs: Date.now() - startedAt,
+            timeoutMs: PATH_MIGRATION_CLIENT_TIMEOUT_MS
+        });
+        controller.abort('path-migration-timeout');
+    }, PATH_MIGRATION_CLIENT_TIMEOUT_MS);
     try {
-        const res = await fetch(`/api/path-migrations/${entityType}`, {
+        response = await fetch(`/api/path-migrations/${entityType}`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ ...payload, idempotencyKey }),
-            cache: 'no-store'
+            body: JSON.stringify({ ...payload, idempotencyKey, diagnostics: true }),
+            cache: 'no-store',
+            signal: controller.signal
         });
+        const res = response;
+        logPathMigration(requestId, 'response.headers', {
+            elapsedMs: Date.now() - startedAt,
+            status: res.status,
+            contentType: res.headers.get('Content-Type') || ''
+        });
+        if ((res.headers.get('Content-Type') || '').includes('application/x-ndjson')) {
+            return await readPathMigrationDiagnosticStream(res, requestId);
+        }
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
             const error = new Error(data.error || '경로 변경에 실패했습니다.');
@@ -351,8 +465,26 @@ async function requestEntityPathMigration(entityType, payload) {
             error.migrationId = data.migrationId || data.details?.migrationId || '';
             throw error;
         }
+        logPathMigration(requestId, 'request.complete', { elapsedMs: Date.now() - startedAt });
         return data;
+    } catch (error) {
+        console.error(`[path-migration:${requestId}] request.error`, {
+            elapsedMs: Date.now() - startedAt,
+            code: error?.code || '',
+            status: error?.status || 0,
+            message: error?.message || String(error),
+            migrationId: error?.migrationId || '',
+            details: error?.details || {}
+        });
+        if (timedOut || response?.status === 524 || error?.code === 'PATH_DIAGNOSTIC_STREAM_INCOMPLETE') {
+            await garbageCollectTimedOutPathMigration(idempotencyKey, requestId).catch(cleanupError => {
+                console.error(`[path-migration:${requestId}] garbage-collection.transport-error`, cleanupError);
+            });
+        }
+        throw error;
     } finally {
+        clearInterval(waitingLog);
+        clearTimeout(timeout);
         pathMigrationRequestKeys.delete(requestKey);
     }
 }
