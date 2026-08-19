@@ -11,7 +11,6 @@ import {
 } from './path-utils.js';
 
 const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'webp']);
-const INTERNAL_PROJECT_FOLDERS = new Set(['_planner_temp_image', '_guest_posts', '__editor_sessions', '__editor_backups']);
 const R2_OPERATION_CONCURRENCY = 4;
 const PATH_MIGRATION_TIME_BUDGET_MS = 90_000;
 
@@ -114,8 +113,17 @@ function assertMigrationTimeRemaining(deadline) {
 
 function uniqueManifest(entries = []) {
     const bySource = new Map();
+    const sourcesByTarget = new Map();
     for (const entry of entries) {
         if (!entry?.sourceKey || !entry?.targetKey || entry.sourceKey === entry.targetKey) continue;
+        const existingSource = sourcesByTarget.get(entry.targetKey);
+        if (existingSource && existingSource !== entry.sourceKey) {
+            throw pathMigrationError('PATH_DESTINATION_DUPLICATE', 409, '둘 이상의 파일이 같은 변경 경로를 사용합니다.', {
+                sourceKeys: [existingSource, entry.sourceKey],
+                targetKey: entry.targetKey
+            });
+        }
+        sourcesByTarget.set(entry.targetKey, entry.sourceKey);
         bySource.set(entry.sourceKey, entry);
     }
     return [...bySource.values()].sort((left, right) => left.sourceKey.localeCompare(right.sourceKey));
@@ -141,10 +149,10 @@ async function assertNoDestinationObjects(bucket, manifest, report) {
 async function updateMigration(env, id, fields = {}) {
     const allowed = ['status', 'manifest_json', 'copied_count', 'deleted_count', 'error_json', 'completed_at'];
     const keys = Object.keys(fields).filter(key => allowed.includes(key));
-    if (!keys.length) return;
+    if (!keys.length) return null;
     const assignments = keys.map(key => `${key} = ?`);
     assignments.push('updated_at = ?');
-    await env.DB.prepare(`UPDATE path_migrations SET ${assignments.join(', ')} WHERE id = ?`)
+    return await env.DB.prepare(`UPDATE path_migrations SET ${assignments.join(', ')} WHERE id = ?`)
         .bind(...keys.map(key => fields[key]), nowIso(), id)
         .run();
 }
@@ -407,13 +415,58 @@ async function buildCharacterManifest(env, input, report) {
     return manifest;
 }
 
-function isDirectSituationImage(projectPrefix, key, oldStorageName) {
-    if (!key.startsWith(projectPrefix)) return false;
-    const relative = key.slice(projectPrefix.length);
-    const parts = relative.split('/').filter(Boolean);
-    if (parts.length > 2) return false;
-    if (parts.length === 2 && (INTERNAL_PROJECT_FOLDERS.has(parts[0]) || parts[0].startsWith('.'))) return false;
-    return replaceExactBasename(key, oldStorageName, oldStorageName, IMAGE_EXTENSIONS) !== null;
+function getProjectIdCandidates(input) {
+    return [...new Set([
+        String(input.projectPrefix || ''),
+        String(input.projectPrefix || '').replace(/\/$/, ''),
+        String(input.projectId || ''),
+        String(input.projectId || '').replace(/\/$/, '')
+    ].filter(Boolean))];
+}
+
+function isSafeNestedPathSegment(value) {
+    try {
+        assertSafePathSegment(value, 'situation asset path');
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+async function loadTrackedSituationAssets(env, input, report) {
+    const projectIds = getProjectIdCandidates(input);
+    const fileNames = [...IMAGE_EXTENSIONS].map(extension => `${input.oldStorageName}.${extension}`);
+    const projectPlaceholders = projectIds.map(() => '?').join(', ');
+    const filePlaceholders = fileNames.map(() => '?').join(', ');
+    reportMigration(report, 'manifest.situation.d1-query.start', {
+        projectIdCount: projectIds.length,
+        fileNameCount: fileNames.length
+    });
+    const [assetResult, characterResult] = await Promise.all([
+        env.DB.prepare(`
+            SELECT id, project_id, r2_key, file_name
+            FROM v2_assets
+            WHERE project_id IN (${projectPlaceholders})
+              AND status = 'active'
+              AND kind = 'image'
+              AND file_name IN (${filePlaceholders})
+        `).bind(...projectIds, ...fileNames).all(),
+        env.DB.prepare(`
+            SELECT id, prefix
+            FROM v2_characters
+            WHERE project_id IN (${projectPlaceholders})
+        `).bind(...projectIds).all()
+    ]);
+    const assets = assetResult.results || [];
+    const characters = (characterResult.results || [])
+        .map(character => ({ ...character, prefix: normalizePrefix(character.prefix) }))
+        .filter(character => character.prefix.startsWith(input.projectPrefix))
+        .sort((left, right) => right.prefix.length - left.prefix.length);
+    reportMigration(report, 'manifest.situation.d1-query.complete', {
+        trackedAssetCount: assets.length,
+        characterCount: characters.length
+    });
+    return { assets, characters };
 }
 
 async function buildSituationManifest(env, input, report) {
@@ -423,28 +476,51 @@ async function buildSituationManifest(env, input, report) {
         oldStorageName: input.oldStorageName,
         newStorageName: input.newStorageName
     });
-    const projectObjects = await listAllR2Objects(
-        env.imgBucket,
-        { prefix: input.projectPrefix },
-        report,
-        'manifest.situation.project-files'
-    );
-    reportMigration(report, 'manifest.situation.project-scan.start', { projectObjectCount: projectObjects.length });
-    for (const object of projectObjects) {
-        if (!isDirectSituationImage(input.projectPrefix, object.key, input.oldStorageName)) continue;
-        const targetKey = replaceExactBasename(object.key, input.oldStorageName, input.newStorageName, IMAGE_EXTENSIONS);
+    const { assets, characters } = await loadTrackedSituationAssets(env, input, report);
+    const trackedEntries = [];
+    for (const asset of assets) {
+        const character = characters.find(candidate => asset.r2_key.startsWith(candidate.prefix));
+        if (!character) continue;
+        const relativeParts = asset.r2_key.slice(character.prefix.length).split('/').filter(Boolean);
+        if (relativeParts.length !== 1 && relativeParts.length !== 2) continue;
+        if (!relativeParts.every(isSafeNestedPathSegment)) continue;
+        if (relativeParts.at(-1) !== asset.file_name) continue;
+        const targetKey = replaceExactBasename(
+            asset.r2_key,
+            input.oldStorageName,
+            input.newStorageName,
+            IMAGE_EXTENSIONS
+        );
         if (!targetKey) continue;
-        entries.push({
-            sourceKey: object.key,
+        trackedEntries.push({
+            assetId: asset.id,
+            sourceKey: asset.r2_key,
             targetKey,
-            size: object.size,
-            etag: object.etag,
-            kind: 'situation-image'
+            kind: 'situation-image',
+            characterId: character.id,
+            pathMode: relativeParts.length === 1 ? 'character' : 'outfit'
         });
     }
-    reportMigration(report, 'manifest.situation.project-scan.complete', {
-        projectObjectCount: projectObjects.length,
-        matchedSituationImages: entries.length
+    reportMigration(report, 'manifest.situation.r2-head.start', {
+        eligibleAssetCount: trackedEntries.length,
+        ignoredTrackedAssetCount: assets.length - trackedEntries.length
+    });
+    await runWithConcurrency(trackedEntries, R2_OPERATION_CONCURRENCY, async entry => {
+        const object = await env.imgBucket.head(entry.sourceKey);
+        if (!object) {
+            throw pathMigrationError('PATH_SOURCE_MISSING', 409, 'D1에 등록된 원본 파일을 R2에서 찾지 못했습니다.', {
+                assetId: entry.assetId,
+                sourceKey: entry.sourceKey
+            });
+        }
+        entry.size = object.size;
+        entry.etag = object.etag;
+    });
+    entries.push(...trackedEntries);
+    reportMigration(report, 'manifest.situation.r2-head.complete', {
+        eligibleAssetCount: trackedEntries.length,
+        characterPathCount: trackedEntries.filter(entry => entry.pathMode === 'character').length,
+        outfitPathCount: trackedEntries.filter(entry => entry.pathMode === 'outfit').length
     });
 
     const plannerRoot = `${input.projectPrefix}_planner_temp_image/`;
@@ -633,8 +709,19 @@ async function commitSituationD1(env, migration, input, manifest, document) {
         const moveKey = `${oldPath.prefix}\u0000${oldPath.fileName}`;
         metadataMoves.set(moveKey, { oldPath, newPath });
         statements.push(env.DB.prepare(`
-            UPDATE v2_assets SET r2_key = ?, file_name = ?, updated_at = ? WHERE r2_key = ?
-        `).bind(entry.targetKey, newPath.fileName, timestamp, entry.sourceKey));
+            UPDATE v2_assets
+            SET r2_key = ?, file_name = ?, updated_at = ?
+            WHERE id = ? AND r2_key = ? AND status = 'active'
+        `).bind(entry.targetKey, newPath.fileName, timestamp, entry.assetId, entry.sourceKey));
+        statements.push(env.DB.prepare(`
+            SELECT CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM v2_assets
+                    WHERE id = ? AND r2_key = ? AND status = 'active'
+                ) THEN 1
+                ELSE json_extract('asset_revision_conflict')
+            END AS asset_revision_guard
+        `).bind(entry.assetId, entry.targetKey));
         statements.push(env.DB.prepare(`
             UPDATE image_editor_documents SET status = 'stale_path_migration', updated_at = ?
             WHERE status IN ('draft', 'saved') AND (source_key = ? OR output_key = ? OR preview_key = ?)
@@ -803,16 +890,30 @@ async function runMigration(env, migration, input, buildManifest, commitD1, enti
                 };
             }
         }
-        await updateMigration(env, migration.id, {
-            status: 'failed',
-            copied_count: d1Committed ? (latest?.copied_count || 0) : 0,
-            error_json: JSON.stringify({
-                code: error?.code || 'PATH_MIGRATION_FAILED',
-                message: error?.message || String(error),
-                details: error.details
-            })
-        }).catch(() => null);
-        reportMigration(report, 'lock.failed', { migrationId: migration.id });
+        try {
+            const failedUpdate = await updateMigration(env, migration.id, {
+                status: 'failed',
+                copied_count: d1Committed ? (latest?.copied_count || 0) : 0,
+                error_json: JSON.stringify({
+                    code: error?.code || 'PATH_MIGRATION_FAILED',
+                    message: error?.message || String(error),
+                    details: error.details
+                })
+            });
+            if (Number(failedUpdate?.meta?.changes || 0) !== 1) {
+                throw new Error('path_migrations failed 상태 갱신 대상이 없습니다.');
+            }
+            reportMigration(report, 'lock.failed', { migrationId: migration.id });
+        } catch (statusError) {
+            error.details.statusUpdate = {
+                success: false,
+                message: statusError?.message || String(statusError)
+            };
+            reportMigration(report, 'lock.failed.error', {
+                migrationId: migration.id,
+                message: statusError?.message || String(statusError)
+            });
+        }
         throw error;
     }
 }
@@ -893,13 +994,34 @@ export async function changeSituationPath(env, rawInput = {}, report) {
                 message: error?.message || String(error)
             });
             error.details = { ...(error?.details || {}), migrationId: migration.id };
-            await updateMigration(env, migration.id, {
-                status: ['committed', 'cleaning'].includes(migration.status) ? migration.status : 'failed',
-                error_json: JSON.stringify({
-                    code: error?.code || 'PATH_MIGRATION_FAILED',
-                    message: error?.message || String(error)
-                })
-            }).catch(() => null);
+            try {
+                const failureStatus = ['committed', 'cleaning'].includes(migration.status)
+                    ? migration.status
+                    : 'failed';
+                const failedUpdate = await updateMigration(env, migration.id, {
+                    status: failureStatus,
+                    error_json: JSON.stringify({
+                        code: error?.code || 'PATH_MIGRATION_FAILED',
+                        message: error?.message || String(error)
+                    })
+                });
+                if (Number(failedUpdate?.meta?.changes || 0) !== 1) {
+                    throw new Error('path_migrations 문서 오류 상태 갱신 대상이 없습니다.');
+                }
+                reportMigration(report, 'lock.failed', {
+                    migrationId: migration.id,
+                    status: failureStatus
+                });
+            } catch (statusError) {
+                error.details.statusUpdate = {
+                    success: false,
+                    message: statusError?.message || String(statusError)
+                };
+                reportMigration(report, 'lock.failed.error', {
+                    migrationId: migration.id,
+                    message: statusError?.message || String(statusError)
+                });
+            }
             throw error;
         }
     }
@@ -931,7 +1053,7 @@ export async function garbageCollectPathMigration(env, rawIdempotencyKey) {
     if (!migration) return { success: true, garbageCollected: false, reason: 'not-found' };
 
     const ageMs = Date.now() - Date.parse(migration.updated_at || migration.created_at || '');
-    if (!Number.isFinite(ageMs) || ageMs < PATH_MIGRATION_TIME_BUDGET_MS) {
+    if (migration.status !== 'failed' && (!Number.isFinite(ageMs) || ageMs < PATH_MIGRATION_TIME_BUDGET_MS)) {
         throw pathMigrationError('PATH_MIGRATION_ACTIVE', 409, '안전 제한 시간이 지나지 않은 경로 변경은 정리할 수 없습니다.', {
             migrationId: migration.id,
             status: migration.status,

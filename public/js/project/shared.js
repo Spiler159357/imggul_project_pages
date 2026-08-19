@@ -476,7 +476,10 @@ async function requestEntityPathMigration(entityType, payload) {
             migrationId: error?.migrationId || '',
             details: error?.details || {}
         });
-        if (timedOut || response?.status === 524 || error?.code === 'PATH_DIAGNOSTIC_STREAM_INCOMPLETE') {
+        if (timedOut
+            || response?.status === 524
+            || error?.code === 'PATH_DIAGNOSTIC_STREAM_INCOMPLETE'
+            || error?.code === 'PATH_MIGRATION_TIME_BUDGET_EXCEEDED') {
             await garbageCollectTimedOutPathMigration(idempotencyKey, requestId).catch(cleanupError => {
                 console.error(`[path-migration:${requestId}] garbage-collection.transport-error`, cleanupError);
             });
