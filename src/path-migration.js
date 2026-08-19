@@ -34,27 +34,12 @@ function parseJson(value, fallback) {
     }
 }
 
-function reportMigration(report, stage, details = {}) {
-    const event = { stage, timestamp: nowIso(), ...details };
-    console.log(JSON.stringify({ scope: 'path-migration', ...event }));
-    report?.(event);
-}
-
-async function listAllR2Objects(bucket, options = {}, report, label = 'r2-list') {
+async function listAllR2Objects(bucket, options = {}) {
     const objects = [];
     const seenCursors = new Set();
     let cursor;
     let truncated = true;
-    let pageNumber = 0;
     while (truncated) {
-        pageNumber += 1;
-        const pageStartedAt = Date.now();
-        reportMigration(report, `${label}.page.start`, {
-            pageNumber,
-            prefix: options.prefix || '',
-            hasCursor: Boolean(cursor),
-            accumulatedObjects: objects.length
-        });
         const page = await bucket.list({
             ...options,
             cursor,
@@ -62,13 +47,6 @@ async function listAllR2Objects(bucket, options = {}, report, label = 'r2-list')
         });
         objects.push(...(page.objects || []));
         truncated = page.truncated === true;
-        reportMigration(report, `${label}.page.complete`, {
-            pageNumber,
-            pageObjects: page.objects?.length || 0,
-            accumulatedObjects: objects.length,
-            truncated,
-            elapsedMs: Date.now() - pageStartedAt
-        });
         if (!truncated) break;
         if (!page.cursor || seenCursors.has(page.cursor)) {
             throw pathMigrationError('PATH_R2_CURSOR_STALLED', 500, 'R2 파일 목록 조회가 같은 위치에서 반복되었습니다.');
@@ -133,8 +111,7 @@ function legacyPlannerCharacterRef(value = '') {
     return String(value || '').trim().replace(/[\\/]+/g, '_');
 }
 
-async function assertNoDestinationObjects(bucket, manifest, report) {
-    reportMigration(report, 'destination-check.start', { objectCount: manifest.length });
+async function assertNoDestinationObjects(bucket, manifest) {
     await runWithConcurrency(manifest, R2_OPERATION_CONCURRENCY, async entry => {
         const destination = await bucket.head(entry.targetKey);
         if (!destination) return;
@@ -143,7 +120,6 @@ async function assertNoDestinationObjects(bucket, manifest, report) {
             targetKey: entry.targetKey
         });
     });
-    reportMigration(report, 'destination-check.complete', { objectCount: manifest.length });
 }
 
 async function updateMigration(env, id, fields = {}) {
@@ -157,17 +133,10 @@ async function updateMigration(env, id, fields = {}) {
         .run();
 }
 
-async function copyManifestObjects(env, migration, manifest, deadline, attemptedTargetKeys, report) {
-    reportMigration(report, 'copy.status-update.start', { migrationId: migration.id });
+async function copyManifestObjects(env, migration, manifest, deadline, attemptedTargetKeys) {
     await updateMigration(env, migration.id, { status: 'copying' });
-    reportMigration(report, 'copy.start', { migrationId: migration.id, objectCount: manifest.length });
     let copiedCount = 0;
     await runWithConcurrency(manifest, R2_OPERATION_CONCURRENCY, async entry => {
-        reportMigration(report, 'copy.object.start', {
-            migrationId: migration.id,
-            sourceKey: entry.sourceKey,
-            targetKey: entry.targetKey
-        });
         assertMigrationTimeRemaining(deadline);
         const source = await env.imgBucket.get(entry.sourceKey);
         if (!source) {
@@ -193,18 +162,11 @@ async function copyManifestObjects(env, migration, manifest, deadline, attempted
         }
         entry.copied = true;
         copiedCount += 1;
-        reportMigration(report, 'copy.object.complete', {
-            migrationId: migration.id,
-            targetKey: entry.targetKey,
-            copiedCount,
-            totalCount: manifest.length
-        });
     });
     await updateMigration(env, migration.id, {
         manifest_json: JSON.stringify(manifest),
         copied_count: copiedCount
     });
-    reportMigration(report, 'copy.complete', { migrationId: migration.id, copiedCount });
     return copiedCount;
 }
 
@@ -251,19 +213,11 @@ async function deleteManifestSources(env, migration, manifest) {
     return deletedCount;
 }
 
-async function createOrResumeMigration(env, input, report) {
-    reportMigration(report, 'lock.idempotency-check.start', {
-        entityType: input.entityType,
-        entityKey: input.entityKey
-    });
+async function createOrResumeMigration(env, input) {
     const existing = await env.DB.prepare('SELECT * FROM path_migrations WHERE idempotency_key = ?')
         .bind(input.idempotencyKey)
         .first();
     if (existing) {
-        reportMigration(report, 'lock.idempotency-check.existing', {
-            migrationId: existing.id,
-            status: existing.status
-        });
         if (existing.entity_type !== input.entityType || existing.entity_key !== input.entityKey) {
             throw pathMigrationError('PATH_IDEMPOTENCY_CONFLICT', 409, '이미 다른 경로 변경에 사용된 요청 키입니다.');
         }
@@ -287,16 +241,7 @@ async function createOrResumeMigration(env, input, report) {
         LIMIT 1
     `).bind(input.entityType, input.entityKey, staleBefore).first();
     if (stalePrepared) {
-        reportMigration(report, 'garbage-collection.stale-prepared.start', {
-            migrationId: stalePrepared.id,
-            updatedAt: stalePrepared.updated_at
-        });
-        const cleanup = await garbageCollectMigrationRow(env, stalePrepared);
-        reportMigration(report, 'garbage-collection.stale-prepared.complete', {
-            migrationId: stalePrepared.id,
-            garbageCollected: cleanup.garbageCollected,
-            deletedTargets: cleanup.deletedTargets
-        });
+        await garbageCollectMigrationRow(env, stalePrepared);
     }
 
     const active = await env.DB.prepare(`
@@ -306,7 +251,6 @@ async function createOrResumeMigration(env, input, report) {
         LIMIT 1
     `).bind(input.entityType, input.entityKey).first();
     if (active) {
-        reportMigration(report, 'lock.active-conflict', { migrationId: active.id });
         throw pathMigrationError('PATH_MIGRATION_ACTIVE', 409, '같은 대상의 경로 변경이 이미 진행 중입니다.', {
             migrationId: active.id
         });
@@ -314,7 +258,6 @@ async function createOrResumeMigration(env, input, report) {
 
     const timestamp = nowIso();
     const id = crypto.randomUUID();
-    reportMigration(report, 'lock.insert.start', { migrationId: id });
     try {
         await env.DB.prepare(`
             INSERT INTO path_migrations (
@@ -346,14 +289,11 @@ async function createOrResumeMigration(env, input, report) {
         }
         throw error;
     }
-    const created = await env.DB.prepare('SELECT * FROM path_migrations WHERE id = ?').bind(id).first();
-    reportMigration(report, 'lock.insert.complete', { migrationId: id, status: created?.status || '' });
-    return created;
+    return await env.DB.prepare('SELECT * FROM path_migrations WHERE id = ?').bind(id).first();
 }
 
-async function buildCharacterManifest(env, input, report) {
+async function buildCharacterManifest(env, input) {
     const entries = [];
-    reportMigration(report, 'manifest.character.start', { oldPrefix: input.oldPrefix, newPrefix: input.newPrefix });
     const destinationPage = await env.imgBucket.list({ prefix: input.newPrefix, limit: 1 });
     const destinationObject = destinationPage.objects?.[0];
     if (destinationObject) {
@@ -361,7 +301,7 @@ async function buildCharacterManifest(env, input, report) {
             targetKey: destinationObject.key
         });
     }
-    const objects = await listAllR2Objects(env.imgBucket, { prefix: input.oldPrefix }, report, 'manifest.character.files');
+    const objects = await listAllR2Objects(env.imgBucket, { prefix: input.oldPrefix });
     for (const object of objects) {
         entries.push({
             sourceKey: object.key,
@@ -376,12 +316,7 @@ async function buildCharacterManifest(env, input, report) {
     const oldPlannerPrefix = `${plannerRoot}${safePlannerRef(input.oldCharacterId || input.oldPrefix, 'character')}/`;
     const newPlannerPrefix = `${plannerRoot}${safePlannerRef(input.newCharacterId || input.newPrefix, 'character')}/`;
     if (oldPlannerPrefix !== newPlannerPrefix) {
-        const plannerObjects = await listAllR2Objects(
-            env.imgBucket,
-            { prefix: oldPlannerPrefix },
-            report,
-            'manifest.character.planner-files'
-        );
+        const plannerObjects = await listAllR2Objects(env.imgBucket, { prefix: oldPlannerPrefix });
         for (const object of plannerObjects) {
             entries.push({
                 sourceKey: object.key,
@@ -410,9 +345,7 @@ async function buildCharacterManifest(env, input, report) {
             });
         }
     }
-    const manifest = uniqueManifest(entries);
-    reportMigration(report, 'manifest.character.complete', { objectCount: manifest.length });
-    return manifest;
+    return uniqueManifest(entries);
 }
 
 function getProjectIdCandidates(input) {
@@ -433,14 +366,10 @@ function isSafeNestedPathSegment(value) {
     }
 }
 
-async function loadTrackedSituationFiles(env, input, report) {
+async function loadTrackedSituationFiles(env, input) {
     const projectIds = getProjectIdCandidates(input);
     const fileNames = [...IMAGE_EXTENSIONS].map(extension => `${input.oldStorageName}.${extension}`);
     const filePlaceholders = fileNames.map(() => '?').join(', ');
-    reportMigration(report, 'manifest.situation.d1-query.start', {
-        projectIdCount: projectIds.length,
-        fileNameCount: fileNames.length
-    });
     const [fileResult, characterResult] = await Promise.all([
         env.DB.prepare(`
             SELECT folder_prefix, file_name
@@ -460,21 +389,12 @@ async function loadTrackedSituationFiles(env, input, report) {
         .map(character => ({ ...character, prefix: normalizePrefix(character.prefix) }))
         .filter(character => character.prefix.startsWith(input.projectPrefix))
         .sort((left, right) => right.prefix.length - left.prefix.length);
-    reportMigration(report, 'manifest.situation.d1-query.complete', {
-        trackedFileCount: files.length,
-        characterCount: characters.length
-    });
     return { files, characters };
 }
 
-async function buildSituationManifest(env, input, report) {
+async function buildSituationManifest(env, input) {
     const entries = [];
-    reportMigration(report, 'manifest.situation.start', {
-        projectPrefix: input.projectPrefix,
-        oldStorageName: input.oldStorageName,
-        newStorageName: input.newStorageName
-    });
-    const { files, characters } = await loadTrackedSituationFiles(env, input, report);
+    const { files, characters } = await loadTrackedSituationFiles(env, input);
     const trackedEntries = [];
     for (const file of files) {
         const folderPrefix = normalizePrefix(file.folder_prefix);
@@ -499,10 +419,6 @@ async function buildSituationManifest(env, input, report) {
             pathMode: nestedFolders.length === 0 ? 'character' : 'outfit'
         });
     }
-    reportMigration(report, 'manifest.situation.r2-head.start', {
-        eligibleFileCount: trackedEntries.length,
-        ignoredTrackedFileCount: files.length - trackedEntries.length
-    });
     await runWithConcurrency(trackedEntries, R2_OPERATION_CONCURRENCY, async entry => {
         const object = await env.imgBucket.head(entry.sourceKey);
         if (!object) {
@@ -514,21 +430,11 @@ async function buildSituationManifest(env, input, report) {
         entry.etag = object.etag;
     });
     entries.push(...trackedEntries);
-    reportMigration(report, 'manifest.situation.r2-head.complete', {
-        eligibleFileCount: trackedEntries.length,
-        characterPathCount: trackedEntries.filter(entry => entry.pathMode === 'character').length,
-        outfitPathCount: trackedEntries.filter(entry => entry.pathMode === 'outfit').length
-    });
 
     const plannerRoot = `${input.projectPrefix}_planner_temp_image/`;
     const oldPlannerPrefix = `${plannerRoot}${input.oldStorageName}/`;
     const newPlannerPrefix = `${plannerRoot}${input.newStorageName}/`;
-    const plannerObjects = await listAllR2Objects(
-        env.imgBucket,
-        { prefix: oldPlannerPrefix },
-        report,
-        'manifest.situation.planner-files'
-    );
+    const plannerObjects = await listAllR2Objects(env.imgBucket, { prefix: oldPlannerPrefix });
     for (const object of plannerObjects) {
         entries.push({
             sourceKey: object.key,
@@ -538,12 +444,7 @@ async function buildSituationManifest(env, input, report) {
             kind: 'planner-temp'
         });
     }
-    const manifest = uniqueManifest(entries);
-    reportMigration(report, 'manifest.situation.complete', {
-        objectCount: manifest.length,
-        plannerObjectCount: plannerObjects.length
-    });
-    return manifest;
+    return uniqueManifest(entries);
 }
 
 function makePrefixUpdateSql(column) {
@@ -767,12 +668,10 @@ async function commitSituationD1(env, migration, input, manifest, document) {
     return { ...planner.summary, documentUpdatedAt: timestamp };
 }
 
-async function completeMigration(env, migration, manifest, summary, entity, report) {
+async function completeMigration(env, migration, manifest, summary, entity) {
     let deletedCount;
     try {
-        reportMigration(report, 'source-cleanup.start', { migrationId: migration.id, objectCount: manifest.length });
         deletedCount = await deleteManifestSources(env, migration, manifest);
-        reportMigration(report, 'source-cleanup.complete', { migrationId: migration.id, deletedCount });
     } catch (error) {
         throw pathMigrationError(
             'PATH_SOURCE_CLEANUP_FAILED',
@@ -791,7 +690,6 @@ async function completeMigration(env, migration, manifest, summary, entity, repo
         completed_at: timestamp,
         error_json: '{}'
     });
-    reportMigration(report, 'migration.complete', { migrationId: migration.id, deletedCount });
     return {
         success: true,
         entity,
@@ -805,15 +703,10 @@ async function completeMigration(env, migration, manifest, summary, entity, repo
     };
 }
 
-async function runMigration(env, migration, input, buildManifest, commitD1, entityFactory, report) {
+async function runMigration(env, migration, input, buildManifest, commitD1, entityFactory) {
     const deadline = Date.now() + PATH_MIGRATION_TIME_BUDGET_MS;
     const attemptedTargetKeys = new Set();
     try {
-        reportMigration(report, 'migration.run.start', {
-            migrationId: migration.id,
-            status: migration.status,
-            timeBudgetMs: PATH_MIGRATION_TIME_BUDGET_MS
-        });
         let manifest = parseJson(migration.manifest_json, []);
         if (migration.status === 'completed') {
             return {
@@ -833,27 +726,16 @@ async function runMigration(env, migration, input, buildManifest, commitD1, enti
             });
         }
         assertMigrationTimeRemaining(deadline);
-        reportMigration(report, 'manifest.build.start', { migrationId: migration.id });
-        manifest = await buildManifest(env, input, report);
-        reportMigration(report, 'manifest.build.complete', { migrationId: migration.id, objectCount: manifest.length });
+        manifest = await buildManifest(env, input);
         assertMigrationTimeRemaining(deadline);
-        await assertNoDestinationObjects(env.imgBucket, manifest, report);
-        reportMigration(report, 'manifest.persist.start', { migrationId: migration.id });
+        await assertNoDestinationObjects(env.imgBucket, manifest);
         await updateMigration(env, migration.id, { manifest_json: JSON.stringify(manifest) });
-        reportMigration(report, 'manifest.persist.complete', { migrationId: migration.id });
         assertMigrationTimeRemaining(deadline);
-        await copyManifestObjects(env, migration, manifest, deadline, attemptedTargetKeys, report);
+        await copyManifestObjects(env, migration, manifest, deadline, attemptedTargetKeys);
         assertMigrationTimeRemaining(deadline);
-        reportMigration(report, 'd1-commit.start', { migrationId: migration.id });
         const summary = await commitD1(env, migration, input, manifest);
-        reportMigration(report, 'd1-commit.complete', { migrationId: migration.id });
-        return await completeMigration(env, migration, manifest, summary, entityFactory(summary), report);
+        return await completeMigration(env, migration, manifest, summary, entityFactory(summary));
     } catch (error) {
-        reportMigration(report, 'migration.error', {
-            migrationId: migration.id,
-            code: error?.code || 'PATH_MIGRATION_FAILED',
-            message: error?.message || String(error)
-        });
         error.details = { ...(error?.details || {}), migrationId: migration.id };
         const latest = await env.DB.prepare('SELECT status, copied_count FROM path_migrations WHERE id = ?')
             .bind(migration.id)
@@ -862,16 +744,8 @@ async function runMigration(env, migration, input, buildManifest, commitD1, enti
         const d1Committed = ['committed', 'cleaning'].includes(latest?.status);
         if (!d1Committed && attemptedTargetKeys.size) {
             try {
-                reportMigration(report, 'rollback.targets.start', {
-                    migrationId: migration.id,
-                    targetCount: attemptedTargetKeys.size
-                });
                 const rolledBackCount = await rollbackCopiedTargets(env, attemptedTargetKeys);
                 error.details.rollback = { success: true, deletedTargets: rolledBackCount };
-                reportMigration(report, 'rollback.targets.complete', {
-                    migrationId: migration.id,
-                    deletedTargets: rolledBackCount
-                });
             } catch (rollbackError) {
                 error.details.rollback = {
                     success: false,
@@ -893,22 +767,17 @@ async function runMigration(env, migration, input, buildManifest, commitD1, enti
             if (Number(failedUpdate?.meta?.changes || 0) !== 1) {
                 throw new Error('path_migrations failed 상태 갱신 대상이 없습니다.');
             }
-            reportMigration(report, 'lock.failed', { migrationId: migration.id });
         } catch (statusError) {
             error.details.statusUpdate = {
                 success: false,
                 message: statusError?.message || String(statusError)
             };
-            reportMigration(report, 'lock.failed.error', {
-                migrationId: migration.id,
-                message: statusError?.message || String(statusError)
-            });
         }
         throw error;
     }
 }
 
-export async function changeCharacterPath(env, rawInput = {}, report) {
+export async function changeCharacterPath(env, rawInput = {}) {
     if (!env?.DB || !env?.imgBucket) throw pathMigrationError('PATH_BINDING_MISSING', 500, 'DB 또는 R2 binding이 없습니다.');
     const projectPrefix = normalizePrefix(rawInput.projectPrefix);
     const oldPrefix = normalizePrefix(rawInput.oldPrefix);
@@ -932,19 +801,18 @@ export async function changeCharacterPath(env, rawInput = {}, report) {
         projectId,
         oldPath: oldPrefix,
         newPath: newPrefix
-    }, report);
+    });
     return await runMigration(
         env,
         migration,
         input,
         buildCharacterManifest,
         commitCharacterD1,
-        () => ({ id: newCharacterId, prefix: newPrefix, folderName: newName }),
-        report
+        () => ({ id: newCharacterId, prefix: newPrefix, folderName: newName })
     );
 }
 
-export async function changeSituationPath(env, rawInput = {}, report) {
+export async function changeSituationPath(env, rawInput = {}) {
     if (!env?.DB || !env?.imgBucket) throw pathMigrationError('PATH_BINDING_MISSING', 500, 'DB 또는 R2 binding이 없습니다.');
     const projectPrefix = normalizePrefix(rawInput.projectPrefix);
     const oldStorageName = assertSafePathSegment(rawInput.oldStorageName, 'old situation path');
@@ -970,19 +838,12 @@ export async function changeSituationPath(env, rawInput = {}, report) {
         projectId,
         oldPath: oldStorageName,
         newPath: newStorageName
-    }, report);
+    });
     let document = null;
     if (migration.status !== 'completed') {
         try {
-            reportMigration(report, 'situation-document.read.start', { migrationId: migration.id });
             document = await readSituationDocument(env, input, migration);
-            reportMigration(report, 'situation-document.read.complete', { migrationId: migration.id });
         } catch (error) {
-            reportMigration(report, 'situation-document.read.error', {
-                migrationId: migration.id,
-                code: error?.code || 'PATH_MIGRATION_FAILED',
-                message: error?.message || String(error)
-            });
             error.details = { ...(error?.details || {}), migrationId: migration.id };
             try {
                 const failureStatus = ['committed', 'cleaning'].includes(migration.status)
@@ -998,19 +859,11 @@ export async function changeSituationPath(env, rawInput = {}, report) {
                 if (Number(failedUpdate?.meta?.changes || 0) !== 1) {
                     throw new Error('path_migrations 문서 오류 상태 갱신 대상이 없습니다.');
                 }
-                reportMigration(report, 'lock.failed', {
-                    migrationId: migration.id,
-                    status: failureStatus
-                });
             } catch (statusError) {
                 error.details.statusUpdate = {
                     success: false,
                     message: statusError?.message || String(statusError)
                 };
-                reportMigration(report, 'lock.failed.error', {
-                    migrationId: migration.id,
-                    message: statusError?.message || String(statusError)
-                });
             }
             throw error;
         }
@@ -1027,8 +880,7 @@ export async function changeSituationPath(env, rawInput = {}, report) {
             folderName: newStorageName,
             imageNumber: newStorageName,
             updatedAt: summary.documentUpdatedAt || ''
-        }),
-        report
+        })
     );
 }
 
@@ -1061,16 +913,6 @@ export async function garbageCollectPathMigration(env, rawIdempotencyKey) {
     }
 
     const cleanup = await garbageCollectMigrationRow(env, migration);
-    console.log(JSON.stringify({
-        scope: 'path-migration',
-        stage: 'garbage-collection.complete',
-        timestamp: nowIso(),
-        migrationId: migration.id,
-        previousStatus: migration.status,
-        garbageCollected: cleanup.garbageCollected,
-        deletedTargets: cleanup.deletedTargets,
-        ageMs
-    }));
     return {
         success: true,
         garbageCollected: cleanup.garbageCollected,

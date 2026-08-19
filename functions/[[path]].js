@@ -62,11 +62,9 @@ function pathMigrationErrorResponse(error) {
     });
 }
 
-function pathMigrationDiagnosticResponse(execute) {
+function pathMigrationStreamingResponse(execute) {
     const encoder = new TextEncoder();
-    const startedAt = Date.now();
     let closed = false;
-    let cancellationSignaled = false;
     const stream = new ReadableStream({
         start(controller) {
             const send = payload => {
@@ -77,35 +75,13 @@ function pathMigrationDiagnosticResponse(execute) {
                     closed = true;
                 }
             };
-            const report = event => {
-                if (closed) {
-                    if (!cancellationSignaled) {
-                        cancellationSignaled = true;
-                        const error = new Error('브라우저 진단 연결이 종료되어 경로 변경을 중단합니다.');
-                        error.code = 'PATH_DIAGNOSTIC_CLIENT_DISCONNECTED';
-                        error.status = 499;
-                        throw error;
-                    }
-                    return;
-                }
-                send({ type: 'progress', ...event });
-            };
-            send({
-                type: 'progress',
-                stage: 'diagnostic-stream.open',
-                timestamp: new Date().toISOString()
-            });
+            send({ type: 'heartbeat' });
             const heartbeat = setInterval(() => {
-                send({
-                    type: 'progress',
-                    stage: 'diagnostic-stream.heartbeat',
-                    timestamp: new Date().toISOString(),
-                    elapsedMs: Date.now() - startedAt
-                });
+                send({ type: 'heartbeat' });
             }, 10_000);
             void (async () => {
                 try {
-                    const data = await execute(report);
+                    const data = await execute();
                     send({ type: 'result', data });
                 } catch (error) {
                     send({
@@ -126,14 +102,8 @@ function pathMigrationDiagnosticResponse(execute) {
                 }
             })();
         },
-        cancel(reason) {
+        cancel() {
             closed = true;
-            console.log(JSON.stringify({
-                scope: 'path-migration',
-                stage: 'diagnostic-stream.cancelled',
-                timestamp: new Date().toISOString(),
-                reason: String(reason || '')
-            }));
         }
     });
     return new Response(stream, {
@@ -3088,8 +3058,8 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            if (body?.diagnostics === true) {
-                return pathMigrationDiagnosticResponse(report => changeCharacterPath(env, body || {}, report));
+            if (body?.stream === true) {
+                return pathMigrationStreamingResponse(() => changeCharacterPath(env, body || {}));
             }
             return jsonResponse(await changeCharacterPath(env, body || {}), {
                 headers: { 'Cache-Control': 'no-store' }
@@ -3103,8 +3073,8 @@ export async function onRequest(context) {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
             const body = await request.json();
-            if (body?.diagnostics === true) {
-                return pathMigrationDiagnosticResponse(report => changeSituationPath(env, body || {}, report));
+            if (body?.stream === true) {
+                return pathMigrationStreamingResponse(() => changeSituationPath(env, body || {}));
             }
             return jsonResponse(await changeSituationPath(env, body || {}), {
                 headers: { 'Cache-Control': 'no-store' }
