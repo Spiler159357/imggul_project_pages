@@ -129,15 +129,12 @@ export function calculateNovelAiRepeatedRequestCost({
         preciseReferenceCount,
         forcePaid: true
     });
-    const mayExhaustV5Usage = current.profile.opusUsageLimit
-        && current.canUseOpusFree
-        && count > 1;
     const subscriptionUnknown = !subscription?.available;
     const unknownButPotentiallyFree = subscriptionUnknown && current.eligible;
     const minimum = unknownButPotentiallyFree
         ? current.precisePrice * count
         : current.total * count;
-    const maximum = (mayExhaustV5Usage || subscriptionUnknown)
+    const maximum = subscriptionUnknown
         ? paid.total * count
         : current.total * count;
     const status = unknownButPotentiallyFree
@@ -148,14 +145,9 @@ export function calculateNovelAiRepeatedRequestCost({
                 ? 'paid'
                 : 'free';
 
-    const reasons = [...current.reasons];
-    if (mayExhaustV5Usage) {
-        reasons.push('V5 무료 사용량이 반복 생성 도중 소진될 수 있음');
-    }
-
     return {
         ...current,
-        reasons,
+        reasons: [...current.reasons],
         status,
         requestCount: count,
         perRequest: current.total,

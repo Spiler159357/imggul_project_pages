@@ -134,12 +134,12 @@ const v5Repeated = calculateNovelAiRepeatedRequestCost({
     subscription: activeOpus,
     requestCount: 3
 });
-assert.equal(v5Repeated.status, 'conditional');
+assert.equal(v5Repeated.status, 'free');
 assert.equal(v5Repeated.minimum, 0);
-assert.equal(v5Repeated.maximum, 90);
-assert.equal(v5Repeated.requiresConsent, true);
+assert.equal(v5Repeated.maximum, 0);
+assert.equal(v5Repeated.requiresConsent, false);
 assert.equal(v5Repeated.requestCount, 3);
-assert.equal(v5Repeated.reasons.includes('V5 무료 사용량이 반복 생성 도중 소진될 수 있음'), true);
+assert.deepEqual(v5Repeated.reasons, []);
 
 // 반복 생성 횟수는 NovelAI 배치 크기가 아니다. 각 요청은 계속 n_samples=1이어야 한다.
 assert.equal(v5.parameters.n_samples, 1);
