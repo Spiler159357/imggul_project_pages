@@ -12,6 +12,11 @@ import {
     preparePlannerCompactQueueSlot,
     putPlannerCompactRateLimit
 } from "./planner-compact.js";
+import {
+    buildNovelAiBaseParameters,
+    getNovelAiModelProfile,
+    normalizeNovelAiModelId
+} from "../public/js/nai-models.js";
 
 const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
@@ -227,30 +232,31 @@ function buildNovelAiPayload(generation = {}, seed) {
     const prompt = combinePromptSegments(promptParts.join(", "), getGenerationQualityTags(generation));
     const negative = combinePromptSegments(getGenerationDefaultNegativePrompt(generation), generation.negative);
     const { width, height } = parseResolution(generation.res);
-    const model = generation.model || "nai-diffusion-4-5-full";
-    const steps = parsePositiveInt(generation.steps, 28);
-    const scale = Number.parseFloat(generation.scale || "5.0") || 5.0;
-    const sampler = generation.sampler || "k_euler_ancestral";
+    const model = normalizeNovelAiModelId(generation.model);
+    const profile = getNovelAiModelProfile(model);
+    const steps = parsePositiveInt(generation.steps, profile.defaultSteps);
+    const scale = Number.parseFloat(generation.scale || String(profile.defaultScale)) || profile.defaultScale;
+    const sampler = generation.sampler || profile.defaultSampler;
+    const base = buildNovelAiBaseParameters({
+        model,
+        width,
+        height,
+        steps,
+        sampler,
+        scale,
+        negativePrompt: negative,
+        seed,
+        sm: generation.sm,
+        smDyn: generation.sm_dyn
+    });
 
     const payload = {
         input: prompt,
         model,
         action: "generate",
-        parameters: {
-            params_version: 3,
-            width,
-            height,
-            steps,
-            sampler,
-            scale,
-            cfg_rescale: 0.0,
-            negative_prompt: negative,
-            seed,
-            noise_schedule: "native",
-            legacy_v3_extend: false,
-            skip_cfg_above_sigma: 58.0
-        }
+        parameters: base.parameters
     };
+    if (profile.family === "v5") payload.use_new_shared_trial = true;
 
     const rows = Array.isArray(generation.v4PromptCharacters) ? generation.v4PromptCharacters : [];
     const charCaptions = rows
@@ -262,7 +268,7 @@ function buildNovelAiPayload(generation = {}, seed) {
         .filter(Boolean)
         .map(char_caption => ({ char_caption, centers: [{ x: 0.5, y: 0.5 }] }));
 
-    if (model.includes("nai-diffusion-4")) {
+    if (profile.supportsStructuredPrompt) {
         payload.parameters.v4_prompt = {
             caption: { base_caption: prompt, char_captions: charCaptions },
             use_coords: charCaptions.length > 0,

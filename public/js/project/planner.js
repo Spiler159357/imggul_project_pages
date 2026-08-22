@@ -1,4 +1,5 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=situation-path-state-20260819a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=novelai-v5-20260823a';
+import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823a';
 import { renderSectionHeader } from './manage.js?v=situation-path-state-20260819a';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=situation-path-state-20260819a';
 import { combinePromptParts, getSituationById } from './situation.js?v=situation-path-state-20260819a';
@@ -391,13 +392,15 @@ export function getPlannerImagePrefix(project, imageNumber) {
 }
 
 export function normalizePlannerSettings(settings = {}) {
+    const model = normalizeNovelAiModelId(settings.model || DEFAULT_PLANNER_SETTINGS.model);
+    const profile = getNovelAiModelProfile(model);
     return {
-        model: settings.model || DEFAULT_PLANNER_SETTINGS.model,
-        steps: String(settings.steps || DEFAULT_PLANNER_SETTINGS.steps),
-        scale: String(settings.scale || DEFAULT_PLANNER_SETTINGS.scale),
-        sampler: settings.sampler || DEFAULT_PLANNER_SETTINGS.sampler,
-        sm: !!settings.sm,
-        sm_dyn: !!settings.sm_dyn,
+        model,
+        steps: String(settings.steps || profile.defaultSteps),
+        scale: String(settings.scale || profile.defaultScale),
+        sampler: settings.sampler || profile.defaultSampler,
+        sm: profile.supportsSmea && !!settings.sm,
+        sm_dyn: profile.supportsSmea && !!settings.sm_dyn,
         vibeStrength: String(settings.vibeStrength || DEFAULT_PLANNER_SETTINGS.vibeStrength),
         vibeInfo: String(settings.vibeInfo || DEFAULT_PLANNER_SETTINGS.vibeInfo),
         preciseStrength: String(settings.preciseStrength || DEFAULT_PLANNER_SETTINGS.preciseStrength),
@@ -453,6 +456,7 @@ export async function savePlannerSettings(project, settings) {
 
 export function applyPlannerSettingsToGeneration(generation, settings) {
     const normalized = normalizePlannerSettings(settings);
+    const profile = getNovelAiModelProfile(normalized.model);
     generation.model = normalized.model;
     generation.steps = normalized.steps;
     generation.scale = normalized.scale;
@@ -464,8 +468,8 @@ export function applyPlannerSettingsToGeneration(generation, settings) {
     generation.preciseStrength = normalized.preciseStrength;
     generation.preciseFidelity = normalized.preciseFidelity;
     generation.preciseType = normalized.preciseType;
-    generation.vibeImageKey = normalized.vibeImageKey;
-    generation.preciseImageKey = normalized.preciseImageKey;
+    generation.vibeImageKey = profile.supportsVibeTransfer ? normalized.vibeImageKey : '';
+    generation.preciseImageKey = profile.supportsPreciseReference ? normalized.preciseImageKey : '';
     return generation;
 }
 
@@ -479,8 +483,13 @@ export async function loadPlannerReferenceFile(key) {
 }
 
 export async function applyPlannerReferenceFiles(generation) {
-    window.VIBE_IMAGE_FILE = await loadPlannerReferenceFile(generation.vibeImageKey);
-    window.PRECISE_IMAGE_FILE = await loadPlannerReferenceFile(generation.preciseImageKey);
+    const profile = getNovelAiModelProfile(generation.model);
+    window.VIBE_IMAGE_FILE = profile.supportsVibeTransfer
+        ? await loadPlannerReferenceFile(generation.vibeImageKey)
+        : null;
+    window.PRECISE_IMAGE_FILE = profile.supportsPreciseReference
+        ? await loadPlannerReferenceFile(generation.preciseImageKey)
+        : null;
 }
 
 export function getPlannerField(item, key) {
@@ -1372,8 +1381,8 @@ export function renderPlannerV4PromptRow(imageNumber, row, index) {
     return `
         <div data-planner-v4-row="${rowId}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/70 p-2">
             <div class="flex items-center justify-between gap-2 mb-2">
-                <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 캐릭터 ${index + 1}</span>
-                <button type="button" onclick="window.removePlannerV4Prompt('${escapeJsString(imageNumber)}', ${index})" class="p-1 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="V4 캐릭터 삭제">
+                <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">캐릭터 프롬프트 ${index + 1}</span>
+                <button type="button" onclick="window.removePlannerV4Prompt('${escapeJsString(imageNumber)}', ${index})" class="p-1 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="캐릭터 프롬프트 삭제">
                     <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
                 </button>
             </div>
@@ -1396,7 +1405,7 @@ export function renderPlannerV4PromptSection(item) {
             <div class="flex items-center justify-between gap-2 mb-2">
                 <div>
                     <p class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 Prompt</p>
-                    <p class="text-[10px] text-gray-400 dark:text-gray-500">필요할 때 캐릭터를 추가해 v4_prompt char_captions로 전달합니다.</p>
+                    <p class="text-[10px] text-gray-400 dark:text-gray-500">필요할 때 캐릭터를 추가해 구조화된 캐릭터 프롬프트로 전달합니다.</p>
                 </div>
                 <button type="button" onclick="window.addPlannerV4Prompt('${escapeJsString(item.imageNumber)}')" ${isAtLimit ? 'disabled' : ''} class="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
                     <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> 캐릭터 추가
@@ -1498,27 +1507,34 @@ export function renderPlannerSettingsModal(settings) {
                     </button>
                 </div>
                 <div class="p-4 space-y-3 max-h-[76vh] overflow-y-auto">
-                    ${renderPlannerSelect('planner-setting-model', 'Model', settings.model, PLANNER_MODEL_OPTIONS)}
+                    ${renderPlannerSelect('planner-setting-model', 'Model', settings.model, PLANNER_MODEL_OPTIONS, 'onchange="window.updatePlannerModelCapabilities({ applyDefaults: true })"')}
+                    <p id="planner-setting-model-notice" class="hidden rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 px-3 py-2 text-[11px] text-amber-700 dark:text-amber-300">V5에서는 Vibe, Precise Reference와 SMEA/DYN을 전송하지 않습니다.</p>
                     ${renderPlannerNumberInput('planner-setting-steps', 'Steps', settings.steps, 'type="number" min="1" max="50"')}
                     ${renderPlannerNumberInput('planner-setting-scale', 'CFG Scale', settings.scale, 'type="number" min="1" max="10" step="0.1"')}
                     ${renderPlannerSelect('planner-setting-sampler', 'Sampler', settings.sampler, PLANNER_SAMPLER_OPTIONS)}
-                    <div class="flex flex-wrap gap-3">
+                    <div id="planner-smea-settings" class="flex flex-wrap gap-3">
                         ${renderPlannerCheckbox('planner-setting-sm', 'SMEA', settings.sm)}
                         ${renderPlannerCheckbox('planner-setting-sm-dyn', 'DYN', settings.sm_dyn)}
                     </div>
-                    <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div id="planner-vibe-settings" class="space-y-3">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${renderPlannerNumberInput('planner-setting-vibe-strength', 'Vibe Strength', settings.vibeStrength, 'type="number" min="0" max="1" step="0.1"')}
                         ${renderPlannerNumberInput('planner-setting-vibe-info', 'Vibe Info', settings.vibeInfo, 'type="number" min="0" max="1" step="0.1"')}
+                        </div>
+                        ${renderPlannerReferencePicker('vibe', 'Vibe 이미지', settings.vibeImageKey)}
+                    </div>
+                    <div id="planner-precise-settings" class="space-y-3">
+                        <div class="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         ${renderPlannerNumberInput('planner-setting-precise-strength', 'Reference Strength', settings.preciseStrength, 'type="number" min="0" max="1" step="0.1"')}
                         ${renderPlannerNumberInput('planner-setting-precise-fidelity', 'Reference Fidelity', settings.preciseFidelity, 'type="number" min="0" max="1" step="0.1"')}
+                        </div>
+                        ${renderPlannerSelect('planner-setting-precise-type', 'Reference 타입', settings.preciseType, [
+                            ['character&style', '캐릭터+그림체'],
+                            ['character', '캐릭터'],
+                            ['style', '그림체']
+                        ])}
+                        ${renderPlannerReferencePicker('precise', 'Reference 이미지', settings.preciseImageKey)}
                     </div>
-                    ${renderPlannerSelect('planner-setting-precise-type', 'Reference 타입', settings.preciseType, [
-                        ['character&style', '캐릭터+그림체'],
-                        ['character', '캐릭터'],
-                        ['style', '그림체']
-                    ])}
-                    ${renderPlannerReferencePicker('vibe', 'Vibe 이미지', settings.vibeImageKey)}
-                    ${renderPlannerReferencePicker('precise', 'Reference 이미지', settings.preciseImageKey)}
                     ${renderPlannerBasePromptSettings()}
                     <p id="planner-settings-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                 </div>
@@ -3090,10 +3106,41 @@ function syncPlannerBasePromptSettingsInputs() {
     if (negativeEnabledInput) negativeEnabledInput.checked = !!settings.useDefaultNegativePrompt;
 }
 
+export function updatePlannerModelCapabilities(options = {}) {
+    const modelSelect = document.getElementById('planner-setting-model');
+    if (!modelSelect) return;
+    const model = normalizeNovelAiModelId(modelSelect.value);
+    const profile = getNovelAiModelProfile(model);
+    modelSelect.value = model;
+
+    const notice = document.getElementById('planner-setting-model-notice');
+    const smea = document.getElementById('planner-smea-settings');
+    const vibe = document.getElementById('planner-vibe-settings');
+    const precise = document.getElementById('planner-precise-settings');
+    notice?.classList.toggle('hidden', profile.family !== 'v5');
+    smea?.classList.toggle('hidden', !profile.supportsSmea);
+    vibe?.classList.toggle('hidden', !profile.supportsVibeTransfer);
+    precise?.classList.toggle('hidden', !profile.supportsPreciseReference);
+
+    if (!profile.supportsSmea) {
+        if (document.getElementById('planner-setting-sm')) document.getElementById('planner-setting-sm').checked = false;
+        if (document.getElementById('planner-setting-sm-dyn')) document.getElementById('planner-setting-sm-dyn').checked = false;
+    }
+    if (options.applyDefaults === true) {
+        const steps = document.getElementById('planner-setting-steps');
+        const scale = document.getElementById('planner-setting-scale');
+        const sampler = document.getElementById('planner-setting-sampler');
+        if (steps) steps.value = String(profile.defaultSteps);
+        if (scale) scale.value = String(profile.defaultScale);
+        if (sampler) sampler.value = profile.defaultSampler;
+    }
+}
+
 export function openPlannerSettingsModal() {
     const modal = document.getElementById('planner-settings-modal');
     if (!modal) return;
     syncPlannerBasePromptSettingsInputs();
+    updatePlannerModelCapabilities();
     modal.classList.remove('hidden');
     modal.classList.add('flex');
     refreshProjectIcons();
@@ -3247,7 +3294,7 @@ export async function addPlannerV4Prompt(imageNumber) {
     meta = readPlannerEditsFromDom(meta);
     const item = meta.items.find(entry => String(entry.imageNumber) === String(imageNumber));
     if (!item) return;
-    if ((item.generation.v4PromptCharacters || []).length >= MAX_V4_PROMPT_CHARACTERS) return alert(`V4 캐릭터는 최대 ${MAX_V4_PROMPT_CHARACTERS}명까지만 추가할 수 있습니다.`);
+    if ((item.generation.v4PromptCharacters || []).length >= MAX_V4_PROMPT_CHARACTERS) return alert(`캐릭터 프롬프트는 최대 ${MAX_V4_PROMPT_CHARACTERS}명까지만 추가할 수 있습니다.`);
     item.generation.v4PromptCharacters = [
         ...(item.generation.v4PromptCharacters || []),
         { subject: '', clothing: '', expression: '', action: '', negative: '' }
@@ -4587,7 +4634,12 @@ function getPlannerClearableItems(meta = {}, situationId = null) {
 }
 
 function hasUnsupportedPlannerBackgroundReference(items = []) {
-    return items.some(item => item.generation?.vibeImageKey || item.generation?.preciseImageKey);
+    return items.some(item => {
+        const generation = item.generation || {};
+        const profile = getNovelAiModelProfile(generation.model);
+        return (profile.supportsVibeTransfer && generation.vibeImageKey)
+            || (profile.supportsPreciseReference && generation.preciseImageKey);
+    });
 }
 
 async function startPlannerBackgroundRun(project, meta, targetItems, situationId = null, batch = null) {
@@ -4656,6 +4708,21 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
         const characterName = unsupportedEntry.character?.name || unsupportedEntry.character?.folderName || unsupportedEntry.meta?.characterId || '';
         setPlannerStatus(`백그라운드 생성은 아직 참조 이미지를 지원하지 않습니다. ${characterName ? `${characterName} 플랜의 ` : ''}참조 이미지를 제거하거나 브라우저 모드를 사용하세요.`);
         return;
+    }
+
+    if (window.confirmNovelAiPlannerCost) {
+        const decision = await window.confirmNovelAiPlannerCost(runnableEntries.flatMap(entry =>
+            entry.targetItems.map(item => ({
+                generation: item.generation,
+                requestCount: options.clearExisting === true
+                    ? getPlannerItemTargetCount(item, entry.meta)
+                    : Math.max(1, getPlannerItemTargetCount(item, entry.meta) - getPlannerItemGeneratedCount(item))
+            }))
+        ), '전체 백그라운드 플래너 이미지 생성');
+        if (!decision.confirmed) {
+            setPlannerStatus('Anlas 비용 확인을 취소했습니다.');
+            return;
+        }
     }
 
     window.PROJECT_PLANNER_VIEW = 'run';
@@ -4826,7 +4893,20 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
         return;
     }
 
-    const unsupportedReference = targetItems.some(item => item.generation?.vibeImageKey || item.generation?.preciseImageKey);
+    if (window.confirmNovelAiPlannerCost) {
+        const decision = await window.confirmNovelAiPlannerCost(targetItems.map(item => ({
+            generation: item.generation,
+            requestCount: options.clearExisting === true
+                ? getPlannerItemTargetCount(item, meta)
+                : Math.max(1, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item))
+        })), '백그라운드 플래너 이미지 생성');
+        if (!decision.confirmed) {
+            setPlannerStatus('Anlas 비용 확인을 취소했습니다.');
+            return;
+        }
+    }
+
+    const unsupportedReference = hasUnsupportedPlannerBackgroundReference(targetItems);
     if (unsupportedReference) {
         setPlannerStatus('백그라운드 생성은 아직 참조 이미지를 지원하지 않습니다. 브라우저 모드를 사용하세요.');
         return;
@@ -4927,6 +5007,16 @@ export async function startPlannerResultGeneration(situationId = null) {
         return;
     }
     if (!confirm('이 플랜의 기존 후보 이미지를 삭제하고 다시 생성하시겠습니까?')) return;
+    if (window.confirmNovelAiPlannerCost) {
+        const decision = await window.confirmNovelAiPlannerCost(targetItems.map(item => ({
+            generation: item.generation,
+            requestCount: getPlannerItemTargetCount(item, meta)
+        })), '백그라운드 플래너 다시 생성');
+        if (!decision.confirmed) {
+            setPlannerStatus('Anlas 비용 확인을 취소했습니다.');
+            return;
+        }
+    }
     try {
         await clearPlannerItemsImages(project, targetItems, meta);
         const result = await startPlannerBackgroundRun(project, meta, targetItems, situationId, { clearExisting: true });
@@ -4955,7 +5045,7 @@ function splitPlannerCompactR2Key(key = '') {
     };
 }
 
-async function runPlannerCompactBrowserGeneration(project, meta, situationId = null, clearExisting = false, resume = false) {
+async function runPlannerCompactBrowserGeneration(project, meta, situationId = null, clearExisting = false, resume = false, anlasConfirmed = false) {
     const savedMeta = resume ? meta : await savePlannerMeta(project, meta);
     const startRes = await fetch('/api/planner/compact/generate/start', {
         method: 'POST',
@@ -5002,10 +5092,11 @@ async function runPlannerCompactBrowserGeneration(project, meta, situationId = n
 
         const target = splitPlannerCompactR2Key(next.slot.r2Key);
         setPlannerStatus(`${next.slot.globalImageIndex + 1}번째 이미지 생성 중...`);
-        window.generateNaiImage({
+        await window.generateNaiImage({
             outputPrefix: target.prefix,
             outputFileName: target.fileName,
             v4PromptCharacters: generation.v4PromptCharacters || [],
+            anlasConfirmed,
             planner: {
                 compact: true,
                 runKey: next.runKey,
@@ -5097,6 +5188,20 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         setPlannerStatus('실행할 플랜을 찾을 수 없습니다.');
         return;
     }
+    let plannerCostConsentGranted = false;
+    if (window.confirmNovelAiPlannerCost) {
+        const decision = await window.confirmNovelAiPlannerCost(targetItems.map(item => ({
+            generation: item.generation,
+            requestCount: clearExisting
+                ? getPlannerItemTargetCount(item, meta)
+                : Math.max(1, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item))
+        })));
+        if (!decision.confirmed) {
+            setPlannerStatus('Anlas 비용 확인을 취소했습니다.');
+            return;
+        }
+        plannerCostConsentGranted = decision.consentGranted === true;
+    }
     window.PROJECT_PLANNER_PAUSE_REQUESTED = false;
     window.PROJECT_PLANNER_CANCEL_REQUESTED = false;
     window.PROJECT_PLANNER_VIEW = 'run';
@@ -5104,7 +5209,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     const previousVibeFile = window.VIBE_IMAGE_FILE || null;
     const previousPreciseFile = window.PRECISE_IMAGE_FILE || null;
     try {
-        await runPlannerCompactBrowserGeneration(project, meta, situationId, clearExisting, resumeRun);
+        await runPlannerCompactBrowserGeneration(project, meta, situationId, clearExisting, resumeRun, plannerCostConsentGranted);
         setPlannerStatus(window.PROJECT_PLANNER_PAUSE_REQUESTED ? 'paused' : (window.PROJECT_PLANNER_CANCEL_REQUESTED ? 'cancelled' : 'completed'));
     } catch (error) {
         setPlannerStatus(error?.message || '브라우저 생성에 실패했습니다.');

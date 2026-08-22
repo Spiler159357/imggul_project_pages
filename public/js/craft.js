@@ -1,4 +1,15 @@
 // 5. craft.js: 이미지 생성 큐, 설정 로직
+import {
+    buildNovelAiBaseParameters,
+    getNovelAiInpaintModel,
+    getNovelAiModelProfile,
+    normalizeNovelAiModelId
+} from './nai-models.js?v=novelai-v5-20260823a';
+import {
+    calculateNovelAiBatchCost,
+    calculateNovelAiRequestCost
+} from './nai-pricing.js?v=novelai-v5-20260823a';
+
 const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
 const CRAFT_BASE_PROMPT_STORAGE_KEY = 'naiCraftBasePromptSettings';
@@ -6,6 +17,10 @@ const CRAFT_FIXED_GENERATION_ESTIMATE_MS = 7000;
 const MAX_V4_PROMPT_CHARACTERS = 6;
 const DEFAULT_CRAFT_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const DEFAULT_CRAFT_DEFAULT_NEGATIVE_PROMPT = '';
+const NOVELAI_SUBSCRIPTION_CACHE_MS = 30_000;
+
+let novelAiSubscriptionState = { available: false, loading: false, fetchedAt: 0 };
+let novelAiSubscriptionRequest = null;
 
 function formatDurationMs(ms) {
     const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
@@ -273,33 +288,248 @@ export function updateQueueUI(show) {
     lucide.createIcons();
 }
 
-/**
- * 역할: 선택된 해상도, 스텝, 모델 옵션 기준으로 예상 Anlas 비용을 계산해 표시한다.
- * 매개변수: 없음.
- * 주요 변수: width, height, steps, pixels, model, baseCost, extraCost, totalCost - 비용 산출값.
- * 반환값: 명시 반환 없음.
- */
-export function calculateAnlas() {
+function getNovelAiSubscriptionBalanceLabel(subscription = novelAiSubscriptionState) {
+    if (!subscription?.anlas) return '';
+    const total = Number(subscription.anlas.total);
+    const fixed = Number(subscription.anlas.subscription);
+    const paid = Number(subscription.anlas.paid);
+    if (![total, fixed, paid].every(Number.isFinite)) return '';
+    return `보유 ${total.toLocaleString('ko-KR')} Anlas · 구독 ${fixed.toLocaleString('ko-KR')} + 구매 ${paid.toLocaleString('ko-KR')}`;
+}
+
+function getNovelAiRechargeLabel(subscription = novelAiSubscriptionState) {
+    const seconds = Number(subscription?.usage?.timeUntilNextPercent);
+    const percent = Number(subscription?.usage?.percent);
+    if (!Number.isFinite(seconds) || seconds < 0 || percent >= 100) return '';
+    const minutes = Math.max(1, Math.ceil(seconds / 60));
+    if (minutes < 60) return `다음 1% 충전까지 약 ${minutes}분`;
+    const hours = Math.floor(minutes / 60);
+    const rest = minutes % 60;
+    return `다음 1% 충전까지 약 ${hours}시간${rest ? ` ${rest}분` : ''}`;
+}
+
+function getCurrentNovelAiCostInput(overrides = {}) {
     const resRadio = document.querySelector('input[name="nai-res"]:checked');
-    const stepsInput = document.getElementById('nai-steps');
-    const anlasDisplay = document.getElementById('nai-anlas-cost');
-    if (!resRadio || !stepsInput || !anlasDisplay) return;
+    const [width, height] = String(overrides.res || resRadio?.value || '832x1216').split('x').map(Number);
+    const model = normalizeNovelAiModelId(overrides.model || document.getElementById('nai-model')?.value);
+    const profile = getNovelAiModelProfile(model);
+    const steps = Number.parseInt(overrides.steps ?? document.getElementById('nai-steps')?.value, 10) || profile.defaultSteps;
+    const scale = Number.parseFloat(overrides.scale ?? document.getElementById('nai-scale')?.value) || profile.defaultScale;
+    const sampler = overrides.sampler || document.getElementById('nai-sampler')?.value || profile.defaultSampler;
+    const sm = overrides.sm ?? document.getElementById('nai-sm')?.checked ?? false;
+    const smDyn = overrides.smDyn ?? document.getElementById('nai-sm-dyn')?.checked ?? false;
+    const base = buildNovelAiBaseParameters({
+        model,
+        width,
+        height,
+        steps,
+        sampler,
+        scale,
+        negativePrompt: '',
+        seed: 0,
+        sm,
+        smDyn
+    });
+    const hasBaseImage = overrides.hasBaseImage ?? !!window.INPAINT_IMAGE_SOURCE;
+    if (hasBaseImage) {
+        base.parameters.image = 'pricing-placeholder';
+        base.parameters.mask = 'pricing-placeholder';
+        base.parameters.inpaintImg2ImgStrength = Number.parseFloat(
+            overrides.inpaintStrength ?? document.getElementById('inpaint-strength')?.value
+        ) || 1;
+    }
+    return {
+        model,
+        profile,
+        parameters: base.parameters,
+        preciseReferenceCount: overrides.preciseReferenceCount
+            ?? (profile.supportsPreciseReference && window.PRECISE_IMAGE_FILE ? 1 : 0)
+    };
+}
 
-    const [width, height] = resRadio.value.split('x').map(Number);
-    const steps = parseInt(stepsInput.value) || 28;
-    const pixels = width * height;
-    const model = document.getElementById('nai-model')?.value || '';
+function renderNovelAiCost(disclosure) {
+    const card = document.getElementById('nai-cost-card');
+    const title = document.getElementById('nai-anlas-cost');
+    const detail = document.getElementById('nai-anlas-detail');
+    const balance = document.getElementById('nai-anlas-balance');
+    const buttonLabel = document.getElementById('nai-generate-label');
+    if (!title) return disclosure;
 
-    let baseCost = 0;
-    if (pixels <= 1048576 && steps <= 28) baseCost = 0;
-    else baseCost = Math.max(1, Math.ceil((pixels * steps) / 65536 * 0.15));
+    const usagePercent = Number(novelAiSubscriptionState?.usage?.percent);
+    const usageLabel = Number.isFinite(usagePercent) ? `V5 무료 사용량 ${usagePercent}%` : '';
+    const rechargeLabel = getNovelAiRechargeLabel();
+    let titleText = '0 Anlas';
+    let detailText = 'Opus 무료 조건';
+    let toneClass = 'text-emerald-600 dark:text-emerald-400';
+    let buttonText = '생성';
 
-    let extraCost = 0;
-    if (model.includes('nai-diffusion-4-5') && window.PRECISE_IMAGE_FILE) extraCost += 5; 
+    if (disclosure.status === 'paid') {
+        titleText = `${disclosure.maximum.toLocaleString('ko-KR')} Anlas 사용 예정`;
+        detailText = `${disclosure.reasons.join(' · ') || '유료 생성 조건'}${rechargeLabel ? ` · ${rechargeLabel}` : ''}`;
+        toneClass = 'text-orange-600 dark:text-orange-400';
+        buttonText = `${disclosure.maximum.toLocaleString('ko-KR')} Anlas 사용하고 생성`;
+    } else if (disclosure.status === 'conditional') {
+        titleText = `현재 0 · 배치 최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas`;
+        detailText = `${usageLabel || 'V5 무료 사용량'} · 배치 중 소진 시 과금${rechargeLabel ? ` · ${rechargeLabel}` : ''}`;
+        toneClass = 'text-amber-600 dark:text-amber-400';
+        buttonText = '비용 확인 후 생성';
+    } else if (disclosure.status === 'unknown') {
+        titleText = `비용 확인 불가 · 최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas`;
+        detailText = '구독/사용량을 확인하지 못했습니다. 과금될 수 있습니다.';
+        toneClass = 'text-red-600 dark:text-red-400';
+        buttonText = '비용 확인 후 생성';
+    } else if (disclosure.profile.opusUsageLimit) {
+        detailText = `${usageLabel || 'V5 무료 사용량 확인됨'} · 이번 요청은 0 Anlas${rechargeLabel ? ` · ${rechargeLabel}` : ''}`;
+        toneClass = usagePercent <= 20
+            ? 'text-amber-600 dark:text-amber-400'
+            : 'text-emerald-600 dark:text-emerald-400';
+    }
 
-    const totalCost = baseCost + extraCost;
-    if (totalCost === 0) anlasDisplay.innerHTML = `<span class="text-green-500 font-bold">0 Anlas</span> (Opus 무료)`;
-    else anlasDisplay.innerHTML = `<span class="text-orange-500 font-bold">${totalCost} Anlas</span> 소모 예상`;
+    title.className = `text-sm font-bold ${toneClass}`;
+    title.textContent = titleText;
+    if (detail) detail.textContent = detailText;
+    if (balance) balance.textContent = getNovelAiSubscriptionBalanceLabel();
+    if (buttonLabel) buttonLabel.textContent = buttonText;
+    if (card) card.dataset.state = disclosure.status;
+    return disclosure;
+}
+
+export async function refreshNovelAiSubscription(options = {}) {
+    const force = options.force === true;
+    const age = Date.now() - Number(novelAiSubscriptionState.fetchedAt || 0);
+    if (!force && novelAiSubscriptionState.available && age < NOVELAI_SUBSCRIPTION_CACHE_MS) {
+        return novelAiSubscriptionState;
+    }
+    if (novelAiSubscriptionRequest) return novelAiSubscriptionRequest;
+
+    novelAiSubscriptionState = { ...novelAiSubscriptionState, loading: true };
+    novelAiSubscriptionRequest = fetch('/api/novelai/usage', { cache: 'no-store' })
+        .then(async response => {
+            if (!response.ok) throw new Error(`NovelAI usage HTTP ${response.status}`);
+            const payload = await response.json();
+            novelAiSubscriptionState = {
+                ...payload,
+                available: payload.available === true,
+                loading: false,
+                fetchedAt: Date.now()
+            };
+            return novelAiSubscriptionState;
+        })
+        .catch(error => {
+            novelAiSubscriptionState = {
+                available: false,
+                loading: false,
+                fetchedAt: Date.now(),
+                error: error?.message || String(error)
+            };
+            return novelAiSubscriptionState;
+        })
+        .finally(() => {
+            novelAiSubscriptionRequest = null;
+            calculateAnlas();
+        });
+    return novelAiSubscriptionRequest;
+}
+
+/** 선택된 실제 요청 파라미터와 구독 상태를 기준으로 Anlas 범위를 계산해 표시한다. */
+export function calculateAnlas(options = {}) {
+    const input = getCurrentNovelAiCostInput(options);
+    const requestCount = Math.max(1, Number.parseInt(
+        options.requestCount ?? document.getElementById('nai-batch-count')?.value,
+        10
+    ) || 1);
+    const disclosure = calculateNovelAiBatchCost({
+        ...input,
+        subscription: novelAiSubscriptionState,
+        requestCount
+    });
+    return renderNovelAiCost(disclosure);
+}
+
+export async function initNovelAiCostState() {
+    calculateAnlas();
+    await refreshNovelAiSubscription({ force: true });
+}
+
+function buildNovelAiCostConfirmation(disclosure, label = '이미지 생성') {
+    const lines = [label];
+    if (disclosure.status === 'paid') {
+        lines.push(`예상 비용: ${disclosure.maximum.toLocaleString('ko-KR')} Anlas`);
+    } else {
+        lines.push(`예상 범위: ${disclosure.minimum.toLocaleString('ko-KR')} ~ ${disclosure.maximum.toLocaleString('ko-KR')} Anlas`);
+    }
+    if (disclosure.reasons.length) lines.push(`과금 사유: ${disclosure.reasons.join(' · ')}`);
+    const balance = getNovelAiSubscriptionBalanceLabel();
+    if (balance) lines.push(balance);
+    lines.push('', '위 비용 가능성을 확인했으며 생성을 계속하시겠습니까?');
+    return lines.join('\n');
+}
+
+async function confirmCurrentNovelAiCost(options = {}) {
+    await refreshNovelAiSubscription({ force: true });
+    let disclosure = calculateAnlas({ requestCount: options.requestCount });
+    if (options.anlasConfirmed === true) {
+        disclosure = {
+            ...disclosure,
+            maximum: Math.max(disclosure.maximum, disclosure.paidPerRequest || 0)
+        };
+    }
+    if (!disclosure.requiresConsent || options.anlasConfirmed === true) {
+        return { confirmed: true, disclosure };
+    }
+    return {
+        confirmed: window.confirm(buildNovelAiCostConfirmation(disclosure)),
+        disclosure
+    };
+}
+
+export async function confirmNovelAiPlannerCost(entries = [], label = '플래너 이미지 생성') {
+    await refreshNovelAiSubscription({ force: true });
+    let minimum = 0;
+    let maximum = 0;
+    let requiresConsent = false;
+    let hasUnknown = false;
+    const reasons = new Set();
+    let profile = getNovelAiModelProfile('nai-diffusion-4-5-full');
+
+    for (const entry of entries) {
+        const generation = entry?.generation || entry || {};
+        const generationProfile = getNovelAiModelProfile(generation.model);
+        const input = getCurrentNovelAiCostInput({
+            model: generation.model,
+            res: generation.res || generation.resolution,
+            steps: generation.steps ?? generationProfile.defaultSteps,
+            scale: generation.scale ?? generationProfile.defaultScale,
+            sampler: generation.sampler || generationProfile.defaultSampler,
+            sm: generation.sm,
+            smDyn: generation.sm_dyn,
+            hasBaseImage: false,
+            preciseReferenceCount: generation.preciseImageKey ? 1 : 0
+        });
+        const disclosure = calculateNovelAiBatchCost({
+            ...input,
+            subscription: novelAiSubscriptionState,
+            requestCount: entry?.requestCount || generation.batchCount || 1
+        });
+        profile = disclosure.profile;
+        minimum += disclosure.minimum;
+        maximum += disclosure.maximum;
+        requiresConsent ||= disclosure.requiresConsent;
+        hasUnknown ||= disclosure.status === 'unknown';
+        disclosure.reasons.forEach(reason => reasons.add(reason));
+    }
+
+    const disclosure = {
+        status: hasUnknown ? 'unknown' : (maximum > minimum ? 'conditional' : (maximum > 0 ? 'paid' : 'free')),
+        minimum,
+        maximum,
+        requiresConsent,
+        reasons: [...reasons],
+        profile
+    };
+    if (!requiresConsent) return { confirmed: true, consentGranted: false };
+    const confirmed = window.confirm(buildNovelAiCostConfirmation(disclosure, label));
+    return { confirmed, consentGranted: confirmed };
 }
 
 /**
@@ -308,24 +538,39 @@ export function calculateAnlas() {
  * 주요 변수: model, v3, v4, v45 - 현재 모델명과 설정 영역 DOM.
  * 반환값: 명시 반환 없음.
  */
-export function updateModelSpecificUI() {
-    const model = document.getElementById('nai-model')?.value || '';
+export function updateModelSpecificUI(options = {}) {
+    const modelSelect = document.getElementById('nai-model');
+    const model = normalizeNovelAiModelId(modelSelect?.value);
+    const profile = getNovelAiModelProfile(model);
     const v3 = document.getElementById('setting-v3'); const v4 = document.getElementById('setting-v4'); const v45 = document.getElementById('setting-v45');
+    const smeaControls = document.getElementById('nai-smea-controls');
+    if (modelSelect && modelSelect.value !== model) modelSelect.value = model;
     if(v3) { v3.classList.add('hidden'); v3.classList.remove('flex'); }
     if(v4) { v4.classList.add('hidden'); v4.classList.remove('flex'); }
     if(v45) { v45.classList.add('hidden'); v45.classList.remove('flex'); }
 
-    if (model.includes('nai-diffusion-3')) { if(v3) { v3.classList.remove('hidden'); v3.classList.add('flex'); } } 
-    else if (model.includes('nai-diffusion-4-5')) {
-        if(v3) { v3.classList.remove('hidden'); v3.classList.add('flex'); }
-        if(v4) { v4.classList.remove('hidden'); v4.classList.add('flex'); }
-        if(v45) { v45.classList.remove('hidden'); v45.classList.add('flex'); }
-    } 
-    else if (model.includes('nai-diffusion-4')) {
-        if(v3) { v3.classList.remove('hidden'); v3.classList.add('flex'); }
-        if(v4) { v4.classList.remove('hidden'); v4.classList.add('flex'); }
+    if (profile.supportsVibeTransfer && v3) { v3.classList.remove('hidden'); v3.classList.add('flex'); }
+    if (profile.supportsStructuredPrompt && v4) { v4.classList.remove('hidden'); v4.classList.add('flex'); }
+    if (profile.supportsPreciseReference && v45) { v45.classList.remove('hidden'); v45.classList.add('flex'); }
+    if (smeaControls) {
+        smeaControls.classList.toggle('hidden', !profile.supportsSmea);
+        if (!profile.supportsSmea) {
+            if (document.getElementById('nai-sm')) document.getElementById('nai-sm').checked = false;
+            if (document.getElementById('nai-sm-dyn')) document.getElementById('nai-sm-dyn').checked = false;
+        }
     }
-    window.calculateAnlas();
+
+    if (options.applyDefaults === true) {
+        const steps = document.getElementById('nai-steps');
+        const scale = document.getElementById('nai-scale');
+        const sampler = document.getElementById('nai-sampler');
+        if (steps) steps.value = String(profile.defaultSteps);
+        if (scale) scale.value = String(profile.defaultScale);
+        if (sampler) sampler.value = profile.defaultSampler;
+        window.saveCraftSettings();
+    }
+    calculateAnlas();
+    if (profile.opusUsageLimit) void refreshNovelAiSubscription();
 }
 
 /**
@@ -387,7 +632,7 @@ export function loadCraftSettings() {
             }
             if(document.getElementById('nai-negative')) document.getElementById('nai-negative').value = settings.negative || '';
             if(settings.res) { const radio = document.querySelector(`input[name="nai-res"][value="${settings.res}"]`); if(radio) radio.checked = true; }
-            if(settings.model && document.getElementById('nai-model')) document.getElementById('nai-model').value = settings.model;
+            if(settings.model && document.getElementById('nai-model')) document.getElementById('nai-model').value = normalizeNovelAiModelId(settings.model);
             if(settings.steps && document.getElementById('nai-steps')) document.getElementById('nai-steps').value = settings.steps;
             if(settings.scale && document.getElementById('nai-scale')) document.getElementById('nai-scale').value = settings.scale;
             if(settings.sampler && document.getElementById('nai-sampler')) document.getElementById('nai-sampler').value = settings.sampler;
@@ -441,7 +686,7 @@ export function readCraftSettings() {
         useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt,
         v4PromptCharacters: readCraftV4PromptRows(),
         res: document.querySelector('input[name="nai-res"]:checked')?.value || '832x1216',
-        model: document.getElementById('nai-model')?.value || 'nai-diffusion-4-5-full',
+        model: normalizeNovelAiModelId(document.getElementById('nai-model')?.value),
         steps: document.getElementById('nai-steps')?.value || '28',
         scale: document.getElementById('nai-scale')?.value || '5.0',
         sampler: document.getElementById('nai-sampler')?.value || 'k_euler_ancestral',
@@ -478,7 +723,7 @@ export function applyCraftSettings(settings = {}) {
 
     const valueTargets = {
         'nai-negative': settings.negative,
-        'nai-model': settings.model,
+        'nai-model': settings.model === undefined ? undefined : normalizeNovelAiModelId(settings.model),
         'nai-steps': settings.steps,
         'nai-scale': settings.scale,
         'nai-sampler': settings.sampler,
@@ -699,7 +944,7 @@ function escapeCraftAttr(value) {
 
 function renderCraftV4PromptRow(id, row = {}) {
     return `<div data-craft-v4-row="${id}" id="char-box-${id}" class="bg-white dark:bg-gray-800 p-2 rounded border border-gray-200 dark:border-gray-700 shadow-sm relative">
-        <div class="flex justify-between items-center mb-2"><span class="text-[10px] font-bold text-gray-700 dark:text-gray-300">V4 캐릭터</span><button type="button" onclick="window.removeExtraCharacter(${id})" class="text-[10px] text-red-500 hover:text-red-700"><i data-lucide="trash-2" class="w-3 h-3"></i></button></div>
+        <div class="flex justify-between items-center mb-2"><span class="text-[10px] font-bold text-gray-700 dark:text-gray-300">캐릭터 프롬프트</span><button type="button" onclick="window.removeExtraCharacter(${id})" class="text-[10px] text-red-500 hover:text-red-700"><i data-lucide="trash-2" class="w-3 h-3"></i></button></div>
         <div class="space-y-1.5">
             <textarea id="char-subject-${id}" rows="1" oninput="window.saveCraftSettings()" class="craft-v4-prompt-input auto-resize-textarea w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="캐릭터 (예: 1girl, blonde hair...)">${escapeCraftAttr(row.subject)}</textarea>
             <textarea id="char-clothing-${id}" rows="1" oninput="window.saveCraftSettings()" class="craft-v4-prompt-input auto-resize-textarea w-full p-1.5 text-[10px] border rounded bg-gray-50 dark:bg-gray-700 dark:text-white dark:border-gray-600" placeholder="의상 (예: school uniform...)">${escapeCraftAttr(row.clothing)}</textarea>
@@ -714,7 +959,7 @@ export function addCraftV4PromptRow(row = {}) {
     const container = document.getElementById('extra-chars-container');
     if (!container) return;
     const currentCount = container.querySelectorAll('[data-craft-v4-row]').length;
-    if (currentCount >= MAX_V4_PROMPT_CHARACTERS) return alert(`V4 캐릭터는 최대 ${MAX_V4_PROMPT_CHARACTERS}명까지만 추가할 수 있습니다.`);
+    if (currentCount >= MAX_V4_PROMPT_CHARACTERS) return alert(`캐릭터 프롬프트는 최대 ${MAX_V4_PROMPT_CHARACTERS}명까지만 추가할 수 있습니다.`);
     const id = Date.now() + Math.floor(Math.random() * 10000);
     container.insertAdjacentHTML('beforeend', renderCraftV4PromptRow(id, row));
     window.EXTRA_CHAR_COUNT = currentCount + 1;
@@ -779,10 +1024,13 @@ export async function generateNaiImage(options = {}) {
     const negativeText = combinePromptSegments(promptDefaults.defaultNegativePrompt, document.getElementById('nai-negative')?.value || '');
     const resRadio = document.querySelector('input[name="nai-res"]:checked');
     const [width, height] = resRadio ? resRadio.value.split('x').map(Number) : [832, 1216];
-    const model = document.getElementById('nai-model')?.value || 'nai-diffusion-4-5-full';
+    const model = normalizeNovelAiModelId(document.getElementById('nai-model')?.value);
+    const modelProfile = getNovelAiModelProfile(model);
     const steps = parseInt(document.getElementById('nai-steps')?.value) || 28;
     const scale = parseFloat(document.getElementById('nai-scale')?.value) || 5.0;
     const sampler = document.getElementById('nai-sampler')?.value || 'k_euler_ancestral';
+    const sm = modelProfile.supportsSmea && !!document.getElementById('nai-sm')?.checked;
+    const smDyn = modelProfile.supportsSmea && !!document.getElementById('nai-sm-dyn')?.checked;
 
     const vibeInfo = parseFloat(document.getElementById('vibe-info')?.value) || 1.0;
     const vibeStrength = parseFloat(document.getElementById('vibe-strength')?.value) || 0.6;
@@ -790,6 +1038,15 @@ export async function generateNaiImage(options = {}) {
     const pFidelityUI = parseFloat(document.getElementById('precise-fidelity')?.value) || 0.5;
     const pType = document.getElementById('precise-type')?.value || "character&style";
     const invertedFidelity = 1.0 - pFidelityUI; 
+
+    const costConfirmation = await confirmCurrentNovelAiCost({
+        requestCount: batchCount,
+        anlasConfirmed: options.anlasConfirmed === true
+    });
+    if (!costConfirmation.confirmed) return;
+    const approvedAnlasPerRequest = Math.ceil(
+        costConfirmation.disclosure.maximum / Math.max(batchCount, 1)
+    );
 
     window.updateQueueUI(true);
 
@@ -847,8 +1104,8 @@ export async function generateNaiImage(options = {}) {
         }
         : null;
     try {
-        if (model.includes('nai-diffusion-3') || model.includes('nai-diffusion-4')) { if (window.VIBE_IMAGE_FILE) preloadedVibeBase64 = await processVibeImage(window.VIBE_IMAGE_FILE); }
-        if (model.includes('nai-diffusion-4-5') && window.PRECISE_IMAGE_FILE) { preloadedDirectorBase64 = await processDirectorImage(window.PRECISE_IMAGE_FILE); }
+        if (modelProfile.supportsVibeTransfer && window.VIBE_IMAGE_FILE) preloadedVibeBase64 = await processVibeImage(window.VIBE_IMAGE_FILE);
+        if (modelProfile.supportsPreciseReference && window.PRECISE_IMAGE_FILE) preloadedDirectorBase64 = await processDirectorImage(window.PRECISE_IMAGE_FILE);
         if (window.INPAINT_IMAGE_SOURCE && window.prepareInpaintPayload) {
             inpaintPayload = await window.prepareInpaintPayload(width, height);
         }
@@ -877,7 +1134,7 @@ export async function generateNaiImage(options = {}) {
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < batchCount; i++) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
-        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, seed: loopSeed, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, outputFileName: options.outputFileName || '', planner: options.planner || null, estimatedDurationMs });
+        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, sm, smDyn, seed: loopSeed, approvedAnlasPerRequest, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, outputFileName: options.outputFileName || '', planner: options.planner || null, estimatedDurationMs });
     }
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }
@@ -930,16 +1187,60 @@ export async function processNextQueueItem() {
     const progressTimer = setInterval(() => { progress += increment; if (progress > 95) progress = 95; updateProgress('추론 진행 중...', progress); }, updateInterval);
 
     try {
-        const toInpaintModel = (model) => {
-            if (model.endsWith('-inpainting')) return model;
-            if (model === 'nai-diffusion-4-curated-preview') return 'nai-diffusion-4-curated-inpainting';
-            return `${model}-inpainting`;
-        };
+        await refreshNovelAiSubscription({ force: true });
+        const normalizedModel = normalizeNovelAiModelId(task.model);
+        const profile = getNovelAiModelProfile(normalizedModel);
+        const base = buildNovelAiBaseParameters({
+            model: normalizedModel,
+            width: task.width,
+            height: task.height,
+            steps: task.steps,
+            sampler: task.sampler,
+            scale: task.scale,
+            negativePrompt: task.negative || '',
+            seed: task.seed,
+            sm: task.sm,
+            smDyn: task.smDyn
+        });
+        const pricingParameters = { ...base.parameters };
+        if (task.inpaintPayload) {
+            pricingParameters.image = 'pricing-placeholder';
+            pricingParameters.mask = 'pricing-placeholder';
+            pricingParameters.inpaintImg2ImgStrength = task.inpaintPayload.strength;
+        }
+        const currentCost = calculateNovelAiRequestCost({
+            model: normalizedModel,
+            parameters: pricingParameters,
+            subscription: novelAiSubscriptionState,
+            preciseReferenceCount: profile.supportsPreciseReference && task.preloadedDirectorBase64 ? 1 : 0
+        });
+        const approvedCost = Math.max(0, Number(task.approvedAnlasPerRequest) || 0);
+        if (currentCost.total > approvedCost) {
+            const changedDisclosure = {
+                status: 'paid',
+                minimum: currentCost.total,
+                maximum: currentCost.total,
+                reasons: currentCost.reasons,
+                profile
+            };
+            if (!window.confirm(buildNovelAiCostConfirmation(changedDisclosure, `배치 ${currentIdx}/${totalCount} 비용 변경`))) {
+                clearInterval(progressTimer);
+                updateProgress('Anlas 비용 확인 취소', 0);
+                window.CANCEL_GENERATION = true;
+                window.processNextQueueItem();
+                return;
+            }
+            task.approvedAnlasPerRequest = currentCost.total;
+            window.saveQueueToStorage();
+        }
 
         const requestBody = {
-            input: task.prompt, model: task.inpaintPayload ? toInpaintModel(task.model) : task.model, action: task.inpaintPayload ? "infill" : "generate",
-            parameters: { params_version: 3, width: task.width, height: task.height, steps: task.steps, sampler: task.sampler, scale: task.scale, cfg_rescale: 0.0, negative_prompt: task.negative || "", seed: task.seed, noise_schedule: "native", legacy_v3_extend: false, skip_cfg_above_sigma: 58.0 }
+            input: task.prompt,
+            model: task.inpaintPayload ? getNovelAiInpaintModel(normalizedModel) : normalizedModel,
+            action: task.inpaintPayload ? "infill" : "generate",
+            parameters: base.parameters
         };
+        if (profile.family === 'v5') requestBody.use_new_shared_trial = true;
 
         if (task.inpaintPayload) {
             requestBody.parameters.image = task.inpaintPayload.image;
@@ -948,24 +1249,24 @@ export async function processNextQueueItem() {
             requestBody.parameters.extra_noise_seed = task.seed;
             requestBody.parameters.inpaintImg2ImgStrength = task.inpaintPayload.strength;
             if (task.inpaintPayload.strength < 1) requestBody.parameters.img2img = { strength: task.inpaintPayload.strength, color_correct: true };
-            if (!task.model.includes('nai-diffusion-4')) {
+            if (!profile.supportsStructuredPrompt) {
                 requestBody.parameters.strength = task.inpaintPayload.strength;
                 requestBody.parameters.noise = 0;
             }
         }
 
-        if (task.model.includes('nai-diffusion-4')) {
+        if (profile.supportsStructuredPrompt) {
             requestBody.parameters.v4_prompt = { caption: { base_caption: task.prompt, char_captions: task.charCaptionsArray || [] }, use_coords: ((task.charCaptionsArray || []).length > 0), use_order: true };
             requestBody.parameters.v4_negative_prompt = { caption: { base_caption: task.negative, char_captions: task.negCharCaptionsArray || [] } };
         }
 
-        if (task.preloadedVibeBase64) {
+        if (profile.supportsVibeTransfer && task.preloadedVibeBase64) {
             requestBody.parameters.reference_image_multiple = [task.preloadedVibeBase64];
             requestBody.parameters.reference_information_extracted_multiple = [task.vibeInfo];
             requestBody.parameters.reference_strength_multiple = [task.vibeStrength];
         }
 
-        if (task.preloadedDirectorBase64) {
+        if (profile.supportsPreciseReference && task.preloadedDirectorBase64) {
             requestBody.parameters.director_reference_images = [task.preloadedDirectorBase64];
             requestBody.parameters.director_reference_descriptions = [{ caption: { base_caption: task.pType, char_captions: [] } }];
             requestBody.parameters.director_reference_strength_values = [task.pStrength];
@@ -980,6 +1281,7 @@ export async function processNextQueueItem() {
             try { const errJson = JSON.parse(rawText); errStr = errJson.error || errJson.message || rawText; } catch(e) { errStr = rawText; }
             throw new Error(`[HTTP ${res.status}] ${errStr}`);
         }
+        void refreshNovelAiSubscription({ force: true });
 
         clearInterval(progressTimer); updateProgress('다운로드 완료! 파일 압축 해제 중...', 98);
 

@@ -470,9 +470,8 @@ export const DEFAULT_PLANNER_SETTINGS = {
 
 export const PLANNER_MODEL_OPTIONS = [
     ['nai-diffusion-4-5-full', 'NAI Diffusion Anime V4.5 (Full)'],
-    ['nai-diffusion-4-5-curated', 'NAI Diffusion Anime V4.5 (Curated)'],
+    ['nai-diffusion-5-full', 'NAI Diffusion Anime V5 (Full)'],
     ['nai-diffusion-4-full', 'NAI Diffusion Anime V4.0 (Full)'],
-    ['nai-diffusion-4-curated-preview', 'NAI Diffusion Anime V4.0 (Curated Preview)'],
     ['nai-diffusion-3', 'NAI Diffusion Anime V3'],
     ['nai-diffusion-furry-3', 'NAI Diffusion Furry V3']
 ];

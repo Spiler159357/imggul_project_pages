@@ -2637,6 +2637,46 @@ export async function onRequest(context) {
         }
     }
 
+    if (path === "/api/novelai/usage" && method === "GET") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        if (!env.NOVELAI_TOKEN) return jsonResponse({ available: false, error: 'NovelAI token is not configured' }, { status: 503 });
+        try {
+            const subscriptionRes = await fetch("https://image.novelai.net/user/subscription", {
+                headers: {
+                    "Authorization": `Bearer ${env.NOVELAI_TOKEN}`,
+                    "Accept": "application/json",
+                    "Origin": "https://novelai.net",
+                    "Referer": "https://novelai.net/"
+                }
+            });
+            if (!subscriptionRes.ok) {
+                return jsonResponse({ available: false }, { status: 502 });
+            }
+
+            const subscription = await subscriptionRes.json();
+            const fixed = Number(subscription?.trainingStepsLeft?.fixedTrainingStepsLeft);
+            const purchased = Number(subscription?.trainingStepsLeft?.purchasedTrainingSteps);
+            const hasAnlasBalance = Number.isFinite(fixed) && Number.isFinite(purchased);
+            return jsonResponse({
+                available: true,
+                active: subscription?.active === true,
+                tier: Number(subscription?.tier) || 0,
+                usage: subscription?.usage ? {
+                    percent: Number(subscription.usage.percent),
+                    isNegative: subscription.usage.isNegative === true,
+                    timeUntilNextPercent: Number(subscription.usage.timeUntilNextPercent)
+                } : null,
+                anlas: hasAnlasBalance ? {
+                    subscription: fixed,
+                    paid: purchased,
+                    total: fixed + purchased
+                } : null
+            });
+        } catch {
+            return jsonResponse({ available: false }, { status: 502 });
+        }
+    }
+
     if (path === "/api/generate" && method === "POST") {
         if (!isAdmin) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 403 });
         if (!env.NOVELAI_TOKEN) return new Response(JSON.stringify({ error: 'Novel AI API 토큰이 설정되지 않았습니다.' }), { status: 500 });

@@ -110,9 +110,8 @@
                     <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1.5 uppercase tracking-wide">Model</label>
                     <select id="nai-model" class="w-full p-2 text-sm border border-gray-300 dark:border-gray-600 rounded-lg focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 dark:text-white shadow-sm">
                         <option value="nai-diffusion-4-5-full" selected>NAI Diffusion Anime V4.5 (Full)</option>
-                        <option value="nai-diffusion-4-5-curated">NAI Diffusion Anime V4.5 (Curated)</option>
+                        <option value="nai-diffusion-5-full">NAI Diffusion Anime V5 (Full)</option>
                         <option value="nai-diffusion-4-full">NAI Diffusion Anime V4.0 (Full)</option>
-                        <option value="nai-diffusion-4-curated-preview">NAI Diffusion Anime V4.0 (Curated Preview)</option>
                         <option value="nai-diffusion-3">NAI Diffusion Anime V3</option>
                         <option value="nai-diffusion-furry-3">NAI Diffusion Furry V3</option>
                     </select>
@@ -216,10 +215,10 @@
                 
                 <div id="setting-v4" class="hidden flex-col gap-2 bg-indigo-50/50 dark:bg-indigo-900/10 p-3 rounded-lg border border-indigo-100 dark:border-indigo-800/50">
                     <div class="flex justify-between items-center">
-                        <label class="block text-[11px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wide">Director Tools (V4+)</label>
+                        <label class="block text-[11px] font-bold text-indigo-800 dark:text-indigo-300 uppercase tracking-wide">Character Prompts</label>
                         <button onclick="window.addExtraCharacter()" class="text-[10px] bg-indigo-600 text-white px-2 py-1 rounded hover:bg-indigo-700 flex items-center gap-1 transition"><i data-lucide="user-plus" class="w-3 h-3"></i> 캐릭터 추가</button>
                     </div>
-                    <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1 leading-tight">다중 캐릭터 구도를 위한 픽셀 공간(v4_prompt) 분할을 지원합니다.</p>
+                    <p class="text-[10px] text-gray-500 dark:text-gray-400 mb-1 leading-tight">캐릭터별 프롬프트를 구조화하여 NovelAI에 전달합니다.</p>
                     
                     <div id="extra-chars-container" class="flex flex-col gap-3 mt-1">
                     </div>
@@ -352,7 +351,7 @@
                         </select>
                     </div>
 
-                    <div class="flex gap-2 mb-3">
+                    <div id="nai-smea-controls" class="flex gap-2 mb-3">
                         <label class="cursor-pointer group select-none" title="V3 전용 옵션">
                             <input type="checkbox" id="nai-sm" class="peer hidden">
                             <div class="px-2.5 py-1 text-[10px] font-bold rounded border transition-all duration-200 ease-in-out bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-500 dark:text-gray-400 peer-checked:bg-indigo-600 peer-checked:border-indigo-600 peer-checked:text-white hover:shadow-sm">
@@ -374,9 +373,15 @@
                     <input type="number" id="nai-seed" placeholder="비워두면 랜덤 시드" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
                 </div>
 
-                <div class="bg-indigo-50 dark:bg-indigo-900/20 p-2.5 rounded border border-indigo-100 dark:border-indigo-800/50 flex items-center justify-between mb-4">
-                    <span class="text-xs font-bold text-indigo-700 dark:text-indigo-300 flex items-center"><i data-lucide="coins" class="w-4 h-4 mr-1.5"></i> 소모 예상</span>
-                    <div id="nai-anlas-cost" class="text-xs text-gray-600 dark:text-gray-400">계산 중...</div>
+                <div id="nai-cost-card" aria-live="polite" data-state="unknown" class="bg-indigo-50 dark:bg-indigo-900/20 p-3 rounded-lg border border-indigo-100 dark:border-indigo-800/50 mb-4">
+                    <div class="flex items-start gap-2">
+                        <i data-lucide="coins" class="w-4 h-4 mt-0.5 text-indigo-600 dark:text-indigo-300 flex-shrink-0"></i>
+                        <div class="min-w-0 flex-1">
+                            <div id="nai-anlas-cost" class="text-sm font-bold text-gray-700 dark:text-gray-200">계산 중...</div>
+                            <div id="nai-anlas-detail" class="mt-1 text-[10px] leading-relaxed text-gray-600 dark:text-gray-400">구독과 사용량을 확인하고 있습니다.</div>
+                            <div id="nai-anlas-balance" class="mt-1 text-[10px] text-gray-400 dark:text-gray-500"></div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
@@ -388,7 +393,7 @@
                         <span class="text-xs font-bold text-gray-500 dark:text-gray-400">회</span>
                     </div>
                     <button id="nai-generate-btn" onclick="window.generateNaiImage()" class="flex-1 bg-indigo-600 text-white py-3.5 rounded-xl shadow-md hover:bg-indigo-700 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
-                        <i data-lucide="sparkles" class="w-5 h-5"></i> 생성
+                        <i data-lucide="sparkles" class="w-5 h-5"></i> <span id="nai-generate-label">생성</span>
                     </button>
                     <button id="nai-cancel-btn" onclick="window.cancelNaiGeneration()" class="hidden flex-1 bg-red-500 text-white py-3.5 rounded-xl shadow-md hover:bg-red-600 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
                         <i data-lucide="stop-circle" class="w-5 h-5"></i> 중지 (<span id="nai-batch-status">0/0</span>)
@@ -1219,6 +1224,6 @@
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=situation-path-state-20260819a"></script>
+    <script type="module" src="/js/main.js?v=novelai-v5-20260823a"></script>
 </body>
 </html>

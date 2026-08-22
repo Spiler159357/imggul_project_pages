@@ -3,10 +3,10 @@ import './state.js?v=planner-demo-20260525a';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=planner-sync-preserve-20260608a';
 import * as Explorer from './explorer.js';
-import * as Craft from './craft.js?v=situation-path-state-20260819a';
-import * as TempGallery from './temp_gallery.js?v=situation-path-state-20260819a';
-import * as Modals from './modals.js?v=situation-path-state-20260819a';
-import * as Project from './project.js?v=situation-path-state-20260819a';
+import * as Craft from './craft.js?v=novelai-v5-20260823a';
+import * as TempGallery from './temp_gallery.js?v=novelai-v5-20260823a';
+import * as Modals from './modals.js?v=novelai-v5-20260823a';
+import * as Project from './project.js?v=novelai-v5-20260823a';
 import * as ImageEditor from './image_editor.js?v=image-editor-history-20260607a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=situation-v4-weight-20260810a';
 
@@ -18,6 +18,8 @@ window.initSidebarControls();
 lucide.createIcons();
 window.initDarkMode();
 window.loadCraftSettings();
+window.updateModelSpecificUI();
+void window.initNovelAiCostState();
 initNaiPromptWeightPreviews();
 window.initGenerationQueue();
 
@@ -132,10 +134,25 @@ document.getElementById('craft-situation-select')?.addEventListener('change', wi
  * 반환값: 명시 반환 없음.
  */
 ['nai-model', 'nai-steps', 'nai-scale', 'nai-sampler', 'nai-seed'].forEach(id => {
-    document.getElementById(id)?.addEventListener('input', window.saveCraftSettings);
+    document.getElementById(id)?.addEventListener('input', () => {
+        window.saveCraftSettings();
+        window.calculateAnlas();
+    });
 });
 
-document.getElementById('nai-model')?.addEventListener('change', window.updateModelSpecificUI);
+document.getElementById('nai-model')?.addEventListener('change', () => window.updateModelSpecificUI({ applyDefaults: true }));
+document.querySelectorAll('input[name="nai-res"]').forEach(input => {
+    input.addEventListener('change', () => {
+        window.saveCraftSettings();
+        window.calculateAnlas();
+    });
+});
+['nai-batch-count', 'nai-sm', 'nai-sm-dyn', 'inpaint-strength'].forEach(id => {
+    document.getElementById(id)?.addEventListener('input', () => {
+        window.saveCraftSettings();
+        window.calculateAnlas();
+    });
+});
 
 const vibeDropZone = document.getElementById('vibe-image-dropzone'); const vibeFileInput = document.getElementById('vibe-image-input');
 if (vibeDropZone && vibeFileInput) {

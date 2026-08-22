@@ -1,5 +1,6 @@
 import { makeR2ImageVisibilityMetadata } from './image-serving.js';
 import { isSafePathSegment } from './path-utils.js';
+import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../public/js/nai-models.js';
 
 const RECORD_TYPES = new Set(["settings", "run", "confirm", "rate"]);
 const ACTIVE_JOB_STATUSES = new Set(["queued", "running", "paused", "cancel_requested"]);
@@ -321,6 +322,8 @@ export async function deletePlannerCompactRecord(env, recordKey, revision) {
 
 function normalizeGeneration(generation = {}) {
     const source = generation && typeof generation === "object" ? generation : {};
+    const model = normalizeNovelAiModelId(asString(source.model, "nai-diffusion-4-5-full"));
+    const profile = getNovelAiModelProfile(model);
     const fields = source.fields && typeof source.fields === "object" ? cloneJson(source.fields) : {};
     const prompts = source.prompts && typeof source.prompts === "object"
         ? cloneJson(source.prompts)
@@ -345,11 +348,11 @@ function normalizeGeneration(generation = {}) {
         useQualityTags: source.useQualityTags,
         useDefaultNegativePrompt: source.useDefaultNegativePrompt,
         v4PromptCharacters: cloneJson(asArray(source.v4PromptCharacters || source.v4_rows)),
-        model: asString(source.model, "nai-diffusion-4-5-full"),
+        model,
         res: asString(source.res || source.resolution, "832x1216"),
-        steps: asString(source.steps, "28"),
-        scale: asString(source.scale, "5.0"),
-        sampler: asString(source.sampler, "k_euler_ancestral"),
+        steps: asString(source.steps, String(profile.defaultSteps)),
+        scale: asString(source.scale, String(profile.defaultScale)),
+        sampler: asString(source.sampler, profile.defaultSampler),
         seed: asString(source.seed),
         sm: Boolean(source.sm),
         sm_dyn: Boolean(source.sm_dyn),
@@ -608,6 +611,9 @@ export async function putPlannerCompactSettings(env, input = {}) {
     const normalizedDefaults = Object.fromEntries(allowedDefaults
         .filter(key => defaults[key] !== undefined)
         .map(key => [key, cloneJson(defaults[key])]));
+    if (normalizedDefaults.model !== undefined) {
+        normalizedDefaults.model = normalizeNovelAiModelId(normalizedDefaults.model);
+    }
     const payload = {
         version: 1,
         projectId,
