@@ -1,5 +1,5 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=novelai-v5-20260823a';
-import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=novelai-v5-20260823d';
+import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
 import { renderSectionHeader } from './manage.js?v=situation-path-state-20260819a';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=situation-path-state-20260819a';
 import { combinePromptParts, getSituationById } from './situation.js?v=situation-path-state-20260819a';
@@ -39,6 +39,7 @@ let plannerDraftDirty = false;
 let plannerVisibilityHandlerInstalled = false;
 let plannerPlanScopeProjectId = '';
 let plannerBatchPlanCreationRunning = false;
+let plannerCostEstimateOperationId = 0;
 
 function createPlannerTargetPickerState() {
     return {
@@ -2172,6 +2173,132 @@ function renderPlannerPlanCard({ image, item, title, fallbackText, clickAction, 
     `;
 }
 
+function getPlannerCostEntries(queueMetas = [], includeCompleted = false) {
+    return queueMetas.flatMap(entry => {
+        const meta = entry?.meta || {};
+        const items = Array.isArray(meta.items) ? meta.items : [];
+        return items
+            .filter(item => includeCompleted ? isPlannerRestartableItem(item) : isPlannerRunnableItem(item, meta))
+            .map(item => ({
+                generation: item.generation,
+                requestCount: includeCompleted
+                    ? getPlannerItemTargetCount(item, meta)
+                    : Math.max(1, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item))
+            }));
+    });
+}
+
+function getCurrentPlannerQueueMetasForCost() {
+    if (Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) && window.PROJECT_PLANNER_QUEUE_METAS.length) {
+        return window.PROJECT_PLANNER_QUEUE_METAS;
+    }
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META;
+    if (!project || !meta?.items?.length) return [];
+    const character = getCharacterById(project, meta.characterId)
+        || getCharacterById(project, meta.characterPrefix)
+        || getCharacterById(project, getSelectedPlannerCharacterId(project));
+    return [{ character, meta }];
+}
+
+function getPlannerRunCostEntries(queueMetas = []) {
+    const summary = getPlannerQueueSummary(queueMetas);
+    const startsFromBeginning = !summary.active && !summary.paused && !summary.cancelling;
+    return getPlannerCostEntries(queueMetas, startsFromBeginning);
+}
+
+function getPlannerCostKey(disclosure = {}) {
+    return `${disclosure.status || 'unknown'}:${Number(disclosure.minimum) || 0}:${Number(disclosure.maximum) || 0}:${Number(disclosure.requestCount) || 0}`;
+}
+
+function renderPlannerCostEstimateCard(queueMetas = []) {
+    const requestCount = getPlannerRunCostEntries(queueMetas).reduce((sum, entry) => sum + entry.requestCount, 0);
+    return `
+        <div id="planner-cost-estimate" data-cost-key="loading" class="mb-4 rounded-lg border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/70 dark:bg-indigo-950/30 p-3" aria-live="polite">
+            <div class="flex items-start gap-2.5">
+                <i data-lucide="coins" class="mt-0.5 h-4 w-4 flex-shrink-0 text-indigo-600 dark:text-indigo-300"></i>
+                <div class="min-w-0 flex-1">
+                    <div class="flex flex-wrap items-center justify-between gap-2">
+                        <p class="text-[11px] font-bold text-gray-700 dark:text-gray-200">전체 예상 Anlas 사용량</p>
+                        <p id="planner-cost-estimate-value" class="text-sm font-extrabold text-indigo-700 dark:text-indigo-300">계산 중...</p>
+                    </div>
+                    <p id="planner-cost-estimate-detail" class="mt-1 text-[10px] leading-relaxed text-gray-500 dark:text-gray-400">남은 단일 이미지 요청 ${requestCount.toLocaleString('ko-KR')}회를 기준으로 계산합니다.</p>
+                </div>
+            </div>
+        </div>
+    `;
+}
+
+function applyPlannerCostEstimate(disclosure = {}) {
+    const card = document.getElementById('planner-cost-estimate');
+    const value = document.getElementById('planner-cost-estimate-value');
+    const detail = document.getElementById('planner-cost-estimate-detail');
+    if (!card || !value || !detail) return false;
+
+    const minimum = Number(disclosure.minimum) || 0;
+    const maximum = Number(disclosure.maximum) || 0;
+    const requestCount = Number(disclosure.requestCount) || 0;
+    if (disclosure.status === 'free') {
+        value.textContent = '0 Anlas';
+        value.className = 'text-sm font-extrabold text-emerald-700 dark:text-emerald-300';
+    } else if (disclosure.status === 'paid') {
+        value.textContent = `${maximum.toLocaleString('ko-KR')} Anlas`;
+        value.className = 'text-sm font-extrabold text-orange-700 dark:text-orange-300';
+    } else {
+        value.textContent = `${minimum.toLocaleString('ko-KR')} ~ ${maximum.toLocaleString('ko-KR')} Anlas`;
+        value.className = disclosure.status === 'unknown'
+            ? 'text-sm font-extrabold text-red-700 dark:text-red-300'
+            : 'text-sm font-extrabold text-amber-700 dark:text-amber-300';
+    }
+    const reasonText = Array.isArray(disclosure.reasons) && disclosure.reasons.length
+        ? ` · ${disclosure.reasons.join(' · ')}`
+        : '';
+    detail.textContent = `남은 단일 이미지 요청 ${requestCount.toLocaleString('ko-KR')}회 기준${reasonText}`;
+    card.dataset.costKey = getPlannerCostKey(disclosure);
+    return true;
+}
+
+async function refreshPlannerCostEstimate(options = {}) {
+    const card = document.getElementById('planner-cost-estimate');
+    if (!card || !window.estimateNovelAiPlannerCost) return null;
+    const operationId = ++plannerCostEstimateOperationId;
+    const queueMetas = getCurrentPlannerQueueMetasForCost();
+    const entries = getPlannerRunCostEntries(queueMetas);
+    try {
+        const disclosure = await window.estimateNovelAiPlannerCost(entries, { force: options.force === true });
+        if (operationId !== plannerCostEstimateOperationId || !document.getElementById('planner-cost-estimate')) return disclosure;
+        applyPlannerCostEstimate(disclosure);
+        return disclosure;
+    } catch (error) {
+        if (operationId !== plannerCostEstimateOperationId) return null;
+        const value = document.getElementById('planner-cost-estimate-value');
+        const detail = document.getElementById('planner-cost-estimate-detail');
+        if (value) value.textContent = '계산 불가';
+        if (detail) detail.textContent = error?.message || '예상 Anlas 사용량을 계산하지 못했습니다.';
+        return null;
+    }
+}
+
+async function preparePlannerCostForExecution(entries = []) {
+    if (!window.estimateNovelAiPlannerCost) return { ready: true, consentGranted: false };
+    const card = document.getElementById('planner-cost-estimate');
+    const displayedCostKey = card?.dataset.costKey || '';
+    const disclosure = await window.estimateNovelAiPlannerCost(entries, { force: true });
+    applyPlannerCostEstimate(disclosure);
+    const currentCostKey = getPlannerCostKey(disclosure);
+    const changedAfterDisplay = disclosure.requiresConsent
+        && !!card
+        && (displayedCostKey === 'loading' || displayedCostKey !== currentCostKey);
+    if (changedAfterDisplay) {
+        setPlannerStatus('예상 Anlas 사용량이 갱신되었습니다. 변경된 금액을 확인한 뒤 실행 버튼을 다시 눌러 주세요.');
+    }
+    return {
+        ready: !changedAfterDisplay,
+        consentGranted: disclosure.requiresConsent,
+        disclosure
+    };
+}
+
 function renderPlannerPlanCardGrid(cards) {
     return `<div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">${cards.join('')}</div>`;
 }
@@ -2623,6 +2750,7 @@ export function renderPlannerPanel(project, situations) {
                 </div>
             </div>
         </div>
+        ${renderPlannerCostEstimateCard(queueMetas)}
         ${renderPlannerQueueProgressPanel(queueMetas)}
         ${renderPlannerCharacterQueue(queueMetas)}
     `;
@@ -2691,6 +2819,9 @@ export function renderPlannerSection(section, state = {}) {
         </div>
         ${renderProjectItemCreateModal()}
     `);
+    if (!state.loading && !state.error && (window.PROJECT_PLANNER_VIEW || 'plan') === 'run') {
+        requestAnimationFrame(() => refreshPlannerCostEstimate());
+    }
 }
 
 export function renderPlannerSectionByState(options = {}) {
@@ -4710,20 +4841,15 @@ async function runAllPlannerBackgroundGenerationStart(options = {}) {
         return;
     }
 
-    if (window.confirmNovelAiPlannerCost) {
-        const decision = await window.confirmNovelAiPlannerCost(runnableEntries.flatMap(entry =>
-            entry.targetItems.map(item => ({
-                generation: item.generation,
-                requestCount: options.clearExisting === true
-                    ? getPlannerItemTargetCount(item, entry.meta)
-                    : Math.max(1, getPlannerItemTargetCount(item, entry.meta) - getPlannerItemGeneratedCount(item))
-            }))
-        ), '전체 백그라운드 플래너 이미지 생성');
-        if (!decision.confirmed) {
-            setPlannerStatus('Anlas 비용 확인을 취소했습니다.');
-            return;
-        }
-    }
+    const costPreparation = await preparePlannerCostForExecution(runnableEntries.flatMap(entry =>
+        entry.targetItems.map(item => ({
+            generation: item.generation,
+            requestCount: options.clearExisting === true
+                ? getPlannerItemTargetCount(item, entry.meta)
+                : Math.max(1, getPlannerItemTargetCount(item, entry.meta) - getPlannerItemGeneratedCount(item))
+        }))
+    ));
+    if (!costPreparation.ready) return;
 
     window.PROJECT_PLANNER_VIEW = 'run';
     const startedJobIds = [];
@@ -4893,18 +5019,13 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
         return;
     }
 
-    if (window.confirmNovelAiPlannerCost) {
-        const decision = await window.confirmNovelAiPlannerCost(targetItems.map(item => ({
-            generation: item.generation,
-            requestCount: options.clearExisting === true
-                ? getPlannerItemTargetCount(item, meta)
-                : Math.max(1, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item))
-        })), '백그라운드 플래너 이미지 생성');
-        if (!decision.confirmed) {
-            setPlannerStatus('Anlas 비용 확인을 취소했습니다.');
-            return;
-        }
-    }
+    const costPreparation = await preparePlannerCostForExecution(targetItems.map(item => ({
+        generation: item.generation,
+        requestCount: options.clearExisting === true
+            ? getPlannerItemTargetCount(item, meta)
+            : Math.max(1, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item))
+    })));
+    if (!costPreparation.ready) return;
 
     const unsupportedReference = hasUnsupportedPlannerBackgroundReference(targetItems);
     if (unsupportedReference) {
@@ -5007,16 +5128,11 @@ export async function startPlannerResultGeneration(situationId = null) {
         return;
     }
     if (!confirm('이 플랜의 기존 후보 이미지를 삭제하고 다시 생성하시겠습니까?')) return;
-    if (window.confirmNovelAiPlannerCost) {
-        const decision = await window.confirmNovelAiPlannerCost(targetItems.map(item => ({
-            generation: item.generation,
-            requestCount: getPlannerItemTargetCount(item, meta)
-        })), '백그라운드 플래너 다시 생성');
-        if (!decision.confirmed) {
-            setPlannerStatus('Anlas 비용 확인을 취소했습니다.');
-            return;
-        }
-    }
+    const costPreparation = await preparePlannerCostForExecution(targetItems.map(item => ({
+        generation: item.generation,
+        requestCount: getPlannerItemTargetCount(item, meta)
+    })));
+    if (!costPreparation.ready) return;
     try {
         await clearPlannerItemsImages(project, targetItems, meta);
         const result = await startPlannerBackgroundRun(project, meta, targetItems, situationId, { clearExisting: true });
@@ -5189,19 +5305,14 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
         return;
     }
     let plannerCostConsentGranted = false;
-    if (window.confirmNovelAiPlannerCost) {
-        const decision = await window.confirmNovelAiPlannerCost(targetItems.map(item => ({
-            generation: item.generation,
-            requestCount: clearExisting
-                ? getPlannerItemTargetCount(item, meta)
-                : Math.max(1, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item))
-        })));
-        if (!decision.confirmed) {
-            setPlannerStatus('Anlas 비용 확인을 취소했습니다.');
-            return;
-        }
-        plannerCostConsentGranted = decision.consentGranted === true;
-    }
+    const costPreparation = await preparePlannerCostForExecution(targetItems.map(item => ({
+        generation: item.generation,
+        requestCount: clearExisting
+            ? getPlannerItemTargetCount(item, meta)
+            : Math.max(1, getPlannerItemTargetCount(item, meta) - getPlannerItemGeneratedCount(item))
+    })));
+    if (!costPreparation.ready) return;
+    plannerCostConsentGranted = costPreparation.consentGranted === true;
     window.PROJECT_PLANNER_PAUSE_REQUESTED = false;
     window.PROJECT_PLANNER_CANCEL_REQUESTED = false;
     window.PROJECT_PLANNER_VIEW = 'run';

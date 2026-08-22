@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
     buildNovelAiBaseParameters,
     getNovelAiModelProfile,
     normalizeNovelAiModelId
 } from '../public/js/nai-models.js';
 import {
-    calculateNovelAiBatchCost,
+    calculateNovelAiRepeatedRequestCost,
     calculateNovelAiRequestCost
 } from '../public/js/nai-pricing.js';
 
@@ -117,7 +118,7 @@ assert.equal(calculateNovelAiRequestCost({
     subscription: activeOpus
 }).total, 15);
 
-const unknownPaid = calculateNovelAiBatchCost({
+const unknownPaid = calculateNovelAiRepeatedRequestCost({
     model: 'nai-diffusion-5-full',
     parameters: v5At29Steps.parameters,
     subscription: { available: false },
@@ -127,15 +128,41 @@ assert.equal(unknownPaid.status, 'paid');
 assert.equal(unknownPaid.minimum, 32);
 assert.equal(unknownPaid.maximum, 32);
 
-const v5Batch = calculateNovelAiBatchCost({
+const v5Repeated = calculateNovelAiRepeatedRequestCost({
     model: 'nai-diffusion-5-full',
     parameters: v5.parameters,
     subscription: activeOpus,
     requestCount: 3
 });
-assert.equal(v5Batch.status, 'conditional');
-assert.equal(v5Batch.minimum, 0);
-assert.equal(v5Batch.maximum, 90);
-assert.equal(v5Batch.requiresConsent, true);
+assert.equal(v5Repeated.status, 'conditional');
+assert.equal(v5Repeated.minimum, 0);
+assert.equal(v5Repeated.maximum, 90);
+assert.equal(v5Repeated.requiresConsent, true);
+assert.equal(v5Repeated.requestCount, 3);
+assert.equal(v5Repeated.reasons.includes('V5 무료 사용량이 반복 생성 도중 소진될 수 있음'), true);
+
+// 반복 생성 횟수는 NovelAI 배치 크기가 아니다. 각 요청은 계속 n_samples=1이어야 한다.
+assert.equal(v5.parameters.n_samples, 1);
+const actualMultiSample = {
+    ...v5.parameters,
+    n_samples: 3
+};
+assert.equal(calculateNovelAiRequestCost({
+    model: 'nai-diffusion-5-full',
+    parameters: actualMultiSample,
+    subscription: activeOpus
+}).total, 90);
+
+const appHtml = readFileSync(new URL('../public/app.html', import.meta.url), 'utf8');
+const craftSource = readFileSync(new URL('../public/js/craft.js', import.meta.url), 'utf8');
+const plannerSource = readFileSync(new URL('../public/js/project/planner.js', import.meta.url), 'utf8');
+assert.equal(appHtml.includes('id="nai-cost-card"'), false);
+assert.ok(appHtml.indexOf('id="nai-header-usage"') < appHtml.indexOf('id="theme-toggle-btn"'));
+assert.ok(craftSource.includes('async function prepareCurrentNovelAiCost'));
+assert.ok(craftSource.includes('export async function estimateNovelAiPlannerCost'));
+assert.equal(craftSource.includes('confirmed: window.confirm(buildNovelAiCostConfirmation(disclosure))'), false);
+assert.ok(plannerSource.includes('id="planner-cost-estimate"'));
+assert.ok(plannerSource.includes('전체 예상 Anlas 사용량'));
+assert.equal(plannerSource.includes('window.confirmNovelAiPlannerCost'), false);
 
 console.log('NovelAI V5 model and pricing checks passed.');

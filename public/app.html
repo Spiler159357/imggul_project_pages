@@ -80,7 +80,11 @@
             </button>
         </div>
 
-        <div class="flex items-center space-x-2 sm:space-x-4 flex-shrink-0">
+        <div class="flex items-center gap-2 sm:gap-3 flex-shrink-0">
+             <div id="nai-header-usage" aria-live="polite" class="hidden lg:flex items-center gap-1.5 text-[10px] font-semibold whitespace-nowrap">
+                <span id="nai-v5-usage" class="rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-2 py-1 text-gray-500 dark:text-gray-300" title="NovelAI V5 무료 사용량">V5 --%</span>
+                <span id="nai-anlas-balance" class="rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-2 py-1 text-gray-500 dark:text-gray-300" title="NovelAI 잔여 Anlas">-- Anlas</span>
+             </div>
              <button id="theme-toggle-btn" onclick="window.toggleDarkMode()" class="p-1.5 rounded-full hover:bg-gray-100 dark:hover:bg-gray-700 transition">
                 <i data-lucide="sun" class="w-4 h-4 sm:w-5 sm:h-5 text-gray-600 dark:text-gray-400"></i>
              </button>
@@ -373,16 +377,6 @@
                     <input type="number" id="nai-seed" placeholder="비워두면 랜덤 시드" class="w-full p-1.5 text-sm border border-gray-300 dark:border-gray-600 rounded focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-700 dark:text-white shadow-sm">
                 </div>
 
-                <div id="nai-cost-card" aria-live="polite" data-state="unknown" class="bg-indigo-50 dark:bg-indigo-900/20 p-3 rounded-lg border border-indigo-100 dark:border-indigo-800/50 mb-4">
-                    <div class="flex items-start gap-2">
-                        <i data-lucide="coins" class="w-4 h-4 mt-0.5 text-indigo-600 dark:text-indigo-300 flex-shrink-0"></i>
-                        <div class="min-w-0 flex-1">
-                            <div id="nai-anlas-cost" class="text-sm font-bold text-gray-700 dark:text-gray-200">계산 중...</div>
-                            <div id="nai-anlas-detail" class="mt-1 text-[10px] leading-relaxed text-gray-600 dark:text-gray-400">구독과 사용량을 확인하고 있습니다.</div>
-                            <div id="nai-anlas-balance" class="mt-1 text-[10px] text-gray-400 dark:text-gray-500"></div>
-                        </div>
-                    </div>
-                </div>
             </div>
 
             <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 flex-shrink-0 z-10 shadow-[0_-10px_15px_-3px_rgba(0,0,0,0.05)]">
@@ -1224,6 +1218,6 @@
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=novelai-v5-20260823a"></script>
+    <script type="module" src="/js/main.js?v=novelai-v5-20260823d"></script>
 </body>
 </html>

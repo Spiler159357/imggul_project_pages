@@ -1,4 +1,4 @@
-import { getNovelAiModelProfile, normalizeNovelAiModelId } from './nai-models.js?v=novelai-v5-20260823a';
+import { getNovelAiModelProfile, normalizeNovelAiModelId } from './nai-models.js?v=novelai-v5-20260823d';
 
 export const NAI_PRICING_VERSION = 'novelai-web-2026-08-23';
 
@@ -20,7 +20,7 @@ export function isOpusZeroAnlasEligible(parameters = {}) {
     return pixels > 0
         && pixels <= NORMAL_PIXEL_LIMIT
         && steps <= FREE_STEP_LIMIT
-        && nSamples >= 1
+        && nSamples === 1
         && !hasBaseImage;
 }
 
@@ -104,7 +104,11 @@ export function calculateNovelAiRequestCost({
     };
 }
 
-export function calculateNovelAiBatchCost({
+/**
+ * 브라우저가 동일한 단일 이미지 요청을 순차적으로 반복할 때의 전체 비용 범위다.
+ * requestCount는 NovelAI의 n_samples가 아니며 parameters.n_samples는 요청마다 1이어야 한다.
+ */
+export function calculateNovelAiRepeatedRequestCost({
     model,
     parameters = {},
     subscription = null,
@@ -125,7 +129,7 @@ export function calculateNovelAiBatchCost({
         preciseReferenceCount,
         forcePaid: true
     });
-    const isV5Conditional = current.profile.opusUsageLimit
+    const mayExhaustV5Usage = current.profile.opusUsageLimit
         && current.canUseOpusFree
         && count > 1;
     const subscriptionUnknown = !subscription?.available;
@@ -133,7 +137,7 @@ export function calculateNovelAiBatchCost({
     const minimum = unknownButPotentiallyFree
         ? current.precisePrice * count
         : current.total * count;
-    const maximum = (isV5Conditional || subscriptionUnknown)
+    const maximum = (mayExhaustV5Usage || subscriptionUnknown)
         ? paid.total * count
         : current.total * count;
     const status = unknownButPotentiallyFree
@@ -144,8 +148,14 @@ export function calculateNovelAiBatchCost({
                 ? 'paid'
                 : 'free';
 
+    const reasons = [...current.reasons];
+    if (mayExhaustV5Usage) {
+        reasons.push('V5 무료 사용량이 반복 생성 도중 소진될 수 있음');
+    }
+
     return {
         ...current,
+        reasons,
         status,
         requestCount: count,
         perRequest: current.total,
@@ -155,3 +165,6 @@ export function calculateNovelAiBatchCost({
         requiresConsent: status === 'paid' || status === 'conditional' || status === 'unknown'
     };
 }
+
+// 외부에서 기존 이름을 가져다 쓰는 경우를 위한 호환 별칭이다. 신규 코드는 위 이름을 사용한다.
+export const calculateNovelAiBatchCost = calculateNovelAiRepeatedRequestCost;

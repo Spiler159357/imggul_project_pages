@@ -4,11 +4,11 @@ import {
     getNovelAiInpaintModel,
     getNovelAiModelProfile,
     normalizeNovelAiModelId
-} from './nai-models.js?v=novelai-v5-20260823a';
+} from './nai-models.js?v=novelai-v5-20260823d';
 import {
-    calculateNovelAiBatchCost,
+    calculateNovelAiRepeatedRequestCost,
     calculateNovelAiRequestCost
-} from './nai-pricing.js?v=novelai-v5-20260823a';
+} from './nai-pricing.js?v=novelai-v5-20260823d';
 
 const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
@@ -21,6 +21,7 @@ const NOVELAI_SUBSCRIPTION_CACHE_MS = 30_000;
 
 let novelAiSubscriptionState = { available: false, loading: false, fetchedAt: 0 };
 let novelAiSubscriptionRequest = null;
+let lastRenderedNovelAiCostKey = '';
 
 function formatDurationMs(ms) {
     const seconds = Math.max(0, Math.round(Number(ms || 0) / 1000));
@@ -297,6 +298,11 @@ function getNovelAiSubscriptionBalanceLabel(subscription = novelAiSubscriptionSt
     return `보유 ${total.toLocaleString('ko-KR')} Anlas · 구독 ${fixed.toLocaleString('ko-KR')} + 구매 ${paid.toLocaleString('ko-KR')}`;
 }
 
+function getNovelAiHeaderBalanceLabel(subscription = novelAiSubscriptionState) {
+    const total = Number(subscription?.anlas?.total);
+    return Number.isFinite(total) ? `${total.toLocaleString('ko-KR')} Anlas` : '-- Anlas';
+}
+
 function getNovelAiRechargeLabel(subscription = novelAiSubscriptionState) {
     const seconds = Number(subscription?.usage?.timeUntilNextPercent);
     const percent = Number(subscription?.usage?.percent);
@@ -348,49 +354,43 @@ function getCurrentNovelAiCostInput(overrides = {}) {
 }
 
 function renderNovelAiCost(disclosure) {
-    const card = document.getElementById('nai-cost-card');
-    const title = document.getElementById('nai-anlas-cost');
-    const detail = document.getElementById('nai-anlas-detail');
+    const usage = document.getElementById('nai-v5-usage');
     const balance = document.getElementById('nai-anlas-balance');
+    const generateButton = document.getElementById('nai-generate-btn');
     const buttonLabel = document.getElementById('nai-generate-label');
-    if (!title) return disclosure;
 
     const usagePercent = Number(novelAiSubscriptionState?.usage?.percent);
-    const usageLabel = Number.isFinite(usagePercent) ? `V5 무료 사용량 ${usagePercent}%` : '';
     const rechargeLabel = getNovelAiRechargeLabel();
-    let titleText = '0 Anlas';
-    let detailText = 'Opus 무료 조건';
-    let toneClass = 'text-emerald-600 dark:text-emerald-400';
     let buttonText = '생성';
 
     if (disclosure.status === 'paid') {
-        titleText = `${disclosure.maximum.toLocaleString('ko-KR')} Anlas 사용 예정`;
-        detailText = `${disclosure.reasons.join(' · ') || '유료 생성 조건'}${rechargeLabel ? ` · ${rechargeLabel}` : ''}`;
-        toneClass = 'text-orange-600 dark:text-orange-400';
-        buttonText = `${disclosure.maximum.toLocaleString('ko-KR')} Anlas 사용하고 생성`;
+        buttonText = `${disclosure.maximum.toLocaleString('ko-KR')} Anlas 사용 · 생성`;
     } else if (disclosure.status === 'conditional') {
-        titleText = `현재 0 · 배치 최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas`;
-        detailText = `${usageLabel || 'V5 무료 사용량'} · 배치 중 소진 시 과금${rechargeLabel ? ` · ${rechargeLabel}` : ''}`;
-        toneClass = 'text-amber-600 dark:text-amber-400';
-        buttonText = '비용 확인 후 생성';
+        buttonText = `최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas · 생성`;
     } else if (disclosure.status === 'unknown') {
-        titleText = `비용 확인 불가 · 최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas`;
-        detailText = '구독/사용량을 확인하지 못했습니다. 과금될 수 있습니다.';
-        toneClass = 'text-red-600 dark:text-red-400';
-        buttonText = '비용 확인 후 생성';
-    } else if (disclosure.profile.opusUsageLimit) {
-        detailText = `${usageLabel || 'V5 무료 사용량 확인됨'} · 이번 요청은 0 Anlas${rechargeLabel ? ` · ${rechargeLabel}` : ''}`;
-        toneClass = usagePercent <= 20
-            ? 'text-amber-600 dark:text-amber-400'
-            : 'text-emerald-600 dark:text-emerald-400';
+        buttonText = `최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas 가능 · 생성`;
     }
 
-    title.className = `text-sm font-bold ${toneClass}`;
-    title.textContent = titleText;
-    if (detail) detail.textContent = detailText;
-    if (balance) balance.textContent = getNovelAiSubscriptionBalanceLabel();
+    if (usage) {
+        usage.textContent = Number.isFinite(usagePercent) ? `V5 ${usagePercent}%` : 'V5 --%';
+        usage.className = `rounded-md border px-2 py-1 ${Number.isFinite(usagePercent) && usagePercent <= 20
+            ? 'border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+            : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 text-gray-500 dark:text-gray-300'}`;
+        usage.title = Number.isFinite(usagePercent)
+            ? `NovelAI V5 무료 사용량 ${usagePercent}%${rechargeLabel ? ` · ${rechargeLabel}` : ''}`
+            : 'NovelAI V5 무료 사용량을 확인할 수 없습니다.';
+    }
+    if (balance) {
+        balance.textContent = getNovelAiHeaderBalanceLabel();
+        balance.title = getNovelAiSubscriptionBalanceLabel() || 'NovelAI 잔여 Anlas를 확인할 수 없습니다.';
+    }
     if (buttonLabel) buttonLabel.textContent = buttonText;
-    if (card) card.dataset.state = disclosure.status;
+    if (generateButton) {
+        generateButton.title = disclosure.requiresConsent
+            ? `예상 Anlas 비용: ${disclosure.minimum.toLocaleString('ko-KR')} ~ ${disclosure.maximum.toLocaleString('ko-KR')}${disclosure.reasons.length ? ` · ${disclosure.reasons.join(' · ')}` : ''}`
+            : '';
+    }
+    lastRenderedNovelAiCostKey = `${disclosure.status}:${disclosure.minimum}:${disclosure.maximum}`;
     return disclosure;
 }
 
@@ -438,7 +438,7 @@ export function calculateAnlas(options = {}) {
         options.requestCount ?? document.getElementById('nai-batch-count')?.value,
         10
     ) || 1);
-    const disclosure = calculateNovelAiBatchCost({
+    const disclosure = calculateNovelAiRepeatedRequestCost({
         ...input,
         subscription: novelAiSubscriptionState,
         requestCount
@@ -451,21 +451,8 @@ export async function initNovelAiCostState() {
     await refreshNovelAiSubscription({ force: true });
 }
 
-function buildNovelAiCostConfirmation(disclosure, label = '이미지 생성') {
-    const lines = [label];
-    if (disclosure.status === 'paid') {
-        lines.push(`예상 비용: ${disclosure.maximum.toLocaleString('ko-KR')} Anlas`);
-    } else {
-        lines.push(`예상 범위: ${disclosure.minimum.toLocaleString('ko-KR')} ~ ${disclosure.maximum.toLocaleString('ko-KR')} Anlas`);
-    }
-    if (disclosure.reasons.length) lines.push(`과금 사유: ${disclosure.reasons.join(' · ')}`);
-    const balance = getNovelAiSubscriptionBalanceLabel();
-    if (balance) lines.push(balance);
-    lines.push('', '위 비용 가능성을 확인했으며 생성을 계속하시겠습니까?');
-    return lines.join('\n');
-}
-
-async function confirmCurrentNovelAiCost(options = {}) {
+async function prepareCurrentNovelAiCost(options = {}) {
+    const previouslyRenderedCostKey = lastRenderedNovelAiCostKey;
     await refreshNovelAiSubscription({ force: true });
     let disclosure = calculateAnlas({ requestCount: options.requestCount });
     if (options.anlasConfirmed === true) {
@@ -474,21 +461,24 @@ async function confirmCurrentNovelAiCost(options = {}) {
             maximum: Math.max(disclosure.maximum, disclosure.paidPerRequest || 0)
         };
     }
-    if (!disclosure.requiresConsent || options.anlasConfirmed === true) {
-        return { confirmed: true, disclosure };
-    }
+    const currentCostKey = `${disclosure.status}:${disclosure.minimum}:${disclosure.maximum}`;
+    const costIncreasedAfterClick = options.anlasConfirmed !== true
+        && disclosure.requiresConsent
+        && !!previouslyRenderedCostKey
+        && currentCostKey !== previouslyRenderedCostKey;
     return {
-        confirmed: window.confirm(buildNovelAiCostConfirmation(disclosure)),
+        ready: !costIncreasedAfterClick,
         disclosure
     };
 }
 
-export async function confirmNovelAiPlannerCost(entries = [], label = '플래너 이미지 생성') {
-    await refreshNovelAiSubscription({ force: true });
+export async function estimateNovelAiPlannerCost(entries = [], options = {}) {
+    await refreshNovelAiSubscription({ force: options.force === true });
     let minimum = 0;
     let maximum = 0;
     let requiresConsent = false;
     let hasUnknown = false;
+    let requestCount = 0;
     const reasons = new Set();
     let profile = getNovelAiModelProfile('nai-diffusion-4-5-full');
 
@@ -506,12 +496,17 @@ export async function confirmNovelAiPlannerCost(entries = [], label = '플래너
             hasBaseImage: false,
             preciseReferenceCount: generation.preciseImageKey ? 1 : 0
         });
-        const disclosure = calculateNovelAiBatchCost({
+        const entryRequestCount = Math.max(1, Number.parseInt(
+            entry?.requestCount || generation.batchCount || 1,
+            10
+        ) || 1);
+        const disclosure = calculateNovelAiRepeatedRequestCost({
             ...input,
             subscription: novelAiSubscriptionState,
-            requestCount: entry?.requestCount || generation.batchCount || 1
+            requestCount: entryRequestCount
         });
         profile = disclosure.profile;
+        requestCount += entryRequestCount;
         minimum += disclosure.minimum;
         maximum += disclosure.maximum;
         requiresConsent ||= disclosure.requiresConsent;
@@ -523,13 +518,22 @@ export async function confirmNovelAiPlannerCost(entries = [], label = '플래너
         status: hasUnknown ? 'unknown' : (maximum > minimum ? 'conditional' : (maximum > 0 ? 'paid' : 'free')),
         minimum,
         maximum,
+        requestCount,
         requiresConsent,
         reasons: [...reasons],
         profile
     };
-    if (!requiresConsent) return { confirmed: true, consentGranted: false };
-    const confirmed = window.confirm(buildNovelAiCostConfirmation(disclosure, label));
-    return { confirmed, consentGranted: confirmed };
+    return disclosure;
+}
+
+// 기존 외부 호출 호환용이다. 비용 확인 팝업은 띄우지 않고 계산 결과만 반환한다.
+export async function confirmNovelAiPlannerCost(entries = []) {
+    const disclosure = await estimateNovelAiPlannerCost(entries, { force: true });
+    return {
+        confirmed: true,
+        consentGranted: disclosure.requiresConsent,
+        disclosure
+    };
 }
 
 /**
@@ -995,14 +999,15 @@ export function setCraftV4PromptRows(rows = []) {
 /**
  * 역할: UI 입력값을 NovelAI 생성 작업 배열로 변환해 큐에 적재하고 처리를 시작한다.
  * 매개변수: 없음.
- * 주요 변수: batchCount, splitPrompts, combinedPrompt, negativeText, width, height, model, charCaptionsArray - 생성 요청 구성값.
+ * 주요 변수: repeatCount, splitPrompts, combinedPrompt, negativeText, width, height, model, charCaptionsArray - 생성 요청 구성값.
  * 반환값: 명시 반환 없음. 이미 생성 중이면 바로 종료한다.
  */
 export async function generateNaiImage(options = {}) {
     if (window.IS_GENERATING) return;
     window.saveCraftSettings();
 
-    const batchCount = parseInt(document.getElementById('nai-batch-count')?.value) || 1;
+    // DOM/저장 키의 batch 명칭은 기존 설정 호환을 위해 유지하지만 실제 동작은 n_samples=1 요청의 순차 반복이다.
+    const repeatCount = parseInt(document.getElementById('nai-batch-count')?.value) || 1;
     let baseSeedInput = document.getElementById('nai-seed')?.value;
     const isRandomSeed = !baseSeedInput || isNaN(parseInt(baseSeedInput));
 
@@ -1039,13 +1044,13 @@ export async function generateNaiImage(options = {}) {
     const pType = document.getElementById('precise-type')?.value || "character&style";
     const invertedFidelity = 1.0 - pFidelityUI; 
 
-    const costConfirmation = await confirmCurrentNovelAiCost({
-        requestCount: batchCount,
+    const costPreparation = await prepareCurrentNovelAiCost({
+        requestCount: repeatCount,
         anlasConfirmed: options.anlasConfirmed === true
     });
-    if (!costConfirmation.confirmed) return;
+    if (!costPreparation.ready) return;
     const approvedAnlasPerRequest = Math.ceil(
-        costConfirmation.disclosure.maximum / Math.max(batchCount, 1)
+        costPreparation.disclosure.maximum / Math.max(repeatCount, 1)
     );
 
     window.updateQueueUI(true);
@@ -1132,9 +1137,9 @@ export async function generateNaiImage(options = {}) {
     const estimatedDurationMs = CRAFT_FIXED_GENERATION_ESTIMATE_MS;
 
     window.GENERATION_QUEUE = [];
-    for (let i = 0; i < batchCount; i++) {
+    for (let i = 0; i < repeatCount; i++) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
-        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: batchCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, sm, smDyn, seed: loopSeed, approvedAnlasPerRequest, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, outputFileName: options.outputFileName || '', planner: options.planner || null, estimatedDurationMs });
+        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: repeatCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, sm, smDyn, seed: loopSeed, approvedAnlasPerRequest, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, outputFileName: options.outputFileName || '', planner: options.planner || null, estimatedDurationMs });
     }
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }
@@ -1155,7 +1160,7 @@ export async function processNextQueueItem() {
     }
 
     const task = window.GENERATION_QUEUE[0]; const totalCount = task.total; const currentIdx = task.index;
-    const batchStatus = document.getElementById('nai-batch-status'); if (batchStatus) batchStatus.innerText = `${currentIdx}/${totalCount}`;
+    const repeatStatus = document.getElementById('nai-batch-status'); if (repeatStatus) repeatStatus.innerText = `${currentIdx}/${totalCount}`;
 
     const sideBar = document.getElementById('craft-progress-bar'); const sideText = document.getElementById('craft-progress-text'); const sidePercent = document.getElementById('craft-progress-percent');
     const floatBar = document.getElementById('craft-floating-bar'); const floatText = document.getElementById('craft-floating-text'); const floatPercent = document.getElementById('craft-floating-percent');
@@ -1165,7 +1170,7 @@ export async function processNextQueueItem() {
     const updateInterval = 100; const increment = 100 / (expectedMs / updateInterval);
     
     /**
-     * 역할: 현재 배치 인덱스를 포함한 진행 메시지와 퍼센트를 사이드/플로팅 UI에 반영한다.
+     * 역할: 현재 반복 인덱스를 포함한 진행 메시지와 퍼센트를 사이드/플로팅 UI에 반영한다.
      * 매개변수: txt - 표시할 상태 문구, prog - 진행률 숫자 또는 null.
      * 주요 변수: fullMsg, pct, sideBar, floatBar - 렌더링할 메시지와 진행 바.
      * 반환값: 명시 반환 없음.
@@ -1216,22 +1221,21 @@ export async function processNextQueueItem() {
         });
         const approvedCost = Math.max(0, Number(task.approvedAnlasPerRequest) || 0);
         if (currentCost.total > approvedCost) {
-            const changedDisclosure = {
+            renderNovelAiCost({
                 status: 'paid',
                 minimum: currentCost.total,
                 maximum: currentCost.total,
+                requiresConsent: true,
                 reasons: currentCost.reasons,
                 profile
-            };
-            if (!window.confirm(buildNovelAiCostConfirmation(changedDisclosure, `배치 ${currentIdx}/${totalCount} 비용 변경`))) {
-                clearInterval(progressTimer);
-                updateProgress('Anlas 비용 확인 취소', 0);
-                window.CANCEL_GENERATION = true;
-                window.processNextQueueItem();
-                return;
-            }
-            task.approvedAnlasPerRequest = currentCost.total;
-            window.saveQueueToStorage();
+            });
+            clearInterval(progressTimer);
+            updateProgress('예상 비용이 변경되어 생성을 중지했습니다.', 0);
+            const generateButton = document.getElementById('nai-generate-btn');
+            if (generateButton) generateButton.title = '갱신된 Anlas 비용을 확인한 뒤 다시 눌러 주세요.';
+            window.CANCEL_GENERATION = true;
+            window.processNextQueueItem();
+            return;
         }
 
         const requestBody = {
@@ -1368,7 +1372,7 @@ export async function processNextQueueItem() {
         window.processNextQueueItem(); 
 
     } catch (e) {
-        clearInterval(progressTimer); console.error('배치 생성 중 에러:', e);
+        clearInterval(progressTimer); console.error('반복 생성 중 에러:', e);
         updateProgress(`생성 실패: ${e.message}`, 0);
         if (window.logErrorToStorage) window.logErrorToStorage('이미지 생성 큐 처리 중 에러', e);
         window.dispatchEvent(new CustomEvent('imggul:generation-task-failed', { detail: { task, error: e.message } }));
