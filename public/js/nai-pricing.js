@@ -1,6 +1,6 @@
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from './nai-models.js?v=novelai-v5-20260823d';
 
-export const NAI_PRICING_VERSION = 'novelai-web-2026-08-23';
+export const NAI_PRICING_VERSION = 'novelai-web-2026-08-24';
 
 const PRICE_A = 2.951823174884865e-6;
 const PRICE_B = 5.753298233447344e-7;
@@ -12,16 +12,21 @@ function asPositiveNumber(value, fallback) {
     return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-export function isOpusZeroAnlasEligible(parameters = {}) {
+export function isOpusZeroAnlasEligible(parameters = {}, model) {
+    const profile = getNovelAiModelProfile(model);
     const pixels = asPositiveNumber(parameters.width, 0) * asPositiveNumber(parameters.height, 0);
     const steps = asPositiveNumber(parameters.steps, 0);
     const nSamples = Math.max(1, Math.floor(asPositiveNumber(parameters.n_samples, 1)));
-    const hasBaseImage = !!parameters.image || !!parameters.mask;
+    const isInpaint = !!parameters.mask;
+    const isImageToImage = !!parameters.image && !isInpaint;
+    // V4.5 이하의 인페인트는 Opus 무료 생성 조건을 그대로 적용한다.
+    // 일반 img2img와 V5 인페인트만 베이스 이미지 사용으로 무료 대상에서 제외한다.
+    const hasPaidBaseImage = isImageToImage || (isInpaint && profile.family === 'v5');
     return pixels > 0
         && pixels <= NORMAL_PIXEL_LIMIT
         && steps <= FREE_STEP_LIMIT
         && nSamples === 1
-        && !hasBaseImage;
+        && !hasPaidBaseImage;
 }
 
 export function calculateNovelAiPaidUnit(parameters = {}, model) {
@@ -66,7 +71,7 @@ export function calculateNovelAiRequestCost({
     const normalizedModel = normalizeNovelAiModelId(model);
     const profile = getNovelAiModelProfile(normalizedModel);
     const nSamples = Math.max(1, Math.floor(asPositiveNumber(parameters.n_samples, 1)));
-    const eligible = isOpusZeroAnlasEligible(parameters);
+    const eligible = isOpusZeroAnlasEligible(parameters, normalizedModel);
     const usageUnavailable = profile.opusUsageLimit
         && (subscription?.usage?.isNegative ?? true);
     const canUseOpusFree = !forcePaid
@@ -82,7 +87,8 @@ export function calculateNovelAiRequestCost({
 
     const reasons = [];
     if (precisePrice > 0) reasons.push(`Precise Reference ${precisePrice} Anlas`);
-    if (parameters.image || parameters.mask) reasons.push('베이스 이미지 사용');
+    if (parameters.mask && profile.family === 'v5') reasons.push('V5 인페인트');
+    else if (parameters.image && !parameters.mask) reasons.push('Image2Image 사용');
     if (Number(parameters.width) * Number(parameters.height) > NORMAL_PIXEL_LIMIT) reasons.push('Normal 해상도 초과');
     if (Number(parameters.steps) > FREE_STEP_LIMIT) reasons.push('28 steps 초과');
     if (nSamples > 1) reasons.push('다중 샘플');

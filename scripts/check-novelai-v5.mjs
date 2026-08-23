@@ -117,6 +117,71 @@ assert.equal(calculateNovelAiRequestCost({
     parameters: v5Inpaint,
     subscription: activeOpus
 }).total, 15);
+assert.ok(calculateNovelAiRequestCost({
+    model: 'nai-diffusion-5-full',
+    parameters: v5Inpaint,
+    subscription: activeOpus
+}).reasons.includes('V5 인페인트'));
+
+const v45Inpaint = {
+    ...v45.parameters,
+    image: 'placeholder',
+    mask: 'placeholder',
+    inpaintImg2ImgStrength: 0.5
+};
+const v45InpaintCost = calculateNovelAiRequestCost({
+    model: 'nai-diffusion-4-5-full',
+    parameters: v45Inpaint,
+    subscription: activeOpus
+});
+assert.equal(v45InpaintCost.total, 0);
+assert.equal(v45InpaintCost.eligible, true);
+assert.deepEqual(v45InpaintCost.reasons, []);
+assert.equal(calculateNovelAiRepeatedRequestCost({
+    model: 'nai-diffusion-4-5-full',
+    parameters: v45Inpaint,
+    subscription: activeOpus,
+    requestCount: 5
+}).maximum, 0);
+
+assert.equal(calculateNovelAiRequestCost({
+    model: 'nai-diffusion-4-5-full',
+    parameters: v45Inpaint,
+    subscription: activeOpus,
+    preciseReferenceCount: 1
+}).total, 5);
+
+for (const legacyInpaintModel of ['nai-diffusion-4-full', 'nai-diffusion-3', 'nai-diffusion-furry-3']) {
+    assert.equal(calculateNovelAiRequestCost({
+        model: legacyInpaintModel,
+        parameters: v45Inpaint,
+        subscription: activeOpus
+    }).total, 0);
+}
+
+const v45ImageToImageCost = calculateNovelAiRequestCost({
+    model: 'nai-diffusion-4-5-full',
+    parameters: {
+        ...v45.parameters,
+        image: 'placeholder',
+        strength: 0.5
+    },
+    subscription: activeOpus
+});
+assert.ok(v45ImageToImageCost.total > 0);
+assert.equal(v45ImageToImageCost.eligible, false);
+assert.ok(v45ImageToImageCost.reasons.includes('Image2Image 사용'));
+
+const v45PaidInpaintCost = calculateNovelAiRequestCost({
+    model: 'nai-diffusion-4-5-full',
+    parameters: {
+        ...v45Inpaint,
+        steps: 29
+    },
+    subscription: activeOpus
+});
+assert.ok(v45PaidInpaintCost.total > 0);
+assert.ok(v45PaidInpaintCost.reasons.includes('28 steps 초과'));
 
 const unknownPaid = calculateNovelAiRepeatedRequestCost({
     model: 'nai-diffusion-5-full',

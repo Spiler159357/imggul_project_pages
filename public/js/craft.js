@@ -8,7 +8,7 @@ import {
 import {
     calculateNovelAiRepeatedRequestCost,
     calculateNovelAiRequestCost
-} from './nai-pricing.js?v=novelai-v5-20260823d';
+} from './nai-pricing.js?v=novelai-v5-20260823e';
 
 const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
