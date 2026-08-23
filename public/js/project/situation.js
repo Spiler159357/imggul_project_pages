@@ -1,6 +1,6 @@
-import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, invalidateProjectSituationLoads, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectSituations, setProjectRoute } from './shared.js?v=situation-path-state-20260819a';
-import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=situation-path-state-20260819a';
-import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=situation-path-state-20260819a';
+import { DEFAULT_PLANNER_RESOLUTION, MAX_V4_PROMPT_CHARACTERS, PLANNER_RESOLUTION_OPTIONS, changeSituationStoragePath, clearFolderDataCacheTree, createPromptVariantId, escapeHtml, escapeJsString, getActiveProject, getActiveSituationPromptVariant, getAssetUrl, getFileNameFromKey, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, invalidateProjectSituationLoads, isInvalidProjectFolderName, loadCharacterFiles, loadProjectCharacters, loadProjectSituations, loadProjects, normalizePlannerV4PromptRows, normalizeProjectFolderName, normalizeSituationPrompt, normalizeSituationPromptVariants, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderEmptyState, renderProjectShell, saveProjectSituations, setProjectRoute } from './shared.js?v=style-prompt-display-20260823a';
+import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=style-prompt-display-20260823a';
+import { findSituationImage, openProjectItemCreateModal, renderCharacterStatusBadge, renderProjectItemCreateModal } from './character.js?v=style-prompt-display-20260823a';
 
 export function getSituationPromptIndicator(situation) {
     const prompt = getSituationPrompt(situation);
@@ -137,8 +137,18 @@ export function renderSituationCharacterProgress(project, situation, state = {})
                 <div class="h-full bg-indigo-600 dark:bg-indigo-500 rounded-full transition-all" style="width: ${percent}%"></div>
             </div>
             <div class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-2">
-                ${rows.map(row => `
-                    <div class="bg-gray-50 dark:bg-gray-900/40 border border-gray-100 dark:border-gray-700 rounded-lg p-2.5 flex items-center gap-3 min-w-0">
+                ${rows.map(row => {
+                    const clickAction = row.image
+                        ? `window.openModal('${escapeJsString(row.image.key)}', '${escapeJsString(row.imageUrl)}', true, false, ${row.image.isPublic ? 'true' : 'false'})`
+                        : '';
+                    const interactionAttributes = clickAction
+                        ? `role="button" tabindex="0" onclick="${clickAction}" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); ${clickAction}; }"`
+                        : '';
+                    const interactionClasses = clickAction
+                        ? 'cursor-pointer hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 dark:focus:ring-offset-gray-800 transition'
+                        : '';
+                    return `
+                    <div ${interactionAttributes} class="bg-gray-50 dark:bg-gray-900/40 border border-gray-100 dark:border-gray-700 rounded-lg p-2.5 flex items-center gap-3 min-w-0 ${interactionClasses}">
                         <div class="w-12 h-12 flex-shrink-0 rounded-md overflow-hidden bg-gray-100 dark:bg-gray-900/60 flex items-center justify-center">
                             ${row.image ? `
                                 <img src="${escapeHtml(row.imageUrl)}" alt="${escapeHtml(row.character.name)}" class="w-full h-full object-cover" loading="lazy">
@@ -154,7 +164,8 @@ export function renderSituationCharacterProgress(project, situation, state = {})
                             <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500 truncate">${row.image ? escapeHtml(getFileNameFromKey(row.image.key)) : `${escapeHtml(getSituationImageNumber(project, situation))}.webp 미생성`}</p>
                         </div>
                     </div>
-                `).join('')}
+                `;
+                }).join('')}
             </div>
         </div>
     `;

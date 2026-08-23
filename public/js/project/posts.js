@@ -7,7 +7,7 @@ import {
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js?v=situation-path-state-20260819a';
+} from './shared.js?v=style-prompt-display-20260823a';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;

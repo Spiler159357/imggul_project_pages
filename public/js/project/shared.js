@@ -78,6 +78,7 @@ export const PROJECT_PROMPT_FIELDS = [
 
 export const CHARACTER_IMAGE_EXTENSIONS = new Set(['webp', 'png', 'jpg', 'jpeg']);
 export const MAX_V4_PROMPT_CHARACTERS = 6;
+let projectStylePromptHydrationId = 0;
 
 export function getProjectRoot() {
     return document.getElementById('main-project-content');
@@ -1586,14 +1587,25 @@ export async function hydrateProjectStylePromptInput() {
     const input = document.getElementById('project-style-prompt-input');
     const status = document.getElementById('project-style-prompt-status');
     if (!project || !input) return;
+    const hydrationId = ++projectStylePromptHydrationId;
+    const projectPrefix = project.prefix;
 
     if (status) status.textContent = '그림체 프롬프트를 불러오는 중입니다.';
 
     try {
-        input.value = await loadProjectStylePrompt(project);
-        if (status) status.textContent = input.value ? 'style_prompt.md를 불러왔습니다.' : '';
+        const value = await loadProjectStylePrompt(project);
+        if (hydrationId !== projectStylePromptHydrationId || getActiveProject()?.prefix !== projectPrefix) return;
+
+        const currentInput = document.getElementById('project-style-prompt-input');
+        const currentStatus = document.getElementById('project-style-prompt-status');
+        if (!currentInput) return;
+
+        currentInput.value = value;
+        if (currentStatus) currentStatus.textContent = value ? 'style_prompt.md를 불러왔습니다.' : '';
     } catch (err) {
-        if (status) status.textContent = err.message || '그림체 프롬프트를 불러오지 못했습니다.';
+        if (hydrationId !== projectStylePromptHydrationId || getActiveProject()?.prefix !== projectPrefix) return;
+        const currentStatus = document.getElementById('project-style-prompt-status');
+        if (currentStatus) currentStatus.textContent = err.message || '그림체 프롬프트를 불러오지 못했습니다.';
     }
 }
 
