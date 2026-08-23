@@ -314,6 +314,30 @@ function getNovelAiRechargeLabel(subscription = novelAiSubscriptionState) {
     return `다음 1% 충전까지 약 ${hours}시간${rest ? ` ${rest}분` : ''}`;
 }
 
+/** 현재 NovelAI 구독 상태를 화면에 존재하는 모든 사용량 배지에 동기화한다. */
+export function syncNovelAiUsageDisplays() {
+    const usagePercent = Number(novelAiSubscriptionState?.usage?.percent);
+    const rechargeLabel = getNovelAiRechargeLabel();
+    const usageClassName = `flex-shrink-0 whitespace-nowrap rounded-md border px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold ${Number.isFinite(usagePercent) && usagePercent <= 20
+        ? 'border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+        : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 text-gray-500 dark:text-gray-300'}`;
+    const balanceClassName = 'flex-shrink-0 whitespace-nowrap rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-gray-500 dark:text-gray-300';
+
+    document.querySelectorAll('[data-nai-v5-usage]').forEach(usage => {
+        usage.textContent = Number.isFinite(usagePercent) ? `V5 ${usagePercent}%` : 'V5 --%';
+        usage.className = usageClassName;
+        usage.title = Number.isFinite(usagePercent)
+            ? `NovelAI V5 무료 사용량 ${usagePercent}%${rechargeLabel ? ` · ${rechargeLabel}` : ''}`
+            : 'NovelAI V5 무료 사용량을 확인할 수 없습니다.';
+    });
+
+    document.querySelectorAll('[data-nai-anlas-balance]').forEach(balance => {
+        balance.textContent = getNovelAiHeaderBalanceLabel();
+        balance.className = balanceClassName;
+        balance.title = getNovelAiSubscriptionBalanceLabel() || 'NovelAI 잔여 Anlas를 확인할 수 없습니다.';
+    });
+}
+
 function getCurrentNovelAiCostInput(overrides = {}) {
     const resRadio = document.querySelector('input[name="nai-res"]:checked');
     const [width, height] = String(overrides.res || resRadio?.value || '832x1216').split('x').map(Number);
@@ -354,13 +378,9 @@ function getCurrentNovelAiCostInput(overrides = {}) {
 }
 
 function renderNovelAiCost(disclosure) {
-    const usage = document.getElementById('nai-v5-usage');
-    const balance = document.getElementById('nai-anlas-balance');
     const generateButton = document.getElementById('nai-generate-btn');
     const buttonLabel = document.getElementById('nai-generate-label');
 
-    const usagePercent = Number(novelAiSubscriptionState?.usage?.percent);
-    const rechargeLabel = getNovelAiRechargeLabel();
     let buttonText = '생성';
 
     if (disclosure.status === 'paid') {
@@ -371,19 +391,7 @@ function renderNovelAiCost(disclosure) {
         buttonText = `최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas 가능 · 생성`;
     }
 
-    if (usage) {
-        usage.textContent = Number.isFinite(usagePercent) ? `V5 ${usagePercent}%` : 'V5 --%';
-        usage.className = `rounded-md border px-2 py-1 ${Number.isFinite(usagePercent) && usagePercent <= 20
-            ? 'border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
-            : 'border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 text-gray-500 dark:text-gray-300'}`;
-        usage.title = Number.isFinite(usagePercent)
-            ? `NovelAI V5 무료 사용량 ${usagePercent}%${rechargeLabel ? ` · ${rechargeLabel}` : ''}`
-            : 'NovelAI V5 무료 사용량을 확인할 수 없습니다.';
-    }
-    if (balance) {
-        balance.textContent = getNovelAiHeaderBalanceLabel();
-        balance.title = getNovelAiSubscriptionBalanceLabel() || 'NovelAI 잔여 Anlas를 확인할 수 없습니다.';
-    }
+    syncNovelAiUsageDisplays();
     if (buttonLabel) buttonLabel.textContent = buttonText;
     if (generateButton) {
         generateButton.title = disclosure.requiresConsent

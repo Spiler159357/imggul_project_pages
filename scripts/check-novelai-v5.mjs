@@ -157,12 +157,17 @@ const appHtml = readFileSync(new URL('../public/app.html', import.meta.url), 'ut
 const craftSource = readFileSync(new URL('../public/js/craft.js', import.meta.url), 'utf8');
 const plannerSource = readFileSync(new URL('../public/js/project/planner.js', import.meta.url), 'utf8');
 assert.equal(appHtml.includes('id="nai-cost-card"'), false);
-assert.ok(appHtml.indexOf('id="nai-header-usage"') < appHtml.indexOf('id="theme-toggle-btn"'));
+assert.equal(appHtml.includes('id="nai-header-usage"'), false);
+assert.ok(appHtml.indexOf('data-nai-usage-surface="craft"') < appHtml.indexOf('id="craft-clear-temp-btn"'));
 assert.ok(craftSource.includes('async function prepareCurrentNovelAiCost'));
 assert.ok(craftSource.includes('export async function estimateNovelAiPlannerCost'));
+assert.ok(craftSource.includes("document.querySelectorAll('[data-nai-v5-usage]')"));
+assert.ok(craftSource.includes("document.querySelectorAll('[data-nai-anlas-balance]')"));
 assert.equal(craftSource.includes('confirmed: window.confirm(buildNovelAiCostConfirmation(disclosure))'), false);
 assert.ok(plannerSource.includes('id="planner-cost-estimate"'));
 assert.ok(plannerSource.includes('전체 예상 Anlas 사용량'));
+assert.ok(plannerSource.indexOf('data-nai-usage-surface="planner"') < plannerSource.lastIndexOf('${targetSelector}'));
+assert.ok(plannerSource.includes('window.syncNovelAiUsageDisplays?.()'));
 assert.equal(plannerSource.includes('window.confirmNovelAiPlannerCost'), false);
 
 console.log('NovelAI V5 model and pricing checks passed.');
