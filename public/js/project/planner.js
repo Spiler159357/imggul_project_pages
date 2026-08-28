@@ -1455,6 +1455,62 @@ export function renderPlannerGenerationFields(item) {
     `;
 }
 
+export function readPlannerPlanV4PromptRows() {
+    const container = document.getElementById('planner-plan-v4-rows');
+    if (!container) return [];
+    return Array.from(container.querySelectorAll('[data-planner-plan-v4-row]')).slice(0, MAX_V4_PROMPT_CHARACTERS).map(row => {
+        const rowId = row.getAttribute('data-planner-plan-v4-row');
+        return {
+            subject: document.getElementById(`planner-plan-v4-${rowId}-subject`)?.value.trim() || '',
+            clothing: document.getElementById(`planner-plan-v4-${rowId}-clothing`)?.value.trim() || '',
+            expression: document.getElementById(`planner-plan-v4-${rowId}-expression`)?.value.trim() || '',
+            action: document.getElementById(`planner-plan-v4-${rowId}-action`)?.value.trim() || '',
+            negative: document.getElementById(`planner-plan-v4-${rowId}-negative`)?.value.trim() || ''
+        };
+    }).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean));
+}
+
+export function renderPlannerPlanV4PromptRow(row, index) {
+    const inputClass = 'w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
+    return `
+        <div data-planner-plan-v4-row="${index}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/70 p-2">
+            <div class="flex items-center justify-between gap-2 mb-2">
+                <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">추가 캐릭터 ${index + 1}</span>
+                <button type="button" onclick="window.removePlannerPlanV4Prompt(${index})" class="p-1 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="추가 캐릭터 프롬프트 삭제">
+                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
+                </button>
+            </div>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
+                <input id="planner-plan-v4-${index}-subject" value="${escapeHtml(row.subject || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="캐릭터">
+                <input id="planner-plan-v4-${index}-clothing" value="${escapeHtml(row.clothing || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="의상">
+                <input id="planner-plan-v4-${index}-expression" value="${escapeHtml(row.expression || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="표정">
+                <input id="planner-plan-v4-${index}-action" value="${escapeHtml(row.action || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="행위">
+                <input id="planner-plan-v4-${index}-negative" value="${escapeHtml(row.negative || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass} md:col-span-2" placeholder="부정 프롬프트">
+            </div>
+        </div>
+    `;
+}
+
+export function renderPlannerPlanV4PromptSection(rows = []) {
+    const normalizedRows = normalizePlannerV4PromptRows(rows);
+    return `
+        <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-800/40 p-3">
+            <div class="flex items-start justify-between gap-3 mb-2">
+                <div>
+                    <p class="text-[10px] font-bold text-gray-600 dark:text-gray-300">V4 Prompt · 추가 캐릭터</p>
+                    <p class="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">상황 상세에 저장된 값을 불러옵니다. 수정하면 선택한 모든 구도에 적용됩니다.</p>
+                </div>
+                <button id="planner-plan-v4-add" type="button" onclick="window.addPlannerPlanV4Prompt()" ${normalizedRows.length >= MAX_V4_PROMPT_CHARACTERS ? 'disabled' : ''} class="inline-flex flex-shrink-0 items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
+                    <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> 캐릭터 추가
+                </button>
+            </div>
+            <div id="planner-plan-v4-rows" data-dirty="false" class="space-y-2">
+                ${normalizedRows.map((row, index) => renderPlannerPlanV4PromptRow(row, index)).join('')}
+            </div>
+        </div>
+    `;
+}
+
 function getPlannerBasePromptSettings() {
     if (window.readCraftBasePromptSettings) return window.readCraftBasePromptSettings();
     return {
@@ -1915,6 +1971,46 @@ export function renderPlannerSituationPlanOverlay() {
     if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
 }
 
+export function markPlannerPlanV4PromptDirty() {
+    const container = document.getElementById('planner-plan-v4-rows');
+    if (container) container.dataset.dirty = 'true';
+}
+
+function refreshPlannerPlanV4AddButton() {
+    const addButton = document.getElementById('planner-plan-v4-add');
+    const rowCount = document.querySelectorAll('#planner-plan-v4-rows [data-planner-plan-v4-row]').length;
+    if (addButton) addButton.disabled = rowCount >= MAX_V4_PROMPT_CHARACTERS;
+}
+
+export function setPlannerPlanV4PromptRows(rows = []) {
+    const container = document.getElementById('planner-plan-v4-rows');
+    if (!container) return;
+    const normalizedRows = normalizePlannerV4PromptRows(rows);
+    container.innerHTML = normalizedRows.map((row, index) => renderPlannerPlanV4PromptRow(row, index)).join('');
+    container.dataset.dirty = 'false';
+    refreshPlannerPlanV4AddButton();
+    if (window.lucide) lucide.createIcons();
+}
+
+export function addPlannerPlanV4Prompt() {
+    const container = document.getElementById('planner-plan-v4-rows');
+    if (!container) return;
+    const currentRows = Array.from(container.querySelectorAll('[data-planner-plan-v4-row]'));
+    if (currentRows.length >= MAX_V4_PROMPT_CHARACTERS) return;
+    const nextIndex = currentRows.reduce((max, row) => Math.max(max, Number(row.getAttribute('data-planner-plan-v4-row')) || 0), -1) + 1;
+    container.insertAdjacentHTML('beforeend', renderPlannerPlanV4PromptRow({}, nextIndex));
+    markPlannerPlanV4PromptDirty();
+    refreshPlannerPlanV4AddButton();
+    if (window.lucide) lucide.createIcons();
+    document.getElementById(`planner-plan-v4-${nextIndex}-subject`)?.focus();
+}
+
+export function removePlannerPlanV4Prompt(index) {
+    document.querySelector(`#planner-plan-v4-rows [data-planner-plan-v4-row="${index}"]`)?.remove();
+    markPlannerPlanV4PromptDirty();
+    refreshPlannerPlanV4AddButton();
+}
+
 export function updatePlannerPlanModalDefaults(scope = 'all') {
     const project = getActiveProject();
     const situation = getSituationById(project, window.PLANNER_PLAN_MODAL_SITUATION_ID);
@@ -1945,6 +2041,17 @@ export function updatePlannerPlanModalDefaults(scope = 'all') {
         if (isNsfw) setValue('planner-plan-clothing', situationPrompt.clothing || '');
         setValue('planner-plan-expression', situationPrompt.expression || '');
         setValue('planner-plan-action', situationPrompt.action || '');
+        const characterId = getPlannerPlanModalCharacterId(project);
+        const existingItem = getPlannerSituationItem(getPlannerPlanModalMeta(project, characterId), situation.id);
+        const existingVariantGeneration = (existingItem?.variantGenerations || []).find(entry =>
+            entry?.situationPromptVariantId === situationVariant?.id
+        )?.generation;
+        setPlannerPlanV4PromptRows(
+            existingVariantGeneration?.v4PromptCharacters
+            || situationVariant?.generation?.v4PromptCharacters
+            || situationVariant?.generation?.v4_prompt
+            || []
+        );
     }
     if (scope === 'all' || scope === 'situation' || scope === 'background') {
         const selectedBackgroundId = document.getElementById('planner-plan-background-variant')?.value || '';
@@ -2363,7 +2470,10 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
         : situationVariants.map(variant => variant.id);
     const firstSituationVariant = situationVariants.find(variant => selectedSituationVariantIds.includes(variant.id)) || situationVariants[0];
     const selectedCharacterVariant = characterVariants.find(variant => variant.id === selectedCharacterVariantId) || characterVariants[0];
-    const generation = existingItem?.generation || firstSituationVariant?.generation || {};
+    const existingVariantGeneration = (existingItem?.variantGenerations || []).find(entry =>
+        entry?.situationPromptVariantId === firstSituationVariant?.id
+    )?.generation;
+    const generation = existingVariantGeneration || existingItem?.generation || firstSituationVariant?.generation || {};
     const situationPrompt = firstSituationVariant?.prompt || {};
     const characterParts = selectedCharacterVariant?.parts || {};
     const projectStyle = window.PROJECT_PLANNER_PROJECT_STYLE || '';
@@ -2439,6 +2549,7 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
                         </div>
                         <label class="block"><span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">부정 프롬프트</span><textarea id="planner-plan-negative" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-red-300 dark:border-red-800 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.negative || '')}</textarea></label>
                     </div>
+                    ${renderPlannerPlanV4PromptSection(generation.v4PromptCharacters || generation.v4_prompt || [])}
                     <p id="planner-plan-modal-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                 </div>
                 <div class="flex items-center justify-end gap-2 px-4 py-3 border-t border-gray-200 dark:border-gray-700">
@@ -3501,8 +3612,22 @@ export async function savePlannerSituationPlan() {
         background: document.getElementById('planner-plan-background')?.value.trim() || '',
         negative: document.getElementById('planner-plan-negative')?.value.trim() || ''
     };
+    const v4PromptContainer = document.getElementById('planner-plan-v4-rows');
+    const hasV4PromptOverride = v4PromptContainer?.dataset.dirty === 'true';
+    const v4PromptCharacters = normalizePlannerV4PromptRows(readPlannerPlanV4PromptRows());
 
     const variantGenerations = activeSituationVariants.map((variant, index) => {
+        const storedVariantGeneration = (existingItem?.variantGenerations || []).find(entry =>
+            entry?.situationPromptVariantId === variant.id
+        )?.generation;
+        const generationOverrides = {
+            ...(storedVariantGeneration || variant.generation || {}),
+            res: document.getElementById('planner-plan-res')?.value || storedVariantGeneration?.res || variant.generation?.res || DEFAULT_PLANNER_RESOLUTION
+        };
+        if (hasV4PromptOverride) {
+            generationOverrides.v4PromptCharacters = v4PromptCharacters;
+            generationOverrides.v4_prompt = v4PromptCharacters;
+        }
         const mergedVariant = {
             ...variant,
             rating: getSituationRating(situation),
@@ -3510,10 +3635,7 @@ export async function savePlannerSituationPlan() {
                 ...(variant.prompt || {}),
                 ...Object.fromEntries(Object.entries(overrideFields).filter(([, value]) => value))
             },
-            generation: {
-                ...(variant.generation || {}),
-                res: document.getElementById('planner-plan-res')?.value || variant.generation?.res || DEFAULT_PLANNER_RESOLUTION
-            }
+            generation: generationOverrides
         };
         return {
             situationPromptVariantId: variant.id,
