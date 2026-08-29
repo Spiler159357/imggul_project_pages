@@ -1471,7 +1471,7 @@ export function readPlannerPlanV4PromptRows() {
 }
 
 export function renderPlannerPlanV4PromptRow(row, index) {
-    const inputClass = 'w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
+    const inputClass = 'planner-plan-v4-prompt-input auto-resize-textarea w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
     return `
         <div data-planner-plan-v4-row="${index}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/70 p-2">
             <div class="flex items-center justify-between gap-2 mb-2">
@@ -1481,11 +1481,11 @@ export function renderPlannerPlanV4PromptRow(row, index) {
                 </button>
             </div>
             <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <input id="planner-plan-v4-${index}-subject" value="${escapeHtml(row.subject || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="캐릭터">
-                <input id="planner-plan-v4-${index}-clothing" value="${escapeHtml(row.clothing || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="의상">
-                <input id="planner-plan-v4-${index}-expression" value="${escapeHtml(row.expression || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="표정">
-                <input id="planner-plan-v4-${index}-action" value="${escapeHtml(row.action || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="행위">
-                <input id="planner-plan-v4-${index}-negative" value="${escapeHtml(row.negative || '')}" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass} md:col-span-2" placeholder="부정 프롬프트">
+                <textarea id="planner-plan-v4-${index}-subject" rows="1" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="캐릭터">${escapeHtml(row.subject || '')}</textarea>
+                <textarea id="planner-plan-v4-${index}-clothing" rows="1" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="의상">${escapeHtml(row.clothing || '')}</textarea>
+                <textarea id="planner-plan-v4-${index}-expression" rows="1" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="표정">${escapeHtml(row.expression || '')}</textarea>
+                <textarea id="planner-plan-v4-${index}-action" rows="1" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass}" placeholder="행위">${escapeHtml(row.action || '')}</textarea>
+                <textarea id="planner-plan-v4-${index}-negative" rows="1" oninput="window.markPlannerPlanV4PromptDirty()" class="${inputClass} md:col-span-2" placeholder="부정 프롬프트">${escapeHtml(row.negative || '')}</textarea>
             </div>
         </div>
     `;
@@ -1989,6 +1989,7 @@ export function setPlannerPlanV4PromptRows(rows = []) {
     container.innerHTML = normalizedRows.map((row, index) => renderPlannerPlanV4PromptRow(row, index)).join('');
     container.dataset.dirty = 'false';
     refreshPlannerPlanV4AddButton();
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
     if (window.lucide) lucide.createIcons();
 }
 
@@ -2001,8 +2002,11 @@ export function addPlannerPlanV4Prompt() {
     container.insertAdjacentHTML('beforeend', renderPlannerPlanV4PromptRow({}, nextIndex));
     markPlannerPlanV4PromptDirty();
     refreshPlannerPlanV4AddButton();
+    if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
     if (window.lucide) lucide.createIcons();
-    document.getElementById(`planner-plan-v4-${nextIndex}-subject`)?.focus();
+    const subjectInput = document.getElementById(`planner-plan-v4-${nextIndex}-subject`);
+    const weightEditor = document.getElementById(subjectInput?.dataset.naiWeightEditorId || '');
+    (weightEditor || subjectInput)?.focus();
 }
 
 export function removePlannerPlanV4Prompt(index) {
