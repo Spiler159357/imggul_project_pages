@@ -131,12 +131,12 @@ export async function resolveGuestProject(env, rawProjectPath) {
     const row = await env.DB.prepare(`
         SELECT id, name, prefix
         FROM v2_projects
-        WHERE prefix = ? OR prefix = ?
+        WHERE (prefix = ? OR prefix = ?)
+          AND is_public = 1
         LIMIT 1
     `).bind(prefix, projectPath).first();
     if (row) return { id: row.id, name: row.name || projectPath, prefix, path: projectPath };
-    if (!await projectPrefixExists(env, prefix)) return null;
-    return { id: projectPath, name: projectPath, prefix, path: projectPath, legacy: true };
+    return null;
 }
 
 async function ensureAdminProject(env, rawProjectId) {
@@ -166,6 +166,42 @@ async function ensureAdminProject(env, rawProjectId) {
     `).bind(projectPath, projectPath, `${projectPath}/`, timestamp, timestamp).run();
     row = { id: projectPath, name: projectPath, prefix: `${projectPath}/` };
     return { ...row, path: projectPath };
+}
+
+async function listAdminProjectVisibility(env) {
+    const rows = (await env.DB.prepare(`
+        SELECT id, prefix, is_public
+        FROM v2_projects
+        ORDER BY prefix ASC
+    `).all()).results || [];
+    return {
+        projects: rows.map(row => ({
+            id: String(row.id || ''),
+            prefix: String(row.prefix || ''),
+            isPublic: Number(row.is_public) === 1
+        }))
+    };
+}
+
+async function updateAdminProjectVisibility(request, env, rawProjectId) {
+    const body = await readJson(request);
+    if (typeof body.isPublic !== 'boolean') {
+        throw new GuestApiError(400, 'INVALID_PROJECT_VISIBILITY', '공개 상태가 올바르지 않습니다.');
+    }
+
+    const project = await ensureAdminProject(env, rawProjectId);
+    const timestamp = nowKstIso();
+    await env.DB.prepare(`
+        UPDATE v2_projects
+        SET is_public = ?, updated_at = ?
+        WHERE id = ?
+    `).bind(body.isPublic ? 1 : 0, timestamp, project.id).run();
+
+    return {
+        id: project.id,
+        prefix: project.prefix,
+        isPublic: body.isPublic
+    };
 }
 
 function normalizeCharacterPrefix(projectPrefix, characterPrefix) {
@@ -636,15 +672,18 @@ async function enforceCommentRateLimit(request, env, projectId) {
     }
 }
 
-async function getCommentWithPost(env, commentId) {
+async function getCommentWithPost(env, commentId, requirePublicProject = false) {
     const row = await env.DB.prepare(`
-        SELECT c.*, p.project_id
+        SELECT c.*, p.project_id, pr.is_public AS project_is_public
         FROM guest_comments c
         JOIN guest_posts p ON p.id = c.post_id
+        JOIN v2_projects pr ON pr.id = p.project_id
         WHERE c.id = ?
         LIMIT 1
     `).bind(decodeSegment(commentId)).first();
-    if (!row) throw new GuestApiError(404, 'COMMENT_NOT_FOUND', '댓글을 찾을 수 없습니다.');
+    if (!row || (requirePublicProject && Number(row.project_is_public) !== 1)) {
+        throw new GuestApiError(404, 'COMMENT_NOT_FOUND', '댓글을 찾을 수 없습니다.');
+    }
     return row;
 }
 
@@ -685,7 +724,7 @@ async function createComment(request, env, project, postId) {
 }
 
 async function updateComment(request, env, commentId) {
-    const existing = await getCommentWithPost(env, commentId);
+    const existing = await getCommentWithPost(env, commentId, true);
     const body = await readJson(request);
     const password = validatePassword(body.password);
     if (!await verifyPassword(password, existing.password_salt, existing.password_hash)) {
@@ -702,7 +741,7 @@ async function updateComment(request, env, commentId) {
 }
 
 async function deleteComment(request, env, commentId, isAdmin) {
-    const existing = await getCommentWithPost(env, commentId);
+    const existing = await getCommentWithPost(env, commentId, !isAdmin);
     if (!isAdmin) {
         const body = await readJson(request);
         const password = validatePassword(body.password);
@@ -740,6 +779,21 @@ export async function handleGuestApi(request, env, isAdmin, context) {
     let match;
 
     try {
+        if (path === '/api/admin/project-visibility' && method === 'GET') {
+            if (!isAdmin) throw new GuestApiError(403, 'FORBIDDEN', '관리자 권한이 필요합니다.');
+            return success(await listAdminProjectVisibility(env), {
+                headers: { 'Cache-Control': 'no-store' }
+            });
+        }
+
+        match = path.match(/^\/api\/admin\/projects\/([^/]+)\/visibility$/);
+        if (match && method === 'PATCH') {
+            if (!isAdmin) throw new GuestApiError(403, 'FORBIDDEN', '관리자 권한이 필요합니다.');
+            return success(await updateAdminProjectVisibility(request, env, match[1]), {
+                headers: { 'Cache-Control': 'no-store' }
+            });
+        }
+
         match = path.match(/^\/api\/guest\/projects\/([^/]+)$/);
         if (match && method === 'GET') return await handleGuestProjectRoute(request, env, match);
 

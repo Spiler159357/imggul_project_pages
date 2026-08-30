@@ -16,9 +16,24 @@ function makeObject(key, isPublic, body = 'image-data', visibilityWasConfigured 
     };
 }
 
-function makeEnv(objects) {
+function makeEnv(objects, publicProjectPaths = new Set(['project'])) {
     return {
         secretKey: 'admin-secret',
+        DB: {
+            prepare() {
+                return {
+                    bind(prefix, projectPath) {
+                        return {
+                            async first() {
+                                return publicProjectPaths.has(projectPath)
+                                    ? { is_public: 1, prefix }
+                                    : null;
+                            }
+                        };
+                    }
+                };
+            }
+        },
         imgBucket: {
             async get(key) {
                 return objects.get(key) || null;
@@ -74,6 +89,17 @@ assert.equal(internalAnonymousResponse.status, 404);
 const headResponse = await requestImage(env, 'project/public.webp', { method: 'HEAD' });
 assert.equal(headResponse.status, 200);
 assert.equal(await headResponse.text(), '');
+
+const privateProjectEnv = makeEnv(objects, new Set());
+const privateProjectResponse = await requestImage(privateProjectEnv, 'project/public.webp');
+assert.equal(privateProjectResponse.status, 404);
+assert.equal(privateProjectResponse.headers.get('Cache-Control'), 'no-store');
+
+const privateProjectAdminResponse = await requestImage(privateProjectEnv, 'project/public.webp', {
+    headers: { Cookie: 'auth=admin-secret' }
+});
+assert.equal(privateProjectAdminResponse.status, 200);
+assert.equal(privateProjectAdminResponse.headers.get('Cache-Control'), 'private, no-store');
 
 const traversalResponse = await requestImage(env, 'project/../private.webp');
 assert.equal(traversalResponse.status, 404);

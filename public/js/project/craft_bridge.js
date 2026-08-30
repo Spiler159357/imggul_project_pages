@@ -1,7 +1,7 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=style-prompt-display-20260823a';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=style-prompt-display-20260823a';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=style-prompt-display-20260823a';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=style-prompt-display-20260823a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=project-visibility-20260830a';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=project-visibility-20260830a';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=project-visibility-20260830a';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=project-visibility-20260830a';
 
 export function getCraftPromptFields() {
     return {

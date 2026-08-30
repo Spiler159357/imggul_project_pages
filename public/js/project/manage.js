@@ -1,9 +1,9 @@
-import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=style-prompt-display-20260823a';
-import { renderCharacterSection } from './character.js?v=style-prompt-display-20260823a';
-import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js?v=style-prompt-display-20260823a';
-import { renderSituationSection } from './situation.js?v=style-prompt-display-20260823a';
+import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=project-visibility-20260830a';
+import { renderCharacterSection } from './character.js?v=project-visibility-20260830a';
+import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js?v=project-visibility-20260830a';
+import { renderSituationSection } from './situation.js?v=project-visibility-20260830a';
 import { renderImageEditor } from '../image_editor.js';
-import { openProjectPostsSection } from './posts.js?v=style-prompt-display-20260823a';
+import { openProjectPostsSection } from './posts.js?v=project-visibility-20260830a';
 
 export async function renderProjectManage(skipHistory = true) {
     if (window.PROJECT_PLANNER_TARGET_PICKER?.open) window.closePlannerTargetPicker?.(null, false);
@@ -199,14 +199,20 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
                 </button>
                 <h1 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(project.name)}</h1>
             </div>
-            <div class="relative flex-shrink-0">
-                <button type="button" onclick="window.toggleProjectActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
-                    <i data-lucide="more-vertical" class="w-5 h-5"></i>
-                </button>
-                <div id="project-action-menu" class="hidden absolute right-0 top-10 z-20 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
-                    <button type="button" onclick="window.renameActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 이름 변경</button>
-                    <button type="button" onclick="window.changeActiveProjectPath()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 경로 변경</button>
-                    <button type="button" onclick="window.deleteActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">프로젝트 삭제</button>
+            <div class="flex items-center gap-2 flex-shrink-0">
+                <label class="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition cursor-pointer" title="비로그인 사용자에게 프로젝트를 공개합니다.">
+                    <input id="project-visibility-checkbox" type="checkbox" class="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700" onchange="window.toggleActiveProjectVisibility(event)" ${project.isPublic ? 'checked' : ''}>
+                    <span>공개</span>
+                </label>
+                <div class="relative">
+                    <button type="button" onclick="window.toggleProjectActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
+                        <i data-lucide="more-vertical" class="w-5 h-5"></i>
+                    </button>
+                    <div id="project-action-menu" class="hidden absolute right-0 top-10 z-20 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
+                        <button type="button" onclick="window.renameActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 이름 변경</button>
+                        <button type="button" onclick="window.changeActiveProjectPath()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 경로 변경</button>
+                        <button type="button" onclick="window.deleteActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">프로젝트 삭제</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -239,6 +245,37 @@ export function toggleProjectActionMenu(event) {
 
 export function closeProjectActionMenu() {
     document.getElementById('project-action-menu')?.classList.add('hidden');
+}
+
+export async function toggleActiveProjectVisibility(event) {
+    const project = getActiveProject();
+    const checkbox = event?.currentTarget;
+    if (!project || !checkbox) return;
+
+    const previousValue = project.isPublic === true;
+    const nextValue = checkbox.checked === true;
+    checkbox.disabled = true;
+
+    try {
+        const res = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/visibility`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ isPublic: nextValue }),
+            cache: 'no-store'
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            throw new Error(payload.error?.message || payload.error || '프로젝트 공개 상태 저장에 실패했습니다.');
+        }
+        project.isPublic = payload.data?.isPublic === true;
+        checkbox.checked = project.isPublic;
+    } catch (err) {
+        project.isPublic = previousValue;
+        checkbox.checked = previousValue;
+        alert(err.message || '프로젝트 공개 상태 저장에 실패했습니다.');
+    } finally {
+        checkbox.disabled = false;
+    }
 }
 
 export async function renameActiveProject() {

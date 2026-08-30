@@ -151,6 +151,20 @@ function imageResponse(request, object, isPublic) {
     return new Response(body, { headers });
 }
 
+async function isPublicProjectImage(env, objectKey) {
+    const projectPath = String(objectKey || '').split('/')[0] || '';
+    if (!projectPath) return false;
+    const prefix = `${projectPath}/`;
+    const row = await env.DB.prepare(`
+        SELECT is_public
+        FROM v2_projects
+        WHERE (prefix = ? OR prefix = ?)
+          AND is_public = 1
+        LIMIT 1
+    `).bind(prefix, projectPath).first();
+    return Number(row?.is_public) === 1;
+}
+
 export async function serveR2Image({
     request,
     env,
@@ -176,12 +190,15 @@ export async function serveR2Image({
             : await env.imgBucket.get(objectKey);
         if (!object) return noStoreResponse();
 
-        const isPublic = isPublicR2ImageObject(objectKey, object.customMetadata);
-        if (isPublic) return imageResponse(request, object, true);
-
         const hasAdminAccess = typeof isAdmin === 'boolean'
             ? isAdmin
             : await isAdminImageRequest(request, env);
+
+        const isPublic = isPublicR2ImageObject(objectKey, object.customMetadata);
+        if (isPublic && await isPublicProjectImage(env, objectKey)) {
+            return imageResponse(request, object, true);
+        }
+
         if (!hasAdminAccess) return noStoreResponse();
         return imageResponse(request, object, false);
     } catch (error) {

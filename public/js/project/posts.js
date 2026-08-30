@@ -7,7 +7,7 @@ import {
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js?v=style-prompt-display-20260823a';
+} from './shared.js?v=project-visibility-20260830a';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;

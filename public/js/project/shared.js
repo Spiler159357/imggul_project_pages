@@ -862,18 +862,28 @@ export async function saveCharacterMeta(character, meta) {
 export async function loadProjects(force = false) {
     if (!force && Array.isArray(window.PROJECTS)) return window.PROJECTS;
 
-    const [listRes, aliasRes] = await Promise.all([
+    const [listRes, aliasRes, visibilityRes] = await Promise.all([
         fetch(`/api/list?prefix=${encodeURIComponent(getProjectBasePrefix())}`),
-        fetch(`/api/aliases?prefix=${encodeURIComponent(getProjectBasePrefix())}`)
+        fetch(`/api/aliases?prefix=${encodeURIComponent(getProjectBasePrefix())}`),
+        fetch('/api/admin/project-visibility', { cache: 'no-store' })
     ]);
 
     if (!listRes.ok) throw new Error('프로젝트 목록을 불러오지 못했습니다.');
+    if (!visibilityRes.ok) throw new Error('프로젝트 공개 상태를 불러오지 못했습니다.');
 
     if (aliasRes.ok) {
         const aliasData = await aliasRes.json();
         window.GLOBAL_ALIASES = aliasData.global || {};
         window.PROJECT_ALIASES = aliasData.project || {};
     }
+
+    const visibilityPayload = await visibilityRes.json().catch(() => ({}));
+    const visibilityByPrefix = new Map(
+        (visibilityPayload.data?.projects || []).map(project => [
+            `${String(project.prefix || '').replace(/\/+$/g, '')}/`,
+            project.isPublic === true
+        ])
+    );
 
     const data = await listRes.json();
     window.PROJECTS = (data.folders || [])
@@ -885,6 +895,7 @@ export async function loadProjects(force = false) {
                 prefix: folderPrefix,
                 name: getProjectDisplayName(folderPrefix, folderName),
                 alias: window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) || '' : '',
+                isPublic: visibilityByPrefix.get(folderPrefix) === true,
                 prompts: [],
                 characters: [],
                 situations: [],
