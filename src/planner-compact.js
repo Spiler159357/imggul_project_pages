@@ -1962,13 +1962,12 @@ export async function prepareSituationPathPlannerMigration(env, input = {}) {
     return { statements, summary: { changedPlannerRuns: changedRuns } };
 }
 
-export async function prepareSituationDeletePlannerMigration(env, input = {}) {
+async function getPlannerCompactProjectRecords(env, input = {}) {
     const projectId = asString(input.projectId);
     const projectPrefix = asString(input.projectPrefix);
-    const situationId = asString(input.situationId);
     const projectIds = [...new Set([projectId, projectPrefix].filter(Boolean))];
-    if (!situationId || !projectIds.length) {
-        throw plannerError('PLANNER_INVALID_INPUT', 400, 'projectId and situationId are required.');
+    if (!projectIds.length) {
+        throw plannerError('PLANNER_INVALID_INPUT', 400, 'projectId is required.');
     }
 
     const placeholders = projectIds.map(() => '?').join(', ');
@@ -1977,7 +1976,151 @@ export async function prepareSituationDeletePlannerMigration(env, input = {}) {
         WHERE project_id IN (${placeholders}) AND record_type IN ('run', 'confirm')
         ORDER BY record_type, record_key
     `).bind(...projectIds).all()).results || [];
-    const records = rows.map(row => parsePlannerCompactRow(row));
+    return rows.map(row => parsePlannerCompactRow(row));
+}
+
+export async function deletePlannerCompactItemsBySituation(env, input = {}) {
+    const situationId = asString(input.situationId);
+    if (!situationId) {
+        throw plannerError('PLANNER_INVALID_INPUT', 400, 'situationId is required.');
+    }
+
+    const records = await getPlannerCompactProjectRecords(env, input);
+    const targetRuns = records
+        .filter(record => record.recordType === 'run')
+        .map(record => ({
+            record,
+            targetItems: asArray(record.payload.items).filter(item => item.situationId === situationId)
+        }))
+        .filter(entry => entry.targetItems.length);
+    const expectedCharacterIds = [...new Set(asArray(input.expectedCharacterIds).map(asString).filter(Boolean))].sort();
+    const targetCharacterIds = [...new Set(targetRuns.map(entry => entry.record.characterId).filter(Boolean))].sort();
+    if (
+        expectedCharacterIds.length
+        && (expectedCharacterIds.length !== targetCharacterIds.length
+            || expectedCharacterIds.some((characterId, index) => characterId !== targetCharacterIds[index]))
+    ) {
+        throw plannerError('PLANNER_REVISION_CONFLICT', 409, '플래너 데이터가 변경되었습니다. 새로고침 후 다시 시도하세요.');
+    }
+
+    for (const { record } of targetRuns) {
+        if (ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
+            throw plannerError('PLANNER_RUN_ACTIVE', 409, '생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
+        }
+    }
+
+    const removedItemIds = new Set(targetRuns.flatMap(entry => entry.targetItems.map(item => item.itemId)));
+    const targetConfirms = records.filter(record =>
+        record.recordType === 'confirm' && removedItemIds.has(record.payload.itemId)
+    );
+    if (targetConfirms.some(record => record.payload.status === 'pending')) {
+        throw plannerError('PLANNER_CONFIRM_ACTIVE', 409, '이미지 확정 처리 중에는 전체 플랜을 삭제할 수 없습니다.');
+    }
+
+    if (!targetRuns.length) {
+        return {
+            deletedCount: 0,
+            affectedCharacterIds: [],
+            deletedRunCharacterIds: [],
+            cleanup: { scanned: 0, deletedCount: 0, failedCount: 0, failedKeys: [] }
+        };
+    }
+
+    const timestamp = nowIso();
+    const statements = [];
+    const candidateKeys = new Set();
+    const deletedRunCharacterIds = [];
+
+    for (const { record, targetItems } of targetRuns) {
+        targetItems.forEach(item => {
+            asArray(item.candidates).forEach(candidate => {
+                const key = asString(candidate.r2Key);
+                if (key) candidateKeys.add(key);
+            });
+        });
+        const remainingItems = asArray(record.payload.items).filter(item => item.situationId !== situationId);
+        statements.push(env.DB.prepare(`
+            SELECT CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM planner_compact_records
+                    WHERE record_key = ? AND record_type = 'run' AND revision = ?
+                ) THEN 1
+                ELSE json_extract('planner_revision_conflict')
+            END AS revision_guard
+        `).bind(record.recordKey, record.revision));
+        if (remainingItems.length) {
+            const nextPayload = {
+                ...cloneJson(record.payload),
+                items: remainingItems,
+                status: 'draft',
+                activeJob: null,
+                updatedAt: timestamp
+            };
+            statements.push(env.DB.prepare(`
+                UPDATE planner_compact_records
+                SET status = 'draft', payload_json = ?, revision = revision + 1, updated_at = ?
+                WHERE record_key = ? AND record_type = 'run' AND revision = ?
+            `).bind(
+                serializePayload(nextPayload, record.recordKey),
+                timestamp,
+                record.recordKey,
+                record.revision
+            ));
+        } else {
+            statements.push(env.DB.prepare(`
+                DELETE FROM planner_compact_records
+                WHERE record_key = ? AND record_type = 'run' AND revision = ?
+            `).bind(record.recordKey, record.revision));
+            deletedRunCharacterIds.push(record.characterId);
+        }
+    }
+
+    for (const record of targetConfirms) {
+        const backupKey = asString(record.payload.backupR2Key);
+        if (backupKey) candidateKeys.add(backupKey);
+        statements.push(env.DB.prepare(`
+            SELECT CASE
+                WHEN EXISTS (
+                    SELECT 1 FROM planner_compact_records
+                    WHERE record_key = ? AND record_type = 'confirm' AND revision = ?
+                ) THEN 1
+                ELSE json_extract('planner_revision_conflict')
+            END AS revision_guard
+        `).bind(record.recordKey, record.revision));
+        statements.push(env.DB.prepare(`
+            DELETE FROM planner_compact_records
+            WHERE record_key = ? AND record_type = 'confirm' AND revision = ?
+        `).bind(record.recordKey, record.revision));
+    }
+
+    try {
+        await env.DB.batch(statements);
+    } catch (error) {
+        const message = error?.message || String(error || '');
+        if (/planner_revision_conflict|malformed JSON/i.test(message)) {
+            throw plannerError('PLANNER_REVISION_CONFLICT', 409, '플래너 데이터가 변경되었습니다. 새로고침 후 다시 시도하세요.');
+        }
+        throw translateSchemaError(error);
+    }
+
+    const cleanup = candidateKeys.size
+        ? await cleanupPlannerCompactAssets(env, { keys: [...candidateKeys] })
+        : { scanned: 0, deletedCount: 0, failedCount: 0, failedKeys: [] };
+    return {
+        deletedCount: removedItemIds.size,
+        affectedCharacterIds: targetRuns.map(entry => entry.record.characterId),
+        deletedRunCharacterIds,
+        cleanup
+    };
+}
+
+export async function prepareSituationDeletePlannerMigration(env, input = {}) {
+    const situationId = asString(input.situationId);
+    if (!situationId) {
+        throw plannerError('PLANNER_INVALID_INPUT', 400, 'situationId is required.');
+    }
+
+    const records = await getPlannerCompactProjectRecords(env, input);
     const removedItemIds = new Set();
     const statements = [];
     let changedRuns = 0;

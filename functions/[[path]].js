@@ -21,6 +21,7 @@ import {
     completePlannerCompactBrowserQueue,
     confirmPlannerCompactAsset,
     deletePlannerCompactItem,
+    deletePlannerCompactItemsBySituation,
     deletePlannerCompactRun,
     getPlannerCompactBrowserQueue,
     getPlannerCompactRun,
@@ -2429,6 +2430,17 @@ export async function onRequest(context) {
             const body = await request.json();
             const data = await putPlannerCompactItemFromMeta(env, body || {});
             return jsonResponse({ success: true, data });
+        } catch (e) {
+            return plannerApiErrorResponse(e);
+        }
+    }
+
+    if (path === "/api/planner/compact/items/delete-by-situation" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            const data = await deletePlannerCompactItemsBySituation(env, body || {});
+            return jsonResponse({ success: true, ...data });
         } catch (e) {
             return plannerApiErrorResponse(e);
         }

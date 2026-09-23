@@ -39,6 +39,7 @@ let plannerDraftDirty = false;
 let plannerVisibilityHandlerInstalled = false;
 let plannerPlanScopeProjectId = '';
 let plannerBatchPlanCreationRunning = false;
+let plannerBatchPlanDeletionRunning = false;
 let plannerCostEstimateOperationId = 0;
 
 function createPlannerTargetPickerState() {
@@ -379,13 +380,42 @@ export async function deletePlannerMeta(project, characterId = '') {
     const key = getPlannerMetaKey(project, characterId || getSelectedPlannerCharacterId(project));
     const meta = await loadPlannerMeta(project, characterId, { force: true }).catch(() => null);
     if (meta?.id) {
-        await fetch(`/api/planner/compact/run/${encodeURIComponent(meta.id)}`, {
+        const res = await fetch(`/api/planner/compact/run/${encodeURIComponent(meta.id)}`, {
             method: 'DELETE',
             headers: { 'Content-Type': 'application/json' }
-        }).catch(() => null);
+        });
+        if (!res.ok) {
+            const data = await res.json().catch(() => ({}));
+            const error = new Error(data.error || '플래너 삭제에 실패했습니다.');
+            error.status = res.status;
+            error.code = data.code || '';
+            throw error;
+        }
     }
     deletePlannerMetaCache(key);
     deletePlannerMetaCache(getPlannerMetaKey(project));
+}
+
+async function deletePlannerItemsBySituation(project, situationId, characterIds = []) {
+    const res = await fetch('/api/planner/compact/items/delete-by-situation?_t=' + Date.now(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json; charset=utf-8' },
+        body: JSON.stringify({
+            projectId: project?.id || '',
+            projectPrefix: project?.prefix || '',
+            situationId,
+            expectedCharacterIds: characterIds
+        }),
+        cache: 'no-store'
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        const error = new Error(data.error || '상황의 전체 플랜 삭제에 실패했습니다.');
+        error.status = res.status;
+        error.code = data.code || '';
+        throw error;
+    }
+    return data;
 }
 
 export function getPlannerImagePrefix(project, imageNumber) {
@@ -2749,6 +2779,17 @@ export function renderPlannerPanel(project, situations) {
     const targetSelector = (view === 'plan' || view === 'result') && planScope === 'situation'
         ? situationSelector
         : characterSelector;
+    const situationPlanDeleteTargets = planScope === 'situation'
+        && selectedSituation
+        && plannerSituationScopeState.loaded
+        && !plannerSituationScopeState.loading
+        ? [...plannerSituationScopeState.metas.values()].filter(plannerMeta =>
+            plannerMeta?.items?.some(item => item.situationId === selectedSituation.id)
+        )
+        : [];
+    const deletablePlanCount = planScope === 'situation'
+        ? situationPlanDeleteTargets.length
+        : (meta?.items?.length || 0);
 
     const modeButton = (mode, label, icon) => `
         <button type="button" onclick="window.setPlannerView('${mode}')" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${view === mode ? 'bg-indigo-600 text-white' : 'border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-400'}">
@@ -2819,18 +2860,13 @@ export function renderPlannerPanel(project, situations) {
         <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
             <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">${planScope === 'situation' ? '선택한 상황에 대해 캐릭터별 생성 가능 여부를 확인합니다.' : '상황을 선택하면 해당 상황의 플랜을 구성합니다.'}</p>
             <div class="flex flex-wrap justify-end gap-2">
-                <button type="button" onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning ? 'disabled' : ''} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
+                <button type="button" onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
                     <i data-lucide="image-plus" class="w-4 h-4"></i> 누락된 플랜 전체 생성
                 </button>
-                ${planScope === 'character' ? `
-                    <button type="button" onclick="window.savePlannerDraft()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400">
-                        <i data-lucide="save" class="w-4 h-4"></i> 플랜 저장하기
+                ${deletablePlanCount ? `
+                    <button type="button" onclick="window.deleteAllPlannerItems()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed">
+                        <i data-lucide="${plannerBatchPlanDeletionRunning ? 'loader-2' : 'trash-2'}" class="w-4 h-4 ${plannerBatchPlanDeletionRunning ? 'animate-spin' : ''}"></i> ${plannerBatchPlanDeletionRunning ? '삭제 중' : '전체 플랜 삭제'}
                     </button>
-                    ${meta?.items?.length ? `
-                        <button type="button" onclick="window.deleteAllPlannerItems()" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20">
-                            <i data-lucide="trash-2" class="w-4 h-4"></i> 전체 플랜 삭제
-                        </button>
-                    ` : ''}
                 ` : ''}
             </div>
         </div>
@@ -4102,15 +4138,20 @@ export async function deletePlannerItem(situationId, characterId = '') {
     renderPlannerSectionByState();
 }
 
-export async function deleteAllPlannerItems() {
+async function deleteAllPlannerItemsForCharacter() {
     const project = getActiveProject();
     let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
     if (!project || !meta?.items?.length) {
         setPlannerStatus('삭제할 플랜이 없습니다.');
         return;
     }
-    if (isPlannerActiveStatus(meta.status) || isPlannerActiveStatus(meta.backgroundStatus?.status)) {
-        setPlannerStatus('생성 중에는 전체 플랜을 삭제할 수 없습니다. 일시정지 또는 취소 후 삭제하세요.');
+    if (
+        isPlannerActiveStatus(meta.status)
+        || meta.status === 'paused'
+        || isPlannerActiveStatus(meta.backgroundStatus?.status)
+        || meta.backgroundStatus?.status === 'paused'
+    ) {
+        setPlannerStatus('생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
         return;
     }
     if (!confirm(`현재 캐릭터의 플랜 ${meta.items.length}개를 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
@@ -4132,6 +4173,93 @@ export async function deleteAllPlannerItems() {
     renderPlannerPreviewOverlay();
     renderPlannerSectionByState();
     setPlannerStatus(`${items.length}개 플랜을 삭제했습니다.`);
+}
+
+function getPlannerSituationPlanTargets(situationId) {
+    if (!situationId) return [];
+    return [...plannerSituationScopeState.metas.entries()].flatMap(([characterId, meta]) => {
+        const item = meta?.items?.find(entry => entry.situationId === situationId);
+        return item ? [{ characterId, meta, item }] : [];
+    });
+}
+
+async function deleteAllPlannerItemsForSituation() {
+    const project = getActiveProject();
+    if (!project) return;
+    const situation = getSelectedPlannerSituation(project);
+    if (!situation) {
+        setPlannerStatus('삭제할 상황을 선택하세요.');
+        return;
+    }
+    if (plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning) return;
+
+    await loadPlannerSituationScopeData({ force: true });
+    if (plannerSituationScopeState.errors.size) {
+        setPlannerStatus('일부 캐릭터의 플랜 상태를 확인하지 못했습니다. 새로고침 후 다시 시도하세요.');
+        return;
+    }
+    const targets = getPlannerSituationPlanTargets(situation.id);
+    if (!targets.length) {
+        setPlannerStatus('선택한 상황에 삭제할 플랜이 없습니다.');
+        return;
+    }
+    const activeTargets = targets.filter(({ meta }) =>
+        isPlannerActiveStatus(meta.status)
+        || meta.status === 'paused'
+        || isPlannerActiveStatus(meta.backgroundStatus?.status)
+        || meta.backgroundStatus?.status === 'paused'
+    );
+    if (activeTargets.length) {
+        setPlannerStatus('생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
+        return;
+    }
+    if (!confirm(`'${getSituationDisplayName(situation)}' 상황의 플랜 ${targets.length}개를 캐릭터 ${targets.length}명에서 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
+
+    plannerBatchPlanDeletionRunning = true;
+    renderPlannerSectionByState({ preserveScroll: true });
+    setPlannerStatus('선택한 상황의 전체 플랜을 삭제하고 있습니다.');
+    let message = '';
+    try {
+        const data = await deletePlannerItemsBySituation(
+            project,
+            situation.id,
+            targets.map(target => target.characterId)
+        );
+        clearPlannerCachesForProject(project);
+        plannerSituationScopeState.loaded = false;
+        plannerSituationScopeState.metas = new Map();
+        plannerSituationScopeState.errors = new Map();
+        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+        window.PLANNER_IMAGE_PREVIEW_KEY = null;
+        window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
+        window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
+        window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
+        clearFolderDataCaches(getPlannerPrefix(project));
+        renderPlannerSituationPlanOverlay();
+        renderPlannerResultOverlay();
+        renderPlannerPreviewOverlay();
+        await refreshPlannerPanel({ reason: 'delete', preserveScroll: true });
+
+        const deletedCount = Number(data.deletedCount || 0);
+        const cleanupFailedCount = Number(data.cleanup?.failedCount || 0);
+        message = cleanupFailedCount
+            ? `${deletedCount}개 플랜을 삭제했습니다. 임시 이미지 ${cleanupFailedCount}개는 정리하지 못했습니다.`
+            : `${deletedCount}개 플랜을 삭제했습니다.`;
+    } catch (error) {
+        message = error?.message || '상황의 전체 플랜 삭제에 실패했습니다.';
+    } finally {
+        plannerBatchPlanDeletionRunning = false;
+        renderPlannerSectionByState({ preserveScroll: true });
+        setPlannerStatus(message);
+    }
+}
+
+export async function deleteAllPlannerItems() {
+    if (getPlannerPlanScope() === 'situation') {
+        await deleteAllPlannerItemsForSituation();
+        return;
+    }
+    await deleteAllPlannerItemsForCharacter();
 }
 
 export async function deletePlannerItemFromModal(situationId) {
