@@ -3909,7 +3909,7 @@ async function createMissingPlannerPlansForCharacter() {
     ]);
     const currentSettings = window.readCraftSettings ? window.readCraftSettings() : {};
     const characterMeta = character.meta || {};
-    const defaultCount = clampPlannerImageCount(meta?.defaultCount || PLANNER_DEFAULT_IMAGE_COUNT);
+    const defaultCount = PLANNER_DEFAULT_IMAGE_COUNT;
     const defaultBackground = getPlannerBackgroundPromptById(project);
     if (!meta || meta.characterId !== character.id) {
         meta = createPlannerDraftMeta(project, character, defaultCount);
@@ -3987,7 +3987,7 @@ async function createMissingPlannerPlansForSituation() {
             continue;
         }
 
-        const defaultCount = clampPlannerImageCount(meta?.defaultCount || PLANNER_DEFAULT_IMAGE_COUNT);
+        const defaultCount = PLANNER_DEFAULT_IMAGE_COUNT;
         const item = buildPlannerPlanItemFromSituation({
             project,
             situation,
