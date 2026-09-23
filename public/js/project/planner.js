@@ -4,7 +4,7 @@ import { renderSectionHeader } from './manage.js?v=project-visibility-20260830a'
 import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=project-visibility-20260830a';
 import { combinePromptParts, getSituationById } from './situation.js?v=project-visibility-20260830a';
 
-const PLANNER_DEFAULT_IMAGE_COUNT = 10;
+const PLANNER_DEFAULT_IMAGE_COUNT = 20;
 const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
 const PLANNER_META_CACHE_TTL_MS = 3000;
