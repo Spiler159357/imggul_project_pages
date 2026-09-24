@@ -1060,6 +1060,7 @@ function makeUploadPickerItem({ type, label, subLabel = '', active = false, onCl
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.pickerType = type;
+    button.dataset.pickerSelected = active ? 'true' : 'false';
     button.dataset.searchText = `${label} ${subLabel}`.toLowerCase();
     button.className = 'w-full flex items-center text-left gap-2 px-2.5 py-2 rounded-md border border-transparent hover:border-indigo-300 dark:hover:border-indigo-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 transition min-w-0';
     button.onclick = onClick;
@@ -1071,6 +1072,23 @@ function makeUploadPickerItem({ type, label, subLabel = '', active = false, onCl
         <i data-lucide="check" class="w-3.5 h-3.5 text-indigo-500 ${active ? '' : 'invisible'}"></i>
     `;
     return button;
+}
+
+function scrollCraftUploadPickerToSelection() {
+    window.requestAnimationFrame(() => {
+        ['character', 'situation'].forEach(type => {
+            const list = document.getElementById(`craft-upload-${type}-list`);
+            const selected = list?.querySelector('[data-picker-selected="true"]');
+            if (!list || !selected) return;
+
+            const listRect = list.getBoundingClientRect();
+            const selectedRect = selected.getBoundingClientRect();
+            const selectedTop = selectedRect.top - listRect.top + list.scrollTop;
+            const centeredScrollTop = selectedTop - ((list.clientHeight - selectedRect.height) / 2);
+            const maxScrollTop = Math.max(0, list.scrollHeight - list.clientHeight);
+            list.scrollTop = Math.min(maxScrollTop, Math.max(0, centeredScrollTop));
+        });
+    });
 }
 
 function setUploadListLoading(id) {
@@ -1164,6 +1182,7 @@ export async function prepareUploadActiveTempImage() {
     uploadModal.classList.remove('hidden');
     await window.initCraftUploadPicker();
     if (inpaintSourceKey) await applyInpaintSourceUploadContext(inpaintSourceKey);
+    scrollCraftUploadPickerToSelection();
     if (window.lucide) window.lucide.createIcons();
     return;
 
