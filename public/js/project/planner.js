@@ -9,9 +9,10 @@ const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
 const PLANNER_META_CACHE_TTL_MS = 3000;
 const PLANNER_BACKGROUND_ETA_STORAGE_KEY = 'imggul_planner_background_eta';
-const PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 2;
+const PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 3;
 const PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS = 10000;
 const PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT = 100;
+const PLANNER_BACKGROUND_ETA_EVENT_LIMIT = PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT * 2 + 1;
 const DEFAULT_PLANNER_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const plannerMetaMemoryCache = new Map();
 const plannerBackgroundPollInFlight = new Map();
@@ -646,7 +647,7 @@ function getPlannerQueueEta(queueMetas = []) {
     const sampleCount = samples.length;
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'server_candidate_completed_intervals',
+        source: 'global_candidate_completed_intervals',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
@@ -660,7 +661,7 @@ function getPlannerQueueEta(queueMetas = []) {
 function renderPlannerEtaBadge(eta) {
     if (!eta?.remainingText) return '';
     const basisLabel = eta.basis === 'server_completed_average'
-        ? `서버 완료 간격 최근 ${eta.sampleCount || 0}장 기준`
+        ? `전체 완료 간격 최근 ${eta.sampleCount || 0}장 기준`
         : '기본 추정';
     return `
         <span class="inline-flex items-center gap-1 rounded-full border border-indigo-200 dark:border-indigo-800 bg-white/80 dark:bg-indigo-950/40 px-2 py-1 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
@@ -682,19 +683,29 @@ function readPlannerBackgroundEtaStore() {
     try {
         const store = JSON.parse(localStorage.getItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY) || '{}') || {};
         if (Number(store.version) !== PLANNER_BACKGROUND_ETA_STORAGE_VERSION) {
+            localStorage.removeItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY);
             return {
                 version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-                source: 'server_candidate_created_at',
+                source: 'global_candidate_completed_intervals',
                 samples: [],
+                events: [],
+                epoch: 0,
+                pendingBoundary: true,
                 jobs: {}
             };
         }
         return store;
     } catch {
+        try {
+            localStorage.removeItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY);
+        } catch {}
         return {
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-            source: 'server_candidate_created_at',
+            source: 'global_candidate_completed_intervals',
             samples: [],
+            events: [],
+            epoch: 0,
+            pendingBoundary: true,
             jobs: {}
         };
     }
@@ -705,7 +716,7 @@ function writePlannerBackgroundEtaStore(store) {
         localStorage.setItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY, JSON.stringify({
             ...(store || {}),
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-            source: 'server_candidate_created_at'
+            source: 'global_candidate_completed_intervals'
         }));
     } catch {}
 }
@@ -715,6 +726,31 @@ function getPlannerBackgroundEtaSamples(store) {
         .map(value => Number(value))
         .filter(value => Number.isFinite(value) && value > 0)
         .slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
+}
+
+function getPlannerBackgroundEtaCompletionEvents(store) {
+    const events = (Array.isArray(store.events) ? store.events : [])
+        .map(event => ({
+            key: String(event?.key || '').trim(),
+            createdAtMs: Number(event?.createdAtMs),
+            epoch: Math.max(0, Number.parseInt(event?.epoch, 10) || 0)
+        }))
+        .filter(event => event.key && Number.isFinite(event.createdAtMs));
+    return [...new Map(events.map(event => [event.key, event])).values()]
+        .sort((a, b) => a.createdAtMs - b.createdAtMs || a.key.localeCompare(b.key))
+        .slice(-PLANNER_BACKGROUND_ETA_EVENT_LIMIT);
+}
+
+function getPlannerBackgroundEtaGlobalSamples(events = []) {
+    const samples = [];
+    for (let index = 1; index < events.length; index += 1) {
+        const from = events[index - 1];
+        const to = events[index];
+        if (from.epoch !== to.epoch) continue;
+        const durationMs = Math.round(to.createdAtMs - from.createdAtMs);
+        if (Number.isFinite(durationMs) && durationMs > 0) samples.push(durationMs);
+    }
+    return samples.slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
 }
 
 function getPlannerCandidateTimingEvents(source = {}) {
@@ -746,36 +782,20 @@ function getPlannerCandidateTimingEvents(source = {}) {
     );
 }
 
-function getPlannerCandidateTimingPairs(events = []) {
-    const pairs = [];
-    for (let index = 1; index < events.length; index += 1) {
-        const from = events[index - 1];
-        const to = events[index];
-        const durationMs = Math.round(to.createdAtMs - from.createdAtMs);
-        if (!Number.isFinite(durationMs) || durationMs <= 0) continue;
-        pairs.push({
-            key: `${from.key}>${to.key}`,
-            fromKey: from.key,
-            toKey: to.key,
-            durationMs
-        });
-    }
-    return pairs;
-}
-
-function resetPlannerBackgroundEtaJob(jobId, source = {}) {
+function resetPlannerBackgroundEtaJob(jobId, source = {}, options = {}) {
     if (!jobId) return;
     const now = Date.now();
     const store = readPlannerBackgroundEtaStore();
     const events = getPlannerCandidateTimingEvents(source);
-    const pairs = getPlannerCandidateTimingPairs(events);
-    const samples = getPlannerBackgroundEtaSamples(store);
-    const latestEvent = events[events.length - 1];
+    const currentEpoch = Math.max(0, Number.parseInt(store.epoch, 10) || 0);
+    const beginSession = options.beginSession !== false;
+    const epoch = beginSession && !store.pendingBoundary ? currentEpoch + 1 : currentEpoch;
+    const completionEvents = getPlannerBackgroundEtaCompletionEvents(store);
+    const samples = getPlannerBackgroundEtaGlobalSamples(completionEvents);
     const jobs = prunePlannerBackgroundEtaJobs({
         ...(store.jobs || {}),
         [jobId]: {
-            pairKeys: pairs.map(pair => pair.key),
-            skipAfterEventKey: latestEvent?.key || '',
+            eventKeys: events.map(event => event.key),
             observedAt: now,
             status: 'queued'
         }
@@ -784,6 +804,9 @@ function resetPlannerBackgroundEtaJob(jobId, source = {}) {
         ...store,
         samples,
         sampleCount: samples.length,
+        events: completionEvents,
+        epoch,
+        pendingBoundary: beginSession ? true : store.pendingBoundary !== false,
         updatedAt: new Date(now).toISOString(),
         jobs
     });
@@ -815,43 +838,33 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
     const store = readPlannerBackgroundEtaStore();
     const jobs = store.jobs || {};
     const previous = jobs[jobId] || {};
-    let samples = getPlannerBackgroundEtaSamples(store);
     const events = getPlannerCandidateTimingEvents(status);
-    const eventKeys = new Set(events.map(event => event.key));
-    const pairs = getPlannerCandidateTimingPairs(events);
-    const previousPairKeys = new Set(Array.isArray(previous.pairKeys) ? previous.pairKeys : []);
-    const initialized = Array.isArray(previous.pairKeys);
-    let skipAfterEventKey = String(previous.skipAfterEventKey || '');
-    if (skipAfterEventKey && !eventKeys.has(skipAfterEventKey)) skipAfterEventKey = '';
-    const newSamples = [];
-
-    if (initialized) {
-        for (const pair of pairs) {
-            if (previousPairKeys.has(pair.key)) continue;
-            if (skipAfterEventKey && pair.fromKey === skipAfterEventKey) {
-                skipAfterEventKey = '';
-                continue;
-            }
-            newSamples.push(pair.durationMs);
-        }
-    } else if (events.length) {
-        skipAfterEventKey = events[events.length - 1]?.key || '';
-    }
-
-    if (newSamples.length) {
-        samples = [...samples, ...newSamples].slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
-    }
+    const previousEventKeys = new Set(Array.isArray(previous.eventKeys) ? previous.eventKeys : []);
+    const initialized = Array.isArray(previous.eventKeys);
+    const newEvents = initialized
+        ? events.filter(event => !previousEventKeys.has(event.key))
+        : [];
+    const epoch = Math.max(0, Number.parseInt(store.epoch, 10) || 0);
+    const completionEvents = getPlannerBackgroundEtaCompletionEvents({
+        events: [
+            ...getPlannerBackgroundEtaCompletionEvents(store),
+            ...newEvents.map(event => ({
+                key: event.key,
+                createdAtMs: event.createdAtMs,
+                epoch
+            }))
+        ]
+    });
+    const samples = getPlannerBackgroundEtaGlobalSamples(completionEvents);
     const averageMs = getPlannerBackgroundEtaAverage(samples, store.averageMs);
     const sampleCount = samples.length;
-    const pairKeys = pairs.map(pair => pair.key);
-    const pairStateChanged = !initialized
-        || pairKeys.length !== previousPairKeys.size
-        || pairKeys.some(key => !previousPairKeys.has(key))
-        || skipAfterEventKey !== String(previous.skipAfterEventKey || '');
-    if (pairStateChanged || newSamples.length) {
+    const eventKeys = events.map(event => event.key);
+    const eventStateChanged = !initialized
+        || eventKeys.length !== previousEventKeys.size
+        || eventKeys.some(key => !previousEventKeys.has(key));
+    if (eventStateChanged || newEvents.length) {
         jobs[jobId] = {
-            pairKeys,
-            skipAfterEventKey,
+            eventKeys,
             observedAt: now,
             status: status.status
         };
@@ -860,6 +873,9 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
             averageMs,
             sampleCount,
             samples,
+            events: completionEvents,
+            epoch,
+            pendingBoundary: newEvents.length ? false : store.pendingBoundary !== false,
             updatedAt: new Date(now).toISOString(),
             jobs: prunePlannerBackgroundEtaJobs(jobs)
         });
@@ -867,7 +883,7 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
 
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'server_candidate_completed_intervals',
+        source: 'global_candidate_completed_intervals',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
@@ -5056,7 +5072,11 @@ async function startPlannerBackgroundRun(project, meta, targetItems, situationId
     if (!res.ok) {
         throw new Error(data.error || '백그라운드 생성 등록에 실패했습니다.');
     }
-    if (!data.existing) resetPlannerBackgroundEtaJob(data.runKey || meta.runKey, meta);
+    if (!data.existing) {
+        resetPlannerBackgroundEtaJob(data.runKey || meta.runKey, meta, {
+            beginSession: !batch || Number(batch.index || 0) === 0
+        });
+    }
 
     const nextMeta = {
         ...meta,
@@ -5194,7 +5214,7 @@ async function controlPlannerBackgroundEntries(project, entries, action) {
     if (!endpoint) return false;
 
     const nextPollingJobIds = [];
-    for (const entry of entries) {
+    for (const [entryIndex, entry] of entries.entries()) {
         const meta = entry.meta;
         const jobId = meta.backgroundJobId;
         const runKey = meta.runKey;
@@ -5219,7 +5239,7 @@ async function controlPlannerBackgroundEntries(project, entries, action) {
             );
             removePlannerBackgroundPollingJob(runKey);
         } else if (action === 'resume') {
-            resetPlannerBackgroundEtaJob(runKey, meta);
+            resetPlannerBackgroundEtaJob(runKey, meta, { beginSession: entryIndex === 0 });
             meta.status = 'running';
             meta.stage = 'running';
             meta.stageLabel = getPlannerStageLabel('running');
