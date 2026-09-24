@@ -2,7 +2,7 @@
 import './state.js?v=planner-demo-20260525a';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=planner-sync-preserve-20260608a';
-import * as Explorer from './explorer.js';
+import * as Explorer from './explorer.js?v=file-sort-20260925a';
 import * as Craft from './craft.js?v=novelai-v5-20260823e';
 import * as TempGallery from './temp_gallery.js?v=novelai-v5-20260823d';
 import * as Modals from './modals.js?v=novelai-v5-20260823d';

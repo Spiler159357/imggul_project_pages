@@ -4,6 +4,7 @@
     "build": "npm run build:version",
     "build:version": "node scripts/generate-build-version.mjs",
     "check:image-serving": "node scripts/check-image-serving.mjs",
+    "check:file-name-sort": "node scripts/check-file-name-sort.mjs",
     "check:guest-image-visibility": "node scripts/check-guest-image-visibility.mjs",
     "check:project-visibility": "node scripts/check-project-visibility.mjs",
     "check:novelai-v5": "node scripts/check-novelai-v5.mjs",

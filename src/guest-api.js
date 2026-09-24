@@ -1,5 +1,6 @@
 import { jsonResponse } from './worker-utils.js';
 import { isPublicR2ImageObject } from './image-serving.js';
+import { compareNumberedFileNames } from '../public/js/file-name-sort.js';
 
 const IMAGE_EXTENSIONS = new Set(['webp', 'png', 'jpg', 'jpeg']);
 const IMAGE_MIME_TYPES = new Set(['image/webp', 'image/png', 'image/jpeg']);
@@ -290,7 +291,7 @@ async function getCharacterImages(env, character, situations = { byImageNumber: 
         .map(object => ({ object, relativePath: object.key.slice(character.prefix.length) }))
         .filter(item => isGuestImageRelativePath(item.relativePath))
         .filter(item => isPublicR2ImageObject(item.object.key, item.object.customMetadata))
-        .sort((a, b) => a.relativePath.localeCompare(b.relativePath, 'ko', { numeric: true }))
+        .sort((a, b) => compareNumberedFileNames(a.relativePath, b.relativePath))
         .map(item => {
             const pathParts = item.relativePath.split('/').filter(Boolean);
             const fileName = pathParts.pop() || item.relativePath;

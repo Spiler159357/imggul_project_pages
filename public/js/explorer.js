@@ -1,4 +1,6 @@
 // 4. explorer.js: 탐색기 화면 전용 로직
+import { compareNumberedFileNames } from './file-name-sort.js';
+
 const EXPLORER_HIDDEN_FOLDER_NAMES = new Set(['_planner_temp_image']);
 const EXPLORER_HIDDEN_FILE_NAMES = new Set(['prompt.md', 'style_prompt.md']);
 
@@ -68,7 +70,9 @@ export async function loadPath(prefix, skipHistory = false) {
 
         const data = await listRes.json();
         const visibleFolders = (data.folders || []).filter(isExplorerVisibleFolder);
-        const visibleFiles = (data.files || []).filter(isExplorerVisibleFile);
+        const visibleFiles = (data.files || [])
+            .filter(isExplorerVisibleFile)
+            .sort((left, right) => compareNumberedFileNames(left.key, right.key));
         window.FOLDER_DATA_CACHE[prefix] = { folders: visibleFolders, files: visibleFiles, timestamp: Date.now(), scrollY: 0 };
         window.updateBreadcrumbs(prefix);
         window.renderFiles(visibleFolders, visibleFiles);
