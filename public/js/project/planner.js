@@ -13,6 +13,9 @@ const PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 3;
 const PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS = 10000;
 const PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT = 100;
 const PLANNER_BACKGROUND_ETA_EVENT_LIMIT = PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT * 2 + 1;
+const PLANNER_BACKGROUND_ETA_ANALYSIS_LIMIT = 30;
+const PLANNER_BACKGROUND_ETA_MIN_HEALTH_SAMPLES = 5;
+const PLANNER_BACKGROUND_ETA_SHIFT_SAMPLE_COUNT = 5;
 const DEFAULT_PLANNER_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const plannerMetaMemoryCache = new Map();
 const plannerBackgroundPollInFlight = new Map();
@@ -643,14 +646,18 @@ function getPlannerQueueEta(queueMetas = []) {
     const remainingCount = Math.max(0, summary.totalImages - summary.completedImages - summary.failed);
     const store = readPlannerBackgroundEtaStore();
     const samples = getPlannerBackgroundEtaSamples(store);
-    const averageMs = getPlannerBackgroundEtaAverage(samples, store.averageMs);
-    const sampleCount = samples.length;
+    const analysis = getPlannerBackgroundEtaAnalysis(samples, store.averageMs);
+    const averageMs = analysis.averageMs;
+    const sampleCount = analysis.acceptedCount;
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
         source: 'global_candidate_completed_intervals',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
+        rawSampleCount: analysis.rawSampleCount,
+        outlierCount: analysis.outlierCount,
+        health: analysis.health,
         remainingCount,
         remainingMs,
         remainingText: formatPlannerDuration(remainingMs),
@@ -726,6 +733,160 @@ function getPlannerBackgroundEtaSamples(store) {
         .map(value => Number(value))
         .filter(value => Number.isFinite(value) && value > 0)
         .slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
+}
+
+function getPlannerMedian(values = []) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2
+        ? sorted[middle]
+        : (sorted[middle - 1] + sorted[middle]) / 2;
+}
+
+function getPlannerPercentile(values = [], percentile = 0.5) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const position = Math.max(0, Math.min(1, percentile)) * (sorted.length - 1);
+    const lower = Math.floor(position);
+    const upper = Math.ceil(position);
+    if (lower === upper) return sorted[lower];
+    return sorted[lower] + ((sorted[upper] - sorted[lower]) * (position - lower));
+}
+
+function getPlannerTrimmedAverage(values = []) {
+    if (!values.length) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const trimCount = sorted.length >= 10 ? Math.floor(sorted.length * 0.1) : 0;
+    const trimmed = trimCount ? sorted.slice(trimCount, -trimCount) : sorted;
+    return Math.round(trimmed.reduce((sum, value) => sum + value, 0) / trimmed.length);
+}
+
+function getPlannerBackgroundEtaAnalysis(samples = [], fallbackAverageMs = 0) {
+    const raw = samples
+        .map(value => Number(value))
+        .filter(value => Number.isFinite(value) && value > 0)
+        .slice(-PLANNER_BACKGROUND_ETA_ANALYSIS_LIMIT);
+    const fallback = Number(fallbackAverageMs || 0);
+    const safeFallback = Number.isFinite(fallback) && fallback > 0
+        ? fallback
+        : PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS;
+    if (!raw.length) {
+        return {
+            averageMs: safeFallback,
+            acceptedCount: 0,
+            rawSampleCount: 0,
+            outlierCount: 0,
+            health: 'orange',
+            healthLabel: '측정 중'
+        };
+    }
+
+    const median = getPlannerMedian(raw);
+    const mad = getPlannerMedian(raw.map(value => Math.abs(value - median)));
+    const upperFence = Math.max(
+        median * 3,
+        median + (6 * 1.4826 * mad)
+    );
+    const shiftWindow = raw.slice(-PLANNER_BACKGROUND_ETA_SHIFT_SAMPLE_COUNT);
+    const shiftBaseline = raw.slice(0, -PLANNER_BACKGROUND_ETA_SHIFT_SAMPLE_COUNT);
+    const shiftBaselineMedian = getPlannerMedian(shiftBaseline);
+    const shiftMedian = getPlannerMedian(shiftWindow);
+    const shiftedSampleCount = shiftBaselineMedian > 0
+        ? shiftWindow.filter(value => value >= shiftBaselineMedian * 1.5).length
+        : 0;
+    const sustainedShift = shiftWindow.length >= PLANNER_BACKGROUND_ETA_SHIFT_SAMPLE_COUNT
+        && shiftBaseline.length >= PLANNER_BACKGROUND_ETA_MIN_HEALTH_SAMPLES
+        && shiftedSampleCount >= PLANNER_BACKGROUND_ETA_SHIFT_SAMPLE_COUNT - 1
+        && shiftMedian >= shiftBaselineMedian * 1.5;
+    const accepted = sustainedShift
+        ? shiftWindow
+        : raw.filter(value => value <= upperFence);
+    const effective = accepted.length ? accepted : [median];
+    const averageMs = getPlannerTrimmedAverage(effective) || safeFallback;
+    const outlierCount = raw.filter(value => value > upperFence).length;
+    const outlierRate = outlierCount / raw.length;
+    const recentOutlierCount = [...raw].reverse().findIndex(value => value <= upperFence);
+    const consecutiveOutliers = recentOutlierCount === -1 ? raw.length : recentOutlierCount;
+    const shortWindow = raw.slice(-Math.min(10, raw.length));
+    const baselineWindow = raw.slice(0, Math.max(0, raw.length - shortWindow.length));
+    const baselineMedian = getPlannerMedian(baselineWindow);
+    const slowdownRatio = baselineMedian > 0 ? getPlannerMedian(shortWindow) / baselineMedian : 1;
+    const spreadRatio = median > 0 ? getPlannerPercentile(raw, 0.8) / median : 1;
+
+    let health = 'green';
+    let healthLabel = '안정적';
+    if (raw.length < PLANNER_BACKGROUND_ETA_MIN_HEALTH_SAMPLES) {
+        health = 'orange';
+        healthLabel = '측정 중';
+    } else if (!sustainedShift && (outlierRate >= 0.3 || consecutiveOutliers >= 2)) {
+        health = 'red';
+        healthLabel = '불안정';
+    } else if (
+        sustainedShift
+        || outlierRate >= 0.1
+        || consecutiveOutliers >= 1
+        || slowdownRatio >= 1.5
+        || spreadRatio >= 2
+    ) {
+        health = 'orange';
+        healthLabel = sustainedShift || slowdownRatio >= 1.5 ? '지연됨' : '주의 필요';
+    }
+
+    return {
+        averageMs,
+        acceptedCount: effective.length,
+        rawSampleCount: raw.length,
+        outlierCount,
+        upperFence,
+        sustainedShift,
+        health,
+        healthLabel
+    };
+}
+
+function renderPlannerBackgroundHealthBadge() {
+    const store = readPlannerBackgroundEtaStore();
+    const analysis = getPlannerBackgroundEtaAnalysis(getPlannerBackgroundEtaSamples(store), store.averageMs);
+    const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
+    const activeMeta = window.PROJECT_PLANNER_META || null;
+    const isActive = queueMetas.some(entry => isPlannerActiveStatus(entry?.meta?.status))
+        || isPlannerActiveStatus(activeMeta?.status);
+    const completionEvents = getPlannerBackgroundEtaCompletionEvents(store);
+    const latestCompletionMs = completionEvents[completionEvents.length - 1]?.createdAtMs || 0;
+    const storeUpdatedMs = Date.parse(String(store.updatedAt || ''));
+    const referenceMs = store.pendingBoundary
+        ? storeUpdatedMs
+        : Math.max(latestCompletionMs, Number.isFinite(storeUpdatedMs) ? storeUpdatedMs : 0);
+    const elapsedMs = referenceMs > 0 ? Math.max(0, Date.now() - referenceMs) : 0;
+    const warningStallMs = Math.max(60000, analysis.averageMs * 3);
+    const criticalStallMs = Math.max(180000, analysis.averageMs * 8);
+    let displayHealth = analysis.health;
+    let displayLabel = analysis.healthLabel;
+    if (isActive && elapsedMs >= criticalStallMs) {
+        displayHealth = 'red';
+        displayLabel = '응답 지연';
+    } else if (isActive && elapsedMs >= warningStallMs) {
+        displayHealth = 'orange';
+        displayLabel = '응답 대기';
+    } else if (!isActive && elapsedMs >= 30 * 60 * 1000) {
+        displayHealth = 'orange';
+        displayLabel = '최근 측정 없음';
+    }
+    const colors = {
+        green: 'border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400',
+        orange: 'border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/40 text-orange-500 dark:text-orange-400',
+        red: 'border-red-200 dark:border-red-800 bg-red-50 dark:bg-red-950/40 text-red-600 dark:text-red-400'
+    };
+    const title = analysis.rawSampleCount
+        ? `NovelAI 생성 상태: ${displayLabel} · 안전 평균 ${formatPlannerDuration(analysis.averageMs)} · 최근 ${analysis.rawSampleCount}개 중 이상치 ${analysis.outlierCount}개 제외`
+        : `NovelAI 생성 상태: ${displayLabel} · 완료 샘플이 쌓이면 상태를 판정합니다.`;
+    return `
+        <span class="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border ${colors[displayHealth]}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
+            <i data-lucide="circle" class="h-3 w-3 fill-current stroke-current"></i>
+            <span class="sr-only">${escapeHtml(displayLabel)}</span>
+        </span>
+    `;
 }
 
 function getPlannerBackgroundEtaCompletionEvents(store) {
@@ -812,14 +973,6 @@ function resetPlannerBackgroundEtaJob(jobId, source = {}, options = {}) {
     });
 }
 
-function getPlannerBackgroundEtaAverage(samples, fallbackAverageMs = 0) {
-    if (samples.length) {
-        return Math.round(samples.reduce((sum, value) => sum + value, 0) / samples.length);
-    }
-    const fallback = Number(fallbackAverageMs || 0);
-    return Number.isFinite(fallback) && fallback > 0 ? fallback : PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS;
-}
-
 function prunePlannerBackgroundEtaJobs(jobs = {}) {
     return Object.fromEntries(
         Object.entries(jobs)
@@ -856,8 +1009,9 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
         ]
     });
     const samples = getPlannerBackgroundEtaGlobalSamples(completionEvents);
-    const averageMs = getPlannerBackgroundEtaAverage(samples, store.averageMs);
-    const sampleCount = samples.length;
+    const analysis = getPlannerBackgroundEtaAnalysis(samples, store.averageMs);
+    const averageMs = analysis.averageMs;
+    const sampleCount = analysis.acceptedCount;
     const eventKeys = events.map(event => event.key);
     const eventStateChanged = !initialized
         || eventKeys.length !== previousEventKeys.size
@@ -887,6 +1041,9 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
+        rawSampleCount: analysis.rawSampleCount,
+        outlierCount: analysis.outlierCount,
+        health: analysis.health,
         remainingCount,
         remainingMs,
         remainingText: formatPlannerDuration(remainingMs),
@@ -2950,6 +3107,7 @@ export function renderPlannerPanel(project, situations) {
                     <div data-nai-usage-surface="planner" aria-live="polite" class="flex flex-shrink-0 items-center gap-1">
                         <span data-nai-v5-usage class="flex-shrink-0 whitespace-nowrap rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-gray-500 dark:text-gray-300" title="NovelAI V5 무료 사용량">V5 --%</span>
                         <span data-nai-anlas-balance class="flex-shrink-0 whitespace-nowrap rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-gray-500 dark:text-gray-300" title="NovelAI 잔여 Anlas">-- Anlas</span>
+                        ${renderPlannerBackgroundHealthBadge()}
                     </div>
                     ${targetSelector}
                     <div class="flex items-center justify-end gap-1">
