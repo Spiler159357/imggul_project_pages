@@ -3,10 +3,10 @@ import './state.js?v=planner-demo-20260525a';
 import * as Api from './api.js?v=temp-meta-trace-20260521';
 import * as Ui from './ui.js?v=planner-sync-preserve-20260608a';
 import * as Explorer from './explorer.js?v=file-sort-20260925a';
-import * as Craft from './craft.js?v=novelai-v5-20260823e';
+import * as Craft from './craft.js?v=planner-eta-health-20260925b';
 import * as TempGallery from './temp_gallery.js?v=novelai-v5-20260823d';
 import * as Modals from './modals.js?v=novelai-v5-20260823d';
-import * as Project from './project.js?v=planner-eta-health-20260925a';
+import * as Project from './project.js?v=planner-eta-health-20260925b';
 import * as ImageEditor from './image_editor.js?v=image-editor-history-20260607a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=planner-v4-weight-20260829a';
 

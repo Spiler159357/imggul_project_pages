@@ -725,6 +725,7 @@ function writePlannerBackgroundEtaStore(store) {
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
             source: 'global_candidate_completed_intervals'
         }));
+        syncPlannerBackgroundHealthDisplays();
     } catch {}
 }
 
@@ -845,7 +846,7 @@ function getPlannerBackgroundEtaAnalysis(samples = [], fallbackAverageMs = 0) {
     };
 }
 
-function renderPlannerBackgroundHealthBadge() {
+function getPlannerBackgroundHealthBadgeState() {
     const store = readPlannerBackgroundEtaStore();
     const analysis = getPlannerBackgroundEtaAnalysis(getPlannerBackgroundEtaSamples(store), store.averageMs);
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
@@ -881,10 +882,30 @@ function renderPlannerBackgroundHealthBadge() {
     const title = analysis.rawSampleCount
         ? `NovelAI 생성 상태: ${displayLabel} · 안전 평균 ${formatPlannerDuration(analysis.averageMs)} · 최근 ${analysis.rawSampleCount}개 중 이상치 ${analysis.outlierCount}개 제외`
         : `NovelAI 생성 상태: ${displayLabel} · 완료 샘플이 쌓이면 상태를 판정합니다.`;
+    return {
+        className: `inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border ${colors[displayHealth]}`,
+        label: displayLabel,
+        title
+    };
+}
+
+export function syncPlannerBackgroundHealthDisplays() {
+    const state = getPlannerBackgroundHealthBadgeState();
+    document.querySelectorAll('[data-planner-background-health]').forEach(badge => {
+        badge.className = state.className;
+        badge.title = state.title;
+        badge.setAttribute('aria-label', state.title);
+        const label = badge.querySelector('[data-planner-background-health-label]');
+        if (label) label.textContent = state.label;
+    });
+}
+
+function renderPlannerBackgroundHealthBadge() {
+    const state = getPlannerBackgroundHealthBadgeState();
     return `
-        <span class="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border ${colors[displayHealth]}" title="${escapeHtml(title)}" aria-label="${escapeHtml(title)}">
+        <span data-planner-background-health class="${state.className}" title="${escapeHtml(state.title)}" aria-label="${escapeHtml(state.title)}">
             <i data-lucide="circle" class="h-3 w-3 fill-current stroke-current"></i>
-            <span class="sr-only">${escapeHtml(displayLabel)}</span>
+            <span data-planner-background-health-label class="sr-only">${escapeHtml(state.label)}</span>
         </span>
     `;
 }

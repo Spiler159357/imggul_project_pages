@@ -481,6 +481,10 @@
                         <div data-nai-usage-surface="craft" aria-live="polite" class="flex flex-shrink-0 items-center gap-1">
                             <span data-nai-v5-usage class="flex-shrink-0 whitespace-nowrap rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-gray-500 dark:text-gray-300" title="NovelAI V5 무료 사용량">V5 --%</span>
                             <span data-nai-anlas-balance class="flex-shrink-0 whitespace-nowrap rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-gray-500 dark:text-gray-300" title="NovelAI 잔여 Anlas">-- Anlas</span>
+                            <span data-planner-background-health class="inline-flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-md border border-orange-200 dark:border-orange-800 bg-orange-50 dark:bg-orange-950/40 text-orange-500 dark:text-orange-400" title="NovelAI 생성 상태: 측정 중" aria-label="NovelAI 생성 상태: 측정 중">
+                                <i data-lucide="circle" class="h-3 w-3 fill-current stroke-current"></i>
+                                <span data-planner-background-health-label class="sr-only">측정 중</span>
+                            </span>
                         </div>
                         <button id="craft-clear-temp-btn" onclick="window.clearTempGallery()" class="flex-shrink-0 text-red-500 hover:text-white hover:bg-red-500 dark:text-red-400 p-1.5 rounded-md transition bg-red-50 dark:bg-red-900/30 dark:hover:bg-red-600 h-8 sm:h-9 flex items-center justify-center px-2 sm:px-3" title="임시 보관함 일괄 삭제">
                             <i data-lucide="trash-2" class="w-4 h-4 sm:mr-1"></i> <span class="hidden sm:inline text-xs font-bold">임시함 비우기</span>
@@ -1219,6 +1223,6 @@
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=planner-eta-health-20260925a"></script>
+    <script type="module" src="/js/main.js?v=planner-eta-health-20260925b"></script>
 </body>
 </html>

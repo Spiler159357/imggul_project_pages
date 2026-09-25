@@ -336,6 +336,7 @@ export function syncNovelAiUsageDisplays() {
         balance.className = balanceClassName;
         balance.title = getNovelAiSubscriptionBalanceLabel() || 'NovelAI 잔여 Anlas를 확인할 수 없습니다.';
     });
+    window.syncPlannerBackgroundHealthDisplays?.();
 }
 
 function getCurrentNovelAiCostInput(overrides = {}) {
