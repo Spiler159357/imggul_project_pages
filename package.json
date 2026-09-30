@@ -8,6 +8,7 @@
     "check:guest-image-visibility": "node scripts/check-guest-image-visibility.mjs",
     "check:project-visibility": "node scripts/check-project-visibility.mjs",
     "check:novelai-v5": "node scripts/check-novelai-v5.mjs",
+    "check:planner-background-recovery": "node scripts/check-planner-background-recovery.mjs",
     "postinstall": "npm run build:version",
     "deploy:background": "wrangler deploy -c wrangler.background.toml"
   },

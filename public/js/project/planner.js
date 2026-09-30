@@ -561,6 +561,8 @@ export function getPlannerStageLabel(stage) {
         r2_put: 'R2 저장',
         metadata_put: '메타데이터 저장',
         rollup: '상태 갱신',
+        cooldown: 'NovelAI 제한 해제 대기',
+        retrying: '이미지 재생성 대기',
         completed: '완료',
         failed: '실패',
         paused: '일시정지됨',
@@ -627,6 +629,16 @@ function getPlannerQueueSummary(queueMetas = []) {
     );
     const paused = !active && !cancelling && queueMetas.some(entry => isPlannerResumableStatus(entry.meta.status));
     const failed = entries.reduce((sum, entry) => sum + getPlannerItemFailedCount(entry.item), 0);
+    const now = Date.now();
+    const recoverableEntry = queueMetas.find(entry => {
+        const background = entry.meta?.backgroundStatus || {};
+        if (!['queued', 'running'].includes(background.status || entry.meta?.status)) return false;
+        const updatedAt = Date.parse(background.updatedAt || entry.meta?.updatedAt || '');
+        const nextRetryAt = Date.parse(background.nextRetryAt || '');
+        return Number.isFinite(updatedAt)
+            && now - updatedAt >= 12 * 60 * 1000
+            && (!Number.isFinite(nextRetryAt) || nextRetryAt <= now);
+    }) || null;
     return {
         entries,
         totalItems: entries.length,
@@ -636,8 +648,25 @@ function getPlannerQueueSummary(queueMetas = []) {
         active,
         cancelling,
         paused,
+        recoverableEntry,
         status: cancelling ? 'cancel_requested' : active ? 'running' : paused ? 'paused' : (queueMetas[0]?.meta?.status || 'draft')
     };
+}
+
+function renderPlannerRetryNotice(status = {}) {
+    if (!status?.nextRetryAt) return '';
+    const remainingMs = Math.max(0, Date.parse(status.nextRetryAt) - Date.now());
+    const retryLabel = status.retryKind === 'rate_limit'
+        ? 'NovelAI 생성 제한으로 대기 중'
+        : '실패한 이미지를 다시 생성할 예정';
+    const attempt = Number(status.retryAttempt || 0);
+    return `
+        <div class="mt-3 rounded-lg border border-amber-200 dark:border-amber-900/70 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 text-[11px] text-amber-800 dark:text-amber-200">
+            <span class="font-bold">${escapeHtml(retryLabel)}</span>
+            · ${escapeHtml(formatPlannerDuration(remainingMs))} 후 재시도
+            ${attempt > 0 ? ` · 재생성 ${attempt}회` : ''}
+        </div>
+    `;
 }
 
 function getPlannerQueueEta(queueMetas = []) {
@@ -2338,6 +2367,7 @@ export function renderPlannerProgressPanel(meta) {
     const progressCount = Math.min(total, doneCount + failedCount);
     const percent = total ? Math.round((progressCount / total) * 100) : 0;
     const eta = meta.backgroundStatus?.eta || meta.eta || null;
+    const retryStatus = meta.backgroundStatus || meta;
 
     return `
         <div class="mb-4 rounded-xl border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
@@ -2358,6 +2388,7 @@ export function renderPlannerProgressPanel(meta) {
                 </div>
             </div>
             ${eta ? `<div class="mt-3 flex flex-wrap gap-2">${renderPlannerEtaBadge(eta)}</div>` : ''}
+            ${renderPlannerRetryNotice(retryStatus)}
             <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
                 <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
             </div>
@@ -2385,6 +2416,7 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
     const activeEntry = summary.entries.find(entry => isPlannerActiveStatus(entry.item.status) || isPlannerActiveStatus(entry.meta.status));
     const statusText = summary.cancelling ? '취소 처리 중' : summary.active ? '생성 진행 중' : summary.paused ? '일시정지됨' : '대기열';
     const eta = getPlannerQueueEta(queueMetas);
+    const activeStatus = activeEntry?.meta?.backgroundStatus || activeEntry?.meta || {};
     return `
         <div class="mb-4 rounded-lg border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2394,7 +2426,7 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
                         ${statusText}
                     </p>
                     <p class="mt-1 text-xs text-indigo-700/80 dark:text-indigo-300/80 truncate">
-                        ${activeEntry ? `${escapeHtml(activeEntry.character.name || activeEntry.character.folderName || activeEntry.character.id)} / ${escapeHtml(activeEntry.item.imageNumber)}.webp / ${escapeHtml(activeEntry.item.situationName || activeEntry.item.situationId)} · ${escapeHtml(getPlannerStageLabel(activeEntry.item.stage) || getPlannerStatusLabel(activeEntry.item.status))}` : '캐릭터별 대기열을 확인할 수 있습니다.'}
+                        ${activeEntry ? `${escapeHtml(activeEntry.character.name || activeEntry.character.folderName || activeEntry.character.id)} / ${escapeHtml(activeEntry.item.imageNumber)}.webp / ${escapeHtml(activeEntry.item.situationName || activeEntry.item.situationId)} · ${escapeHtml(getPlannerStageLabel(activeStatus.stage || activeEntry.item.stage) || getPlannerStatusLabel(activeEntry.item.status))}` : '캐릭터별 대기열을 확인할 수 있습니다.'}
                     </p>
                 </div>
                 <div class="flex items-center gap-2 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
@@ -2404,6 +2436,7 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
                 </div>
             </div>
             ${eta ? `<div class="mt-3 flex flex-wrap gap-2">${renderPlannerEtaBadge(eta)}</div>` : ''}
+            ${renderPlannerRetryNotice(activeStatus)}
             <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
                 <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
             </div>
@@ -2431,6 +2464,11 @@ function renderPlannerRunControls(summary) {
         ${summary.paused ? `
             <button type="button" onclick="window.resumePlannerGeneration()" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 ${pendingClass}">
                 <i data-lucide="rotate-cw" class="w-4 h-4"></i> 재개하기
+            </button>
+        ` : ''}
+        ${summary.recoverableEntry ? `
+            <button type="button" onclick="window.recoverPlannerBackgroundGeneration('${escapeJsString(summary.recoverableEntry.meta?.runKey || '')}')" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-bold hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${pendingClass}">
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i> 작업 복구
             </button>
         ` : ''}
         ${summary.cancelling ? `
@@ -4884,6 +4922,35 @@ export function refreshPlannerBackgroundStatus(jobId = null, options = {}) {
         if (render) renderPlannerIfVisible();
         return status;
     });
+}
+
+export async function recoverPlannerBackgroundGeneration(jobId = null) {
+    const project = getActiveProject();
+    const meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const targetJobId = resolvePlannerRunKey(jobId, meta);
+    if (!project || !targetJobId) return null;
+
+    setPlannerStatus('중단된 백그라운드 작업을 복구하고 있습니다.');
+    const res = await fetch('/api/planner/compact/generate/recover', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ runKey: targetJobId })
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        setPlannerStatus(data.error || '백그라운드 작업 복구에 실패했습니다.');
+        return null;
+    }
+    if (data.requeued) {
+        setPlannerStatus('중단된 백그라운드 작업을 다시 대기열에 등록했습니다.');
+        startPlannerBackgroundPolling(targetJobId);
+    } else if (data.reason === 'cooldown') {
+        setPlannerStatus('NovelAI 제한 해제 대기 중입니다. 예정된 시각에 자동으로 재개됩니다.');
+    } else {
+        setPlannerStatus('현재 복구가 필요한 작업이 없습니다.');
+    }
+    await refreshPlannerBackgroundStatus(targetJobId).catch(() => null);
+    return data;
 }
 
 export async function cancelPlannerBackgroundGeneration(jobId = null) {

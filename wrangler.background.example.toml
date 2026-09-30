@@ -16,16 +16,15 @@ binding = "imgBucket"
 bucket_name = "imggul-storage"
 
 [triggers]
-crons = ["17 */6 * * *"]
+crons = ["*/2 * * * *", "17 */6 * * *"]
 
 [[queues.consumers]]
 queue = "imggul-queue"
 max_batch_size = 1
 max_batch_timeout = 30
-max_retries = 2
+max_retries = 5
 max_concurrency = 1
-# Uncomment after creating a DLQ.
-# dead_letter_queue = "imggul-generation-dlq"
+dead_letter_queue = "imggul-generation-dlq"
 
 [[queues.producers]]
 binding = "GENERATION_QUEUE"

@@ -32,6 +32,7 @@ import {
     putPlannerCompactItemFromMeta,
     putPlannerCompactRunFromMeta,
     putPlannerCompactSettings,
+    recoverPlannerCompactGeneration,
     resumePlannerCompactGeneration,
     startPlannerCompactGeneration,
     updatePlannerCompactItem
@@ -2562,6 +2563,22 @@ export async function onRequest(context) {
             const data = await resumePlannerCompactGeneration(env, { runKey: body.runKey });
             return jsonResponse(data);
         } catch (e) {
+            return plannerApiErrorResponse(e);
+        }
+    }
+
+    if (path === "/api/planner/compact/generate/recover" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            if (!body?.runKey) return jsonResponse({ error: 'runKey is required' }, { status: 400 });
+            const data = await recoverPlannerCompactGeneration(env, { runKey: body.runKey }, {
+                force: body.force === true,
+                reason: 'manual'
+            });
+            return jsonResponse(data);
+        } catch (e) {
+            await writeBackgroundErrorLog(env, e, { route: path, method, stage: "planner_compact_recover_api" });
             return plannerApiErrorResponse(e);
         }
     }

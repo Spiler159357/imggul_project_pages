@@ -9,6 +9,9 @@ const PAYLOAD_WARNING_BYTES = 1_250_000;
 const PAYLOAD_LIMIT_BYTES = 1_500_000;
 const MAX_OPTIMISTIC_RETRIES = 3;
 const CONFIRM_RETENTION_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_SLOT_REGENERATION_ATTEMPTS = 3;
+const DEFAULT_STALE_JOB_MS = 12 * 60 * 1000;
+const DEFAULT_STALE_JOB_LIMIT = 25;
 
 function plannerError(code, status, message) {
     const error = new Error(message);
@@ -41,6 +44,19 @@ function asString(value, fallback = "") {
 function asNonNegativeInteger(value, fallback = 0) {
     const number = Number.parseInt(value, 10);
     return Number.isFinite(number) && number >= 0 ? number : fallback;
+}
+
+function normalizeRetryState(value = {}) {
+    const source = value && typeof value === "object" ? value : {};
+    return {
+        assetId: asString(source.assetId),
+        transientAttempts: asNonNegativeInteger(source.transientAttempts, 0),
+        regenerationAttempts: asNonNegativeInteger(source.regenerationAttempts, 0),
+        lastErrorKind: asString(source.lastErrorKind),
+        lastErrorMessage: asString(source.lastErrorMessage),
+        nextRetryAt: asString(source.nextRetryAt),
+        lastFailureToken: asString(source.lastFailureToken)
+    };
 }
 
 function clampTargetCount(value, fallback = 1) {
@@ -521,6 +537,7 @@ function assertRunEditable(currentPayload, nextPayload) {
 
 function compactStatusFromRun(payload) {
     const job = payload.activeJob;
+    const retryState = normalizeRetryState(job?.retryState);
     return {
         runId: payload.runId,
         jobId: job?.jobId || "",
@@ -535,6 +552,13 @@ function compactStatusFromRun(payload) {
         stage: asString(job?.stage, job?.status || payload.status || "draft"),
         stageLabel: asString(job?.stageLabel, job?.status || payload.status || "Draft"),
         errorMessage: asString(job?.lastError),
+        retryKind: retryState.lastErrorKind,
+        retryAttempt: retryState.regenerationAttempts || retryState.transientAttempts,
+        nextRetryAt: retryState.nextRetryAt,
+        lastProgressAt: asString(job?.lastProgressAt),
+        lastDispatchAt: asString(job?.lastDispatchAt),
+        lastRecoveryAt: asString(job?.lastRecoveryAt),
+        recoveryCount: asNonNegativeInteger(job?.recoveryCount, 0),
         updatedAt: asString(job?.updatedAt || payload.updatedAt)
     };
 }
@@ -873,6 +897,18 @@ function pointerFromSlot(slot, fallbackGlobalIndex = 0) {
     };
 }
 
+function makePlannerCompactQueueMessage(recordKey, job, slot, extra = {}) {
+    if (!recordKey || !job || !slot) return null;
+    return {
+        plannerCompact: true,
+        runKey: recordKey,
+        jobId: job.jobId,
+        generationSequence: job.generationSequence,
+        expectedGlobalImageIndex: slot.globalImageIndex,
+        ...extra
+    };
+}
+
 function plannerTempPrefix(payload) {
     const projectPrefix = asString(payload.projectPrefix)
         .replace(/\\/g, "/")
@@ -898,7 +934,12 @@ function recalculateJob(payload, job) {
     const next = nextRunnableSlot(payload, job);
     let status = job.status;
     if (!next && !["cancel_requested", "cancelled"].includes(status)) {
-        status = failedCount > 0 ? (completedCount > 0 ? "partial_failed" : "failed") : "completed";
+        const targetSatisfied = completedCount === slots.length && failedCount === 0;
+        status = targetSatisfied
+            ? "completed"
+            : failedCount > 0
+                ? (completedCount > 0 ? "partial_failed" : "failed")
+                : status;
     }
     return {
         ...job,
@@ -948,16 +989,20 @@ export async function startPlannerCompactGeneration(env, body = {}) {
     if (!record) throw plannerError("PLANNER_RUN_NOT_FOUND", 404, "Planner run not found.");
 
     if (ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
-        if (record.payload.activeJob.status === "queued" && record.payload.activeJob.mode === "background" && env.GENERATION_QUEUE) {
-            await env.GENERATION_QUEUE.send({
-                plannerCompact: true,
-                runKey: record.recordKey,
-                jobId: record.payload.activeJob.jobId,
-                generationSequence: record.payload.activeJob.generationSequence,
-                expectedGlobalImageIndex: record.payload.activeJob.next?.globalImageIndex || 0
+        let recovery = null;
+        if (["queued", "running"].includes(record.payload.activeJob.status)
+            && record.payload.activeJob.mode === "background"
+            && env.GENERATION_QUEUE) {
+            recovery = await recoverPlannerCompactGeneration(env, { runKey: record.recordKey }, {
+                reason: "start"
             });
         }
-        return { ...compactStatusFromRun(record.payload), runKey: record.recordKey, existing: true };
+        return {
+            ...compactStatusFromRun(record.payload),
+            runKey: record.recordKey,
+            existing: true,
+            requeued: Boolean(recovery?.requeued)
+        };
     }
 
     const mode = body.mode === "browser" ? "browser" : "background";
@@ -1008,6 +1053,11 @@ export async function startPlannerCompactGeneration(env, body = {}) {
             failedSlots: [],
             next: pointerFromSlot(runnable),
             startedAt: nowIso(),
+            lastProgressAt: nowIso(),
+            lastDispatchAt: nowIso(),
+            lastRecoveryAt: "",
+            recoveryCount: 0,
+            retryState: null,
             updatedAt: nowIso(),
             stage: "queued",
             stageLabel: "Queued",
@@ -1020,13 +1070,12 @@ export async function startPlannerCompactGeneration(env, body = {}) {
     record = updated.record;
     const status = { ...compactStatusFromRun(record.payload), runKey: record.recordKey, existing: false };
     if (mode === "background" && env.GENERATION_QUEUE) {
-        await env.GENERATION_QUEUE.send({
-            plannerCompact: true,
-            runKey: record.recordKey,
-            jobId: record.payload.activeJob.jobId,
-            generationSequence: record.payload.activeJob.generationSequence,
-            expectedGlobalImageIndex: record.payload.activeJob.next.globalImageIndex
-        });
+        const slot = nextRunnableSlot(record.payload, record.payload.activeJob);
+        await env.GENERATION_QUEUE.send(makePlannerCompactQueueMessage(
+            record.recordKey,
+            record.payload.activeJob,
+            slot
+        ));
     }
     return status;
 }
@@ -1204,6 +1253,9 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
                 ...item.candidates.filter(current => current.assetId !== candidate.assetId),
                 candidate
             ];
+            job.retryState = null;
+            job.lastError = "";
+            job.lastProgressAt = nowIso();
         }
         job.status = "running";
         job.stage = "generating";
@@ -1221,14 +1273,299 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
         duplicate,
         stale,
         terminal: !next,
-        nextMessage: next && !duplicate && !stale ? {
-            plannerCompact: true,
-            runKey: record.recordKey,
-            jobId: record.payload.activeJob.jobId,
-            generationSequence: record.payload.activeJob.generationSequence,
-            expectedGlobalImageIndex: next.globalImageIndex
-        } : null,
+        nextMessage: next && !stale
+            ? makePlannerCompactQueueMessage(record.recordKey, record.payload.activeJob, next, {
+                recoveredFromDuplicate: duplicate
+            })
+            : null,
         status: { ...compactStatusFromRun(record.payload), runKey: record.recordKey, revision: record.revision }
+    };
+}
+
+export async function deferPlannerCompactQueueSlot(env, message = {}, input = {}) {
+    const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
+        const job = payload.activeJob;
+        if (!job || job.jobId !== message.jobId) return { noWrite: true, stale: true };
+        if (asNonNegativeInteger(message.generationSequence, job.generationSequence)
+            !== asNonNegativeInteger(job.generationSequence, 0)) {
+            return { noWrite: true, stale: true };
+        }
+        if (!["queued", "running"].includes(job.status)) return { noWrite: true, stale: true };
+        const slot = nextRunnableSlot(payload, job);
+        if (!slot || slot.assetId !== message.assetId) return { noWrite: true, stale: true };
+
+        const previous = normalizeRetryState(job.retryState);
+        const sameSlot = previous.assetId === slot.assetId;
+        const kind = asString(input.kind, "transient");
+        job.retryState = {
+            assetId: slot.assetId,
+            transientAttempts: sameSlot
+                ? previous.transientAttempts + (kind === "transient" ? 1 : 0)
+                : (kind === "transient" ? 1 : 0),
+            regenerationAttempts: sameSlot ? previous.regenerationAttempts : 0,
+            lastErrorKind: kind,
+            lastErrorMessage: asString(input.errorMessage).slice(0, 1000),
+            nextRetryAt: asString(input.nextRetryAt),
+            lastFailureToken: sameSlot ? previous.lastFailureToken : ""
+        };
+        job.status = "running";
+        job.stage = kind === "rate_limit" ? "cooldown" : "retrying";
+        job.stageLabel = kind === "rate_limit"
+            ? "Waiting for NovelAI rate limit"
+            : "Retrying image generation";
+        job.lastError = job.retryState.lastErrorMessage;
+        job.updatedAt = nowIso();
+        payload.status = "running";
+        applyJobStatusToItems(payload);
+        return payload;
+    }, `run:generation:${asString(input.kind, "transient")}-deferred`);
+    const record = updated.record;
+    const slot = nextRunnableSlot(record.payload, record.payload.activeJob);
+    const stale = Boolean(updated.result?.stale);
+    return {
+        stale,
+        nextMessage: !stale && slot
+            ? makePlannerCompactQueueMessage(record.recordKey, record.payload.activeJob, slot, { deferred: true })
+            : null,
+        status: { ...compactStatusFromRun(record.payload), runKey: record.recordKey, revision: record.revision }
+    };
+}
+
+export async function recordPlannerCompactSlotFailure(env, message = {}, failure = {}) {
+    const maxAttempts = Math.max(1, asNonNegativeInteger(
+        failure.maxAttempts,
+        DEFAULT_SLOT_REGENERATION_ATTEMPTS
+    ));
+    const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
+        const job = payload.activeJob;
+        if (!job || job.jobId !== message.jobId) return { noWrite: true, stale: true };
+        if (asNonNegativeInteger(message.generationSequence, job.generationSequence)
+            !== asNonNegativeInteger(job.generationSequence, 0)) {
+            return { noWrite: true, stale: true };
+        }
+        const slot = nextRunnableSlot(payload, job);
+        if (!slot || slot.assetId !== message.assetId) {
+            const alreadyHandled = asArray(job.failedSlots).some(failed => failed.assetId === message.assetId);
+            return { noWrite: true, stale: !alreadyHandled, duplicate: alreadyHandled };
+        }
+
+        const previous = normalizeRetryState(job.retryState);
+        const failureToken = asString(failure.failureToken);
+        const duplicateFailure = previous.assetId === slot.assetId
+            && failureToken
+            && previous.lastFailureToken === failureToken;
+        const regenerationAttempts = duplicateFailure
+            ? previous.regenerationAttempts
+            : previous.assetId === slot.assetId
+            ? previous.regenerationAttempts + 1
+            : 1;
+        const errorMessage = asString(failure.errorMessage, "Image generation failed.").slice(0, 1000);
+        if (regenerationAttempts < maxAttempts) {
+            job.retryState = {
+                assetId: slot.assetId,
+                transientAttempts: 0,
+                regenerationAttempts,
+                lastErrorKind: asString(failure.kind, "generation"),
+                lastErrorMessage: errorMessage,
+                nextRetryAt: asString(failure.nextRetryAt),
+                lastFailureToken: failureToken
+            };
+            job.status = "running";
+            job.stage = "retrying";
+            job.stageLabel = `Retrying image generation (${regenerationAttempts}/${maxAttempts})`;
+            job.lastError = errorMessage;
+        } else {
+            job.failedSlots = [
+                ...asArray(job.failedSlots).filter(failed => failed.assetId !== slot.assetId),
+                {
+                    assetId: slot.assetId,
+                    itemId: slot.itemId,
+                    variantId: slot.variantId,
+                    variantImageIndex: slot.variantImageIndex,
+                    globalImageIndex: slot.globalImageIndex,
+                    generationSequence: slot.generationSequence,
+                    regenerationAttempts,
+                    errorKind: asString(failure.kind, "generation"),
+                    errorMessage
+                }
+            ];
+            job.retryState = null;
+            job.lastError = errorMessage;
+        }
+        payload.activeJob = recalculateJob(payload, job);
+        payload.status = runStatusFromJob(payload.activeJob.status);
+        applyJobStatusToItems(payload);
+        return payload;
+    }, "run:generation:slot-failure");
+    const record = updated.record;
+    const next = nextRunnableSlot(record.payload, record.payload.activeJob);
+    const stale = Boolean(updated.result?.stale);
+    return {
+        stale,
+        duplicate: Boolean(updated.result?.duplicate),
+        terminal: !next,
+        retrying: Boolean(next && next.assetId === message.assetId),
+        nextMessage: next && !stale
+            ? makePlannerCompactQueueMessage(record.recordKey, record.payload.activeJob, next, { slotRetry: true })
+            : null,
+        status: { ...compactStatusFromRun(record.payload), runKey: record.recordKey, revision: record.revision }
+    };
+}
+
+export async function failPlannerCompactGeneration(env, message = {}, failure = {}) {
+    const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
+        const job = payload.activeJob;
+        if (!job || job.jobId !== message.jobId) return { noWrite: true, stale: true };
+        if (asNonNegativeInteger(message.generationSequence, job.generationSequence)
+            !== asNonNegativeInteger(job.generationSequence, 0)) {
+            return { noWrite: true, stale: true };
+        }
+        const completed = getCompletedAssetIds(payload);
+        const errorMessage = asString(failure.errorMessage, "Image generation cannot continue.").slice(0, 1000);
+        const errorKind = asString(failure.kind, "fatal");
+        const remaining = enumerateRunSlots(payload, job.targetSituationId, job.generationSequence)
+            .filter(slot => !completed.has(slot.assetId));
+        const previousByAssetId = new Map(asArray(job.failedSlots).map(slot => [slot.assetId, slot]));
+        for (const slot of remaining) {
+            previousByAssetId.set(slot.assetId, {
+                assetId: slot.assetId,
+                itemId: slot.itemId,
+                variantId: slot.variantId,
+                variantImageIndex: slot.variantImageIndex,
+                globalImageIndex: slot.globalImageIndex,
+                generationSequence: slot.generationSequence,
+                regenerationAttempts: normalizeRetryState(job.retryState).regenerationAttempts,
+                errorKind,
+                errorMessage
+            });
+        }
+        job.failedSlots = [...previousByAssetId.values()];
+        job.retryState = null;
+        job.lastError = errorMessage;
+        payload.activeJob = recalculateJob(payload, job);
+        payload.status = runStatusFromJob(payload.activeJob.status);
+        applyJobStatusToItems(payload);
+        return payload;
+    }, "run:generation:fatal");
+    return {
+        stale: Boolean(updated.result?.stale),
+        status: {
+            ...compactStatusFromRun(updated.record.payload),
+            runKey: updated.record.recordKey,
+            revision: updated.record.revision
+        }
+    };
+}
+
+export async function recoverPlannerCompactGeneration(env, lookup = {}, options = {}) {
+    const record = await getPlannerCompactRunRecord(env, lookup);
+    if (!record) throw plannerError("PLANNER_RUN_NOT_FOUND", 404, "Planner run not found.");
+    const job = record.payload.activeJob;
+    if (!job || job.mode !== "background" || !["queued", "running"].includes(job.status)) {
+        return {
+            requeued: false,
+            reason: "not_active",
+            ...compactStatusFromRun(record.payload),
+            runKey: record.recordKey
+        };
+    }
+    const retryState = normalizeRetryState(job.retryState);
+    const nextRetryAt = Date.parse(retryState.nextRetryAt);
+    if (!options.force && Number.isFinite(nextRetryAt) && nextRetryAt > Date.now()) {
+        return {
+            requeued: false,
+            reason: "cooldown",
+            ...compactStatusFromRun(record.payload),
+            runKey: record.recordKey
+        };
+    }
+    const slot = nextRunnableSlot(record.payload, job);
+    if (!slot) {
+        const reconciled = await mutateRunWithRetry(env, { runKey: record.recordKey }, payload => {
+            if (!payload.activeJob || payload.activeJob.jobId !== job.jobId) return { noWrite: true, stale: true };
+            payload.activeJob = recalculateJob(payload, payload.activeJob);
+            payload.status = runStatusFromJob(payload.activeJob.status);
+            applyJobStatusToItems(payload);
+            return payload;
+        }, "run:generation:recover-reconcile");
+        return {
+            requeued: false,
+            reason: "terminal",
+            ...compactStatusFromRun(reconciled.record.payload),
+            runKey: reconciled.record.recordKey
+        };
+    }
+    if (!env.GENERATION_QUEUE) throw plannerError("PLANNER_QUEUE_UNAVAILABLE", 503, "Generation queue is unavailable.");
+    await env.GENERATION_QUEUE.send(makePlannerCompactQueueMessage(record.recordKey, job, slot, {
+        recovered: true,
+        recoveryReason: asString(options.reason, "manual")
+    }));
+    const dispatchedAt = nowIso();
+    const marked = await mutateRunWithRetry(env, { runKey: record.recordKey }, payload => {
+        const latestJob = payload.activeJob;
+        if (!latestJob || latestJob.jobId !== job.jobId || !["queued", "running"].includes(latestJob.status)) {
+            return { noWrite: true, stale: true };
+        }
+        latestJob.lastDispatchAt = dispatchedAt;
+        latestJob.lastRecoveryAt = dispatchedAt;
+        latestJob.recoveryCount = asNonNegativeInteger(latestJob.recoveryCount, 0) + 1;
+        latestJob.updatedAt = dispatchedAt;
+        return payload;
+    }, "run:generation:recover-dispatch");
+    return {
+        requeued: true,
+        reason: asString(options.reason, "manual"),
+        assetId: slot.assetId,
+        ...compactStatusFromRun(marked.record.payload),
+        runKey: marked.record.recordKey
+    };
+}
+
+export async function recoverStalledPlannerCompactRuns(env, options = {}) {
+    const staleMs = Math.max(60_000, Number(options.staleMs || DEFAULT_STALE_JOB_MS));
+    const limit = Math.max(1, Math.min(100, asNonNegativeInteger(options.limit, DEFAULT_STALE_JOB_LIMIT)));
+    const cutoff = new Date(Date.now() - staleMs).toISOString();
+    let rows;
+    try {
+        const result = await env.DB.prepare(`
+            SELECT record_key, record_type, project_id, character_id, status,
+                   payload_json, revision, created_at, updated_at, expires_at
+            FROM planner_compact_records
+            WHERE record_type = 'run'
+              AND status IN ('queued', 'running')
+              AND updated_at < ?
+            ORDER BY updated_at
+            LIMIT ?
+        `).bind(cutoff, limit).all();
+        rows = result.results || [];
+    } catch (error) {
+        throw translateSchemaError(error);
+    }
+    const results = [];
+    for (const row of rows) {
+        const record = parsePlannerCompactRow(row, "run");
+        const retryAt = Date.parse(normalizeRetryState(record.payload.activeJob?.retryState).nextRetryAt);
+        if (Number.isFinite(retryAt) && retryAt > Date.now()) {
+            results.push({ runKey: record.recordKey, requeued: false, reason: "cooldown" });
+            continue;
+        }
+        try {
+            results.push(await recoverPlannerCompactGeneration(env, { runKey: record.recordKey }, {
+                reason: "watchdog"
+            }));
+        } catch (error) {
+            results.push({
+                runKey: record.recordKey,
+                requeued: false,
+                reason: "error",
+                error: error?.message || String(error)
+            });
+        }
+    }
+    return {
+        scanned: rows.length,
+        requeued: results.filter(result => result.requeued).length,
+        results
     };
 }
 
@@ -1307,9 +1644,12 @@ export async function putPlannerCompactRateLimit(env, input = {}) {
     const key = safePlannerRef(input.key || "novelai", "novelai");
     const requestedAvailableAt = Number(input.availableAt || 0);
     const payload = {
-        version: 1,
+        version: 2,
         key,
         availableAt: Number.isFinite(requestedAvailableAt) ? Math.max(0, requestedAvailableAt) : 0,
+        strikeCount: asNonNegativeInteger(input.strikeCount, 0),
+        lastLimitedAt: asString(input.lastLimitedAt),
+        lastMessageId: asString(input.lastMessageId),
         reason: asString(input.reason, "cooldown")
     };
     return await putPlannerCompactRecord(env, {

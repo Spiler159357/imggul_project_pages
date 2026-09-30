@@ -8,21 +8,31 @@ import webpDecodeWasm from "@jsquash/webp/codec/dec/webp_dec.wasm";
 import webpEncodeWasm from "@jsquash/webp/codec/enc/webp_enc.wasm";
 import {
     commitPlannerCompactQueueSlot,
+    deferPlannerCompactQueueSlot,
+    failPlannerCompactGeneration,
     getPlannerCompactRateLimit,
     preparePlannerCompactQueueSlot,
-    putPlannerCompactRateLimit
+    putPlannerCompactRateLimit,
+    recordPlannerCompactSlotFailure,
+    recoverStalledPlannerCompactRuns
 } from "./planner-compact.js";
 import {
     buildNovelAiBaseParameters,
     getNovelAiModelProfile,
     normalizeNovelAiModelId
 } from "../public/js/nai-models.js";
+import {
+    classifyPlannerGenerationError,
+    getPlannerRetryDelaySeconds,
+    isNovelAiRateLimitError
+} from "./planner-retry-policy.js";
 
 const NAI_ENDPOINT = "https://image.novelai.net/ai/generate-image";
 const QUALITY_TAGS = "masterpiece, best quality, very aesthetic, no text";
 const DEFAULT_NEGATIVE_PROMPT = "";
 const R2_PUT_MAX_ATTEMPTS = 4;
 const PLANNER_COMPACT_MAX_ATTEMPTS = 3;
+const PLANNER_SLOT_REGENERATION_ATTEMPTS = 3;
 const NOVELAI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000;
 
 export function jsonResponse(data, init = {}) {
@@ -74,10 +84,6 @@ function makeRetriedStorageError(error, key) {
     retried.code = "R2_PUT_RETRY_EXHAUSTED";
     retried.cause = error;
     return retried;
-}
-
-function isR2PutRetryExhausted(error) {
-    return error?.code === "R2_PUT_RETRY_EXHAUSTED";
 }
 
 function getR2PutRetryDelayMs(attempt) {
@@ -326,30 +332,6 @@ async function callNovelAi(env, payload) {
     }
 }
 
-function isNovelAiRateLimitError(error) {
-    const message = error?.message || String(error || "");
-    return error?.status === 429
-        || message.includes("[NovelAI 429]")
-        || message.includes("error code: 1015")
-        || message.includes("Concurrent generation is locked");
-}
-
-function isNovelAiCooldownError(error) {
-    return error?.code === "NOVELAI_COOLDOWN";
-}
-
-function getRetryDelaySeconds(error, attempt) {
-    if (isNovelAiCooldownError(error)) {
-        return Math.max(30, Number(error.retryAfterSeconds || 60));
-    }
-    if (isNovelAiRateLimitError(error)) {
-        const fallbackDelays = [120, 300, 900, 1800];
-        const fallback = fallbackDelays[Math.min(Math.max(attempt - 1, 0), fallbackDelays.length - 1)];
-        return Math.max(Number(error.retryAfterSeconds || 0), fallback);
-    }
-    return Math.min(60 * attempt, 300);
-}
-
 function readString(view, offset, length) {
     const bytes = new Uint8Array(view.buffer, view.byteOffset + offset, length);
     return new TextDecoder().decode(bytes);
@@ -525,10 +507,13 @@ function makePlannerCompactSeed(generation, imageIndex) {
     return values[0];
 }
 
-async function getPlannerCompactCooldownDelay(env) {
+async function getPlannerCompactCooldown(env) {
     const rate = await getPlannerCompactRateLimit(env, "novelai");
     const waitMs = Math.max(0, Number(rate?.availableAt || 0) - Date.now());
-    return waitMs > 0 ? Math.max(1, Math.ceil(waitMs / 1000)) : 0;
+    return {
+        rate,
+        delaySeconds: waitMs > 0 ? Math.max(1, Math.ceil(waitMs / 1000)) : 0
+    };
 }
 
 export async function processPlannerCompactQueueMessage(env, body = {}, options = {}) {
@@ -551,12 +536,40 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
         && objectGenerationSequence === slot.generationSequence
     );
 
+    let slotCommitted = false;
     try {
         if (!reusableObject) {
-            const cooldownDelay = await getPlannerCompactCooldownDelay(env);
-            if (cooldownDelay > 0) return { disposition: "retry", delaySeconds: cooldownDelay };
+            const cooldown = await getPlannerCompactCooldown(env);
+            if (cooldown.delaySeconds > 0) {
+                const deferred = await deferPlannerCompactQueueSlot(env, {
+                    runKey: prepared.runKey,
+                    jobId: prepared.jobId,
+                    assetId: slot.assetId,
+                    generationSequence: slot.generationSequence
+                }, {
+                    kind: "rate_limit",
+                    errorMessage: "NovelAI cooldown is active.",
+                    nextRetryAt: new Date(Date.now() + cooldown.delaySeconds * 1000).toISOString()
+                });
+                if (deferred.nextMessage && env.GENERATION_QUEUE) {
+                    await env.GENERATION_QUEUE.send(deferred.nextMessage, {
+                        delaySeconds: cooldown.delaySeconds
+                    });
+                }
+                return { disposition: "ack", status: deferred.status };
+            }
 
             const zipBuffer = await callNovelAi(env, request.payload);
+            if (Number(cooldown.rate?.strikeCount || 0) > 0 || Number(cooldown.rate?.availableAt || 0) > 0) {
+                await putPlannerCompactRateLimit(env, {
+                    key: "novelai",
+                    availableAt: 0,
+                    strikeCount: 0,
+                    lastLimitedAt: cooldown.rate?.lastLimitedAt || "",
+                    lastMessageId: "",
+                    reason: ""
+                });
+            }
             const extracted = await extractFirstZipFile(zipBuffer);
             const webpBuffer = await encodeWebP(env, extracted.data);
             await putR2WithRetry(env.imgBucket, slot.r2Key, webpBuffer, {
@@ -596,13 +609,15 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             byteSize: Number(object.size || 0),
             mimeType: object.httpMetadata?.contentType || "image/webp"
         });
+        slotCommitted = true;
         if (committed.nextMessage && env.GENERATION_QUEUE) {
             await env.GENERATION_QUEUE.send(committed.nextMessage);
         }
         return { disposition: "ack", status: committed.status };
     } catch (error) {
+        if (slotCommitted) throw error;
         const message = error?.message || String(error);
-        const retryDelaySeconds = getRetryDelaySeconds(error, attempt);
+        const retryDelaySeconds = getPlannerRetryDelaySeconds(error, attempt);
         if (error?.code === "PLANNER_REVISION_CONFLICT"
             || error?.code === "PLANNER_COMPACT_SCHEMA_MISSING"
             || error?.code === "PLANNER_COMPACT_RECORD_CORRUPT") {
@@ -619,12 +634,50 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             throw error;
         }
         if (isNovelAiRateLimitError(error)) {
+            const currentRate = await getPlannerCompactRateLimit(env, "novelai");
+            const messageId = String(options.messageId || "");
+            const duplicateDelivery = Boolean(messageId && currentRate?.lastMessageId === messageId);
+            const strikeCount = duplicateDelivery
+                ? Math.max(1, Number(currentRate?.strikeCount || 1))
+                : Math.max(1, Number(currentRate?.strikeCount || 0) + 1);
+            const rateLimitDelaySeconds = getPlannerRetryDelaySeconds(error, strikeCount);
             await putPlannerCompactRateLimit(env, {
                 key: "novelai",
-                availableAt: Date.now() + retryDelaySeconds * 1000,
-                reason: "cooldown"
+                availableAt: Date.now() + rateLimitDelaySeconds * 1000,
+                strikeCount,
+                lastLimitedAt: new Date().toISOString(),
+                lastMessageId: messageId,
+                reason: "rate_limit"
             });
+            await writeBackgroundErrorLog(env, error, {
+                runKey: prepared.runKey,
+                jobId: prepared.jobId,
+                itemId: slot.itemId,
+                assetId: slot.assetId,
+                imageIndex: slot.globalImageIndex,
+                attempt,
+                strikeCount,
+                stage: "planner_compact_rate_limit"
+            });
+            const deferred = await deferPlannerCompactQueueSlot(env, {
+                runKey: prepared.runKey,
+                jobId: prepared.jobId,
+                assetId: slot.assetId,
+                generationSequence: slot.generationSequence
+            }, {
+                kind: "rate_limit",
+                errorMessage: message,
+                nextRetryAt: new Date(Date.now() + rateLimitDelaySeconds * 1000).toISOString()
+            });
+            if (deferred.nextMessage && env.GENERATION_QUEUE) {
+                await env.GENERATION_QUEUE.send(deferred.nextMessage, {
+                    delaySeconds: rateLimitDelaySeconds
+                });
+            }
+            return { disposition: "ack", status: deferred.status };
         }
+
+        const errorKind = classifyPlannerGenerationError(error);
         await writeBackgroundErrorLog(env, error, {
             runKey: prepared.runKey,
             jobId: prepared.jobId,
@@ -632,26 +685,53 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             assetId: slot.assetId,
             imageIndex: slot.globalImageIndex,
             attempt,
+            errorKind,
             stage: "planner_compact_generation"
         });
-        if (!isR2PutRetryExhausted(error) && attempt < PLANNER_COMPACT_MAX_ATTEMPTS) {
+        if (errorKind === "fatal") {
+            const failed = await failPlannerCompactGeneration(env, {
+                runKey: prepared.runKey,
+                jobId: prepared.jobId,
+                generationSequence: slot.generationSequence
+            }, {
+                kind: errorKind,
+                errorMessage: message
+            });
+            return { disposition: "ack", status: failed.status };
+        }
+        if (attempt < PLANNER_COMPACT_MAX_ATTEMPTS) {
             return { disposition: "retry", delaySeconds: retryDelaySeconds };
         }
-        const committed = await commitPlannerCompactQueueSlot(env, {
+        const nextRetryDelaySeconds = errorKind === "storage" ? 120 : 60;
+        const failed = await recordPlannerCompactSlotFailure(env, {
             runKey: prepared.runKey,
             jobId: prepared.jobId,
             assetId: slot.assetId,
             generationSequence: slot.generationSequence
-        }, { errorMessage: message.slice(0, 1000) });
-        if (committed.nextMessage && env.GENERATION_QUEUE) {
-            await env.GENERATION_QUEUE.send(committed.nextMessage);
+        }, {
+            kind: errorKind,
+            errorMessage: message,
+            failureToken: options.messageId,
+            maxAttempts: PLANNER_SLOT_REGENERATION_ATTEMPTS,
+            nextRetryAt: new Date(Date.now() + nextRetryDelaySeconds * 1000).toISOString()
+        });
+        if (failed.nextMessage && env.GENERATION_QUEUE) {
+            await env.GENERATION_QUEUE.send(
+                failed.nextMessage,
+                failed.retrying ? { delaySeconds: nextRetryDelaySeconds } : undefined
+            );
         }
-        return { disposition: "ack", status: committed.status };
+        return { disposition: "ack", status: failed.status };
     }
 }
 
 export default {
     async scheduled(event, env) {
+        if (event?.cron === "*/2 * * * *") {
+            await recoverStalledPlannerCompactRuns(env).catch(error => writeBackgroundErrorLog(env, error, {
+                stage: "planner_compact_watchdog"
+            }));
+        }
         if (event?.cron === "17 */6 * * *") {
             await cleanupDeletedAssets(env).catch(error => writeBackgroundErrorLog(env, error, {
                 stage: "scheduled_asset_cleanup"
@@ -662,7 +742,8 @@ export default {
         for (const message of batch.messages) {
             try {
                 const result = await processPlannerQueueMessage(env, message.body, {
-                    attempts: message.attempts
+                    attempts: message.attempts,
+                    messageId: message.id
                 });
                 if (result?.disposition === "retry") {
                     message.retry({ delaySeconds: result.delaySeconds || 15 });
