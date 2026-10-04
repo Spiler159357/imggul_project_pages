@@ -226,13 +226,13 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
             </div>
         </div>
 
-        <div class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 flex items-stretch lg:items-center">
-            <section class="mx-auto grid min-h-full w-full max-w-6xl grid-cols-2 gap-3 sm:gap-4 lg:h-auto lg:min-h-0 lg:grid-cols-5 lg:gap-4">
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'prompt'), 'min-h-0')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'image-editor'), 'min-h-0')}
+        <div class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 flex items-stretch">
+            <section class="mx-auto grid min-h-0 w-full max-w-6xl grid-cols-1 auto-rows-[minmax(220px,32vh)] gap-3 sm:grid-cols-2 sm:gap-4 lg:h-full lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)] lg:grid-rows-2 lg:auto-rows-auto lg:gap-6">
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'prompt'), 'min-h-0 lg:col-start-1 lg:row-start-1 lg:row-span-2')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0 lg:col-start-2 lg:row-start-1')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0 lg:col-start-2 lg:row-start-2')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0 lg:col-start-3 lg:row-start-1')}
+                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'image-editor'), 'min-h-0 lg:col-start-3 lg:row-start-2')}
             </section>
         </div>
     `);
@@ -366,7 +366,7 @@ export function renderProjectDashboardCard(project, section, sizeClass = 'min-h-
     if (!section) return '';
 
     return `
-        <button type="button" onclick="window.openProjectSection('${escapeJsString(section.key)}')" class="${sizeClass} text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition flex flex-col">
+        <button type="button" onclick="window.openProjectSection('${escapeJsString(section.key)}')" class="${sizeClass} min-w-0 text-left bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden hover:border-indigo-300 dark:hover:border-indigo-600 hover:shadow-sm transition flex flex-col">
             <span class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 flex items-center gap-2 font-bold text-gray-900 dark:text-white">
                 <i data-lucide="${section.icon}" class="w-4 h-4 text-indigo-600 dark:text-indigo-400"></i>
                 ${escapeHtml(section.title)}

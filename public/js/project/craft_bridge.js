@@ -1,5 +1,5 @@
 import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=global-posts-20261005a';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=global-posts-20261005a';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=project-dashboard-20261005b';
 import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=global-posts-20261005a';
 import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=global-posts-20261005a';
 
