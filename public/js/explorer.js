@@ -448,8 +448,24 @@ function setFilePathFolderStatus(message, type = 'info') {
 function createFilePathFolderButton(prefix, label, options = {}) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = 'flex min-w-0 items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-3 text-left text-sm text-gray-700 transition hover:border-indigo-300 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/30';
-    button.innerHTML = `<i data-lucide="${options.parent ? 'corner-left-up' : 'folder'}" class="h-5 w-5 flex-shrink-0 ${options.parent ? 'text-gray-500' : 'fill-current text-yellow-500'}"></i>`;
+    button.className = options.parent
+        ? 'col-span-full flex min-w-0 items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-3 text-left text-sm text-gray-700 transition hover:border-indigo-300 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/30'
+        : 'group flex min-w-0 items-center gap-3 overflow-hidden rounded-lg border border-gray-200 bg-white p-2 text-left text-sm text-gray-700 transition hover:border-indigo-300 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/30';
+    if (options.parent) {
+        button.innerHTML = '<i data-lucide="corner-left-up" class="h-5 w-5 flex-shrink-0 text-gray-500"></i>';
+    } else {
+        const thumbnail = document.createElement('div');
+        thumbnail.className = 'relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-yellow-50 dark:border-gray-700 dark:bg-yellow-950/30';
+        thumbnail.innerHTML = '<span class="absolute inset-0 flex items-center justify-center"><i data-lucide="folder" class="h-7 w-7 fill-current text-yellow-500"></i></span>';
+        const image = document.createElement('img');
+        image.src = getFilePathAssetUrl(prefix + '0.webp');
+        image.alt = '';
+        image.loading = 'lazy';
+        image.className = 'absolute inset-0 h-full w-full object-cover';
+        image.addEventListener('error', () => image.remove());
+        thumbnail.appendChild(image);
+        button.appendChild(thumbnail);
+    }
     const text = document.createElement('span');
     text.className = 'min-w-0 truncate font-medium';
     text.textContent = label;
@@ -457,6 +473,77 @@ function createFilePathFolderButton(prefix, label, options = {}) {
     button.title = getProjectRelativePath(prefix);
     button.addEventListener('click', () => loadFilePathChangeFolder(prefix));
     return button;
+}
+
+function getFilePathAssetUrl(key) {
+    const encodedKey = String(key || '').split('/').map(part => encodeURIComponent(part)).join('/');
+    const basePath = /\.(png|jpe?g|webp)$/i.test(key) ? '/i/' : '/';
+    return basePath + encodedKey;
+}
+
+function isFilePathPreviewImage(file) {
+    const fileName = String(file?.key || '').split('/').pop();
+    return /\.(png|jpe?g|webp|gif|svg)$/i.test(fileName);
+}
+
+function createFilePathSectionLabel(label, count) {
+    const heading = document.createElement('div');
+    heading.className = 'col-span-full flex items-center justify-between pt-1 text-[11px] font-bold text-gray-500 dark:text-gray-400';
+    const title = document.createElement('span');
+    title.textContent = label;
+    const badge = document.createElement('span');
+    badge.className = 'rounded-full bg-gray-200 px-2 py-0.5 text-[10px] text-gray-600 dark:bg-gray-700 dark:text-gray-300';
+    badge.textContent = String(count);
+    heading.append(title, badge);
+    return heading;
+}
+
+function createFilePathEmptyMessage(message) {
+    const empty = document.createElement('div');
+    empty.className = 'col-span-full rounded-lg border border-dashed border-gray-300 px-4 py-5 text-center text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400';
+    empty.textContent = message;
+    return empty;
+}
+
+function createFilePathImageCard(file) {
+    const fileName = file.key.split('/').pop();
+    const alias = window.getAliasOnly(file.key, false);
+    const card = document.createElement('div');
+    card.className = 'relative flex min-w-0 items-center gap-3 overflow-hidden rounded-lg border border-gray-200 bg-white p-2 text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200';
+    card.title = getProjectRelativePath(file.key);
+
+    const thumbnail = document.createElement('div');
+    thumbnail.className = 'relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-checkered dark:border-gray-700';
+    thumbnail.innerHTML = '<span class="absolute inset-0 flex items-center justify-center"><i data-lucide="image" class="h-6 w-6 text-gray-400"></i></span>';
+    const image = document.createElement('img');
+    image.src = getFilePathAssetUrl(file.key) + (file.uploaded ? `?t=${new Date(file.uploaded).getTime()}` : '');
+    image.alt = '';
+    image.loading = 'lazy';
+    image.className = 'absolute inset-0 h-full w-full object-cover';
+    image.addEventListener('error', () => image.remove());
+    thumbnail.appendChild(image);
+
+    const names = document.createElement('div');
+    names.className = 'min-w-0';
+    const primary = document.createElement('p');
+    primary.className = 'truncate text-xs font-bold text-gray-800 dark:text-gray-100';
+    primary.textContent = alias || fileName;
+    names.appendChild(primary);
+    if (alias) {
+        const secondary = document.createElement('p');
+        secondary.className = 'mt-0.5 truncate font-mono text-[10px] text-gray-500 dark:text-gray-400';
+        secondary.textContent = fileName;
+        names.appendChild(secondary);
+    }
+
+    card.append(thumbnail, names);
+    if (file.key === filePathChangeState.oldKey) {
+        const currentBadge = document.createElement('span');
+        currentBadge.className = 'absolute right-1.5 top-1.5 rounded-full bg-indigo-600 px-1.5 py-0.5 text-[9px] font-bold text-white';
+        currentBadge.textContent = '현재';
+        card.appendChild(currentBadge);
+    }
+    return card;
 }
 
 function renderFilePathChangeBreadcrumbs() {
@@ -515,19 +602,21 @@ function renderFilePathChangeFolders() {
         ));
     }
 
-    filePathChangeState.folders.forEach(folderPrefix => {
+    const folders = filePathChangeState.folders;
+    const images = filePathChangeState.files.filter(isFilePathPreviewImage);
+
+    list.appendChild(createFilePathSectionLabel('하위 폴더', folders.length));
+    folders.forEach(folderPrefix => {
         const folderName = folderPrefix.split('/').filter(Boolean).pop();
         const alias = window.getAliasOnly(folderPrefix, true);
         const label = alias ? `${alias} (${folderName})` : folderName;
         list.appendChild(createFilePathFolderButton(folderPrefix, label));
     });
+    if (!folders.length) list.appendChild(createFilePathEmptyMessage('하위 폴더가 없습니다. 현재 폴더가 이동 대상으로 선택되어 있습니다.'));
 
-    if (!list.children.length) {
-        const empty = document.createElement('div');
-        empty.className = 'col-span-full flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed border-gray-300 px-4 text-center text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400';
-        empty.innerHTML = '<i data-lucide="folder-open" class="mb-2 h-8 w-8 text-gray-400"></i><span>하위 폴더가 없습니다.<br>현재 폴더가 이동 대상으로 선택되어 있습니다.</span>';
-        list.appendChild(empty);
-    }
+    list.appendChild(createFilePathSectionLabel('현재 폴더 이미지', images.length));
+    images.forEach(file => list.appendChild(createFilePathImageCard(file)));
+    if (!images.length) list.appendChild(createFilePathEmptyMessage('현재 폴더에 이미지가 없습니다.'));
     if (window.lucide) window.lucide.createIcons();
 }
 
@@ -568,7 +657,8 @@ async function loadFilePathChangeFolder(prefix) {
         filePathChangeState.files = (data.files || []).filter(isExplorerVisibleFile);
         filePathChangeState.loading = false;
         filePathChangeState.loadError = false;
-        setFilePathFolderStatus('');
+        const imageCount = filePathChangeState.files.filter(isFilePathPreviewImage).length;
+        setFilePathFolderStatus(`하위 폴더 ${filePathChangeState.folders.length}개 · 이미지 ${imageCount}개`);
         renderFilePathChangeBreadcrumbs();
         renderFilePathChangeFolders();
         updateFilePathChangePreview();
