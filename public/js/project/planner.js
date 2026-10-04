@@ -1,6 +1,6 @@
 import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=global-posts-20261005a';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=project-dashboard-20261005c';
+import { renderSectionHeader } from './manage.js?v=project-dashboard-20261005d';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=global-posts-20261005a';
 import { combinePromptParts, getSituationById } from './situation.js?v=global-posts-20261005a';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
@@ -1288,10 +1288,23 @@ export function isPlannerPanelVisible() {
         && window.PROJECT_ACTIVE_SECTION === 'planner';
 }
 
+export function isProjectPlannerDashboardVisible() {
+    const projectContent = document.getElementById('main-project-content');
+    return !!projectContent
+        && !projectContent.classList.contains('hidden')
+        && window.PROJECT_VIEW === 'detail'
+        && !!document.getElementById('project-planner-dashboard');
+}
+
 export function renderPlannerIfVisible() {
-    if (!isPlannerPanelVisible()) return false;
-    renderPlannerSectionByState({ preserveScroll: true });
-    return true;
+    if (isPlannerPanelVisible()) {
+        renderPlannerSectionByState({ preserveScroll: true });
+        return true;
+    }
+    if (isProjectPlannerDashboardVisible()) {
+        return window.renderProjectPlannerDashboard?.() === true;
+    }
+    return false;
 }
 
 function getPlannerScrollElement() {
@@ -4608,10 +4621,11 @@ async function clearPlannerItemsImages(project, items = [], meta = null) {
 }
 
 function shouldAutoRefreshPlanner() {
-    return isPlannerPanelVisible()
+    if (document.visibilityState !== 'visible') return false;
+    const plannerRunVisible = isPlannerPanelVisible()
         && (window.PROJECT_PLANNER_VIEW || 'plan') === 'run'
-        && window.PROJECT_PLANNER_GENERATION_MODE === 'background'
-        && document.visibilityState === 'visible';
+        && window.PROJECT_PLANNER_GENERATION_MODE === 'background';
+    return plannerRunVisible || isProjectPlannerDashboardVisible();
 }
 
 function suspendPlannerBackgroundPolling() {
@@ -4642,14 +4656,15 @@ function rebuildTrackedPlannerBackgroundJobs() {
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
     queueMetas.forEach(entry => {
         const meta = entry?.meta;
+        const runKey = meta?.runKey || meta?.backgroundJobId;
         if (
-            meta?.backgroundJobId
+            runKey
             && (
                 isPlannerActiveStatus(meta.status)
                 || isPlannerActiveStatus(meta.backgroundStatus?.status)
             )
         ) {
-            if (meta.runKey) plannerPollingState.trackedJobIds.add(meta.runKey);
+            plannerPollingState.trackedJobIds.add(runKey);
         }
     });
 }

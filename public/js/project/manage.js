@@ -1,6 +1,6 @@
 import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=global-posts-20261005a';
 import { renderCharacterSection } from './character.js?v=global-posts-20261005a';
-import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js?v=global-posts-20261005a';
+import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=project-dashboard-20261005d';
 import { renderSituationSection } from './situation.js?v=global-posts-20261005a';
 import { renderImageEditor } from '../image_editor.js';
 
@@ -189,16 +189,29 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
         return;
     }
 
-    await Promise.all([
+    window.stopPlannerBackgroundPolling?.();
+    window.PROJECT_ACTIVE_PROJECT_ID = project.id;
+    const [characters] = await Promise.all([
         loadProjectCharacters(project).catch(() => []),
-        loadProjectSituations(project).catch(() => []),
-        loadPlannerMeta(project).then(meta => { window.PROJECT_PLANNER_META = meta; }).catch(() => { window.PROJECT_PLANNER_META = null; })
+        loadProjectSituations(project).catch(() => [])
     ]);
+    const queueMetas = await loadPlannerQueueMetas(project, characters, { force: true }).catch(() => []);
+    window.PROJECT_PLANNER_QUEUE_METAS = queueMetas;
+    const selectedCharacterId = getSelectedPlannerCharacterId(project);
+    window.PROJECT_PLANNER_META = queueMetas.find(entry => (
+        entry.meta?.characterId === selectedCharacterId || entry.character?.id === selectedCharacterId
+    ))?.meta || null;
+
+    const activeRunKeys = queueMetas
+        .filter(entry => isPlannerDashboardMetaActive(entry.meta))
+        .map(entry => entry.meta?.runKey || entry.meta?.backgroundJobId)
+        .filter(Boolean);
+    await Promise.allSettled(activeRunKeys.map(runKey => (
+        refreshPlannerBackgroundStatus(runKey, { render: false })
+    )));
 
     window.PROJECT_VIEW = 'detail';
-    window.PROJECT_ACTIVE_PROJECT_ID = project.id;
     window.PROJECT_ACTIVE_SECTION = null;
-    window.syncPlannerBackgroundPolling?.();
 
     renderProjectShell(`
         <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
@@ -230,6 +243,7 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
             </section>
         </div>
     `);
+    window.syncPlannerBackgroundPolling?.();
 
     const routeState = { projectView: 'detail', projectId: project.id };
     const routeHash = `#project/${project.id}`;
@@ -262,23 +276,64 @@ function getPlannerDashboardStatusClass(tone) {
     return 'border-gray-300 bg-gray-50 text-gray-600 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-300';
 }
 
+function isPlannerDashboardMetaActive(meta) {
+    const activeStatuses = new Set(['queued', 'running', 'cancel_requested']);
+    return activeStatuses.has(meta?.status) || activeStatuses.has(meta?.backgroundStatus?.status);
+}
+
+function getPlannerDashboardEntries(project) {
+    const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS)
+        ? window.PROJECT_PLANNER_QUEUE_METAS
+        : [];
+    const fallbackMeta = window.PROJECT_PLANNER_META;
+    const entries = queueMetas.length
+        ? queueMetas
+        : (fallbackMeta?.items?.length ? [{
+            character: getCharacterById(project, fallbackMeta.characterId),
+            meta: fallbackMeta
+        }] : []);
+    const statusRank = status => {
+        if (['queued', 'running', 'cancel_requested'].includes(status)) return 0;
+        if (['paused', 'partial_failed', 'failed'].includes(status)) return 1;
+        if (['done', 'completed', 'confirmed'].includes(status)) return 3;
+        return 2;
+    };
+
+    return entries.flatMap((entry, characterIndex) => {
+        const characterName = entry.character?.name
+            || entry.character?.alias
+            || entry.character?.folderName
+            || entry.meta?.characterId
+            || '캐릭터';
+        return (entry.meta?.items || []).map((item, itemIndex) => ({
+            characterIndex,
+            itemIndex,
+            characterName,
+            item
+        }));
+    }).sort((a, b) => (
+        statusRank(a.item?.status) - statusRank(b.item?.status)
+        || a.characterIndex - b.characterIndex
+        || a.itemIndex - b.itemIndex
+    ));
+}
+
 function renderPlannerDashboard(project) {
-    const meta = window.PROJECT_PLANNER_META || null;
-    const items = Array.isArray(meta?.items) ? meta.items : [];
+    const entries = getPlannerDashboardEntries(project);
     const activeStatuses = new Set(['queued', 'running', 'cancel_requested']);
     const completedStatuses = new Set(['done', 'completed', 'confirmed']);
-    const activeCount = items.filter(item => activeStatuses.has(item?.status)).length;
-    const completedCount = items.filter(item => completedStatuses.has(item?.status)).length;
+    const activeCount = entries.filter(entry => activeStatuses.has(entry.item?.status)).length;
+    const completedCount = entries.filter(entry => completedStatuses.has(entry.item?.status)).length;
 
     return `
-        <section role="button" tabindex="0" aria-label="플래너 열기" onclick="window.openProjectSection('planner')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openProjectSection('planner'); }" class="group flex min-h-[560px] cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600 lg:min-h-0">
+        <section id="project-planner-dashboard" role="button" tabindex="0" aria-label="플래너 열기" onclick="window.openProjectSection('planner')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openProjectSection('planner'); }" class="group flex min-h-[560px] cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600 lg:min-h-0">
             <div class="flex flex-col gap-3 border-b border-gray-200 px-4 py-4 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                 <div class="flex items-center gap-3">
                     <i data-lucide="calendar-check" class="h-5 w-5 text-indigo-600 dark:text-indigo-400"></i>
                     <h2 class="text-lg font-bold text-gray-900 dark:text-white">플래너</h2>
                 </div>
                 <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-bold text-gray-500 dark:text-gray-400">
-                    <span>전체 <strong class="ml-1 text-gray-900 dark:text-white">${items.length}</strong></span>
+                    <span>전체 <strong class="ml-1 text-gray-900 dark:text-white">${entries.length}</strong></span>
                     <span>진행 중 <strong class="ml-1 text-emerald-600 dark:text-emerald-400">${activeCount}</strong></span>
                     <span>완료 <strong class="ml-1 text-indigo-600 dark:text-indigo-400">${completedCount}</strong></span>
                     <i data-lucide="chevron-right" class="h-4 w-4 text-gray-400 transition group-hover:translate-x-0.5 group-hover:text-indigo-500"></i>
@@ -290,10 +345,14 @@ function renderPlannerDashboard(project) {
                 <span>상태</span>
                 <span>진행도</span>
             </div>
-            <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1 sm:px-3">
-                ${items.length ? items.map((item, index) => {
+            <div id="project-planner-dashboard-scroll" class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1 sm:px-3">
+                ${entries.length ? entries.map((entry, index) => {
+                    const item = entry.item;
                     const status = getPlannerDashboardStatus(item?.status);
-                    const generatedCount = Array.isArray(item?.images) ? item.images.length : 0;
+                    const generatedCount = Math.max(
+                        Array.isArray(item?.images) ? item.images.length : 0,
+                        Number(item?.completedCount) || 0
+                    );
                     const targetCount = Math.max(1, Number(item?.count) || 1);
                     const percent = Math.min(100, Math.round((generatedCount / targetCount) * 100));
                     const itemNumber = item?.imageNumber ?? index + 1;
@@ -301,7 +360,10 @@ function renderPlannerDashboard(project) {
                     return `
                         <span class="grid min-h-16 grid-cols-[minmax(0,1fr)_90px_90px] items-center gap-3 border-b border-gray-100 px-2 py-3 text-sm dark:border-gray-700/80 sm:grid-cols-[52px_minmax(0,1fr)_120px_140px]">
                             <span class="hidden font-bold text-gray-400 dark:text-gray-500 sm:block">${escapeHtml(itemNumber)}</span>
-                            <span class="min-w-0 truncate font-bold text-gray-800 transition group-hover:text-indigo-700 dark:text-gray-100 dark:group-hover:text-indigo-300">${escapeHtml(itemName)}</span>
+                            <span class="min-w-0">
+                                <span class="block truncate font-bold text-gray-800 transition group-hover:text-indigo-700 dark:text-gray-100 dark:group-hover:text-indigo-300">${escapeHtml(itemName)}</span>
+                                <span class="mt-0.5 block truncate text-[11px] font-medium text-gray-400 dark:text-gray-500">${escapeHtml(entry.characterName)}</span>
+                            </span>
                             <span class="inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-bold ${getPlannerDashboardStatusClass(status.tone)}">${escapeHtml(status.label)}</span>
                             <span class="min-w-0">
                                 <span class="block text-xs font-bold text-gray-600 dark:text-gray-300">${generatedCount} / ${targetCount}</span>
@@ -321,6 +383,20 @@ function renderPlannerDashboard(project) {
             </div>
         </section>
     `;
+}
+
+export function renderProjectPlannerDashboard() {
+    if (window.PROJECT_VIEW !== 'detail') return false;
+    const current = document.getElementById('project-planner-dashboard');
+    const project = getActiveProject();
+    if (!current || !project) return false;
+
+    const scrollTop = document.getElementById('project-planner-dashboard-scroll')?.scrollTop || 0;
+    current.outerHTML = renderPlannerDashboard(project);
+    const nextScroll = document.getElementById('project-planner-dashboard-scroll');
+    if (nextScroll) nextScroll.scrollTop = scrollTop;
+    refreshProjectIcons();
+    return true;
 }
 
 function renderProjectVisibilityCard(project) {
@@ -349,7 +425,7 @@ function renderProjectMenuCard(project) {
     const menuItems = [
         { key: 'character', title: '캐릭터', meta: `${getProjectItems(project, 'characters').length}명`, icon: 'users' },
         { key: 'situation', title: '상황', meta: `${getProjectItems(project, 'situations').length}개`, icon: 'map' },
-        { key: 'prompt', title: '프롬프트 설정', meta: '기본 프롬프트 사용 중', icon: 'file-text' },
+        { key: 'prompt', title: '프롬프트 설정', meta: '', icon: 'file-text' },
         { key: 'image-editor', title: '편집기', meta: '이미지 편집', icon: 'image' }
     ];
 
@@ -367,7 +443,7 @@ function renderProjectMenuCard(project) {
                         </span>
                         <span class="min-w-0 flex-1">
                             <span class="block text-sm font-bold text-gray-800 transition group-hover/menu:text-indigo-600 dark:text-gray-100 dark:group-hover/menu:text-indigo-400">${escapeHtml(item.title)}</span>
-                            <span class="mt-0.5 block truncate text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(item.meta)}</span>
+                            ${item.meta ? `<span class="mt-0.5 block truncate text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(item.meta)}</span>` : ''}
                         </span>
                         <i data-lucide="chevron-right" class="h-4 w-4 flex-shrink-0 text-gray-400 transition group-hover/menu:translate-x-0.5 group-hover/menu:text-indigo-500"></i>
                     </button>
