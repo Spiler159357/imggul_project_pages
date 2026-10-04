@@ -208,31 +208,25 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
                 </button>
                 <h1 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(project.name)}</h1>
             </div>
-            <div class="flex items-center gap-2 flex-shrink-0">
-                <label class="inline-flex items-center gap-1.5 px-2 py-1.5 rounded-lg text-xs font-bold text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition cursor-pointer" title="비로그인 사용자에게 프로젝트를 공개합니다.">
-                    <input id="project-visibility-checkbox" type="checkbox" class="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700" onchange="window.toggleActiveProjectVisibility(event)" ${project.isPublic ? 'checked' : ''}>
-                    <span>공개</span>
-                </label>
-                <div class="relative">
-                    <button type="button" onclick="window.toggleProjectActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
-                        <i data-lucide="more-vertical" class="w-5 h-5"></i>
-                    </button>
-                    <div id="project-action-menu" class="hidden absolute right-0 top-10 z-20 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
-                        <button type="button" onclick="window.renameActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 이름 변경</button>
-                        <button type="button" onclick="window.changeActiveProjectPath()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 경로 변경</button>
-                        <button type="button" onclick="window.deleteActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">프로젝트 삭제</button>
-                    </div>
+            <div class="relative flex-shrink-0">
+                <button type="button" onclick="window.toggleProjectActionMenu(event)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="더보기" aria-label="더보기">
+                    <i data-lucide="more-vertical" class="w-5 h-5"></i>
+                </button>
+                <div id="project-action-menu" class="hidden absolute right-0 top-10 z-20 w-44 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl overflow-hidden py-1">
+                    <button type="button" onclick="window.renameActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 이름 변경</button>
+                    <button type="button" onclick="window.changeActiveProjectPath()" class="w-full px-3 py-2 text-left text-xs font-bold text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700 transition">프로젝트 경로 변경</button>
+                    <button type="button" onclick="window.deleteActiveProject()" class="w-full px-3 py-2 text-left text-xs font-bold text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition">프로젝트 삭제</button>
                 </div>
             </div>
         </div>
 
-        <div class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 flex items-stretch">
-            <section class="mx-auto grid min-h-0 w-full max-w-6xl grid-cols-1 auto-rows-[minmax(220px,32vh)] gap-3 sm:grid-cols-2 sm:gap-4 lg:h-full lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)] lg:grid-rows-2 lg:auto-rows-auto lg:gap-6">
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'prompt'), 'min-h-0 lg:col-start-1 lg:row-start-1 lg:row-span-2')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0 lg:col-start-2 lg:row-start-1')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0 lg:col-start-2 lg:row-start-2')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0 lg:col-start-3 lg:row-start-1')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'image-editor'), 'min-h-0 lg:col-start-3 lg:row-start-2')}
+        <div class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
+            <section class="mx-auto grid min-h-full w-full max-w-[1480px] grid-cols-1 gap-4 lg:h-full lg:grid-cols-[minmax(0,3.2fr)_minmax(260px,1fr)] lg:gap-5">
+                ${renderPlannerDashboard(project)}
+                <aside class="flex min-h-0 flex-col gap-4">
+                    ${renderProjectVisibilityCard(project)}
+                    ${renderProjectMenuCard(project)}
+                </aside>
             </section>
         </div>
     `);
@@ -241,6 +235,146 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
     const routeHash = `#project/${project.id}`;
     if (!skipHistory) setProjectRoute(routeState, routeHash);
     else rememberProjectRoute(routeState, routeHash);
+}
+
+function getPlannerDashboardStatus(status) {
+    const statuses = {
+        draft: { label: '초안', tone: 'neutral' },
+        pending: { label: '대기', tone: 'neutral' },
+        queued: { label: '대기 중', tone: 'active' },
+        running: { label: '생성 중', tone: 'active' },
+        paused: { label: '중지됨', tone: 'neutral' },
+        cancel_requested: { label: '취소 중', tone: 'active' },
+        done: { label: '완료', tone: 'complete' },
+        completed: { label: '완료', tone: 'complete' },
+        confirmed: { label: '확정 완료', tone: 'complete' },
+        partial_failed: { label: '일부 실패', tone: 'error' },
+        failed: { label: '실패', tone: 'error' },
+        cancelled: { label: '취소됨', tone: 'neutral' }
+    };
+    return statuses[status] || { label: status || '대기', tone: 'neutral' };
+}
+
+function getPlannerDashboardStatusClass(tone) {
+    if (tone === 'active') return 'border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300';
+    if (tone === 'complete') return 'border-indigo-300 bg-indigo-50 text-indigo-700 dark:border-indigo-800 dark:bg-indigo-950/40 dark:text-indigo-300';
+    if (tone === 'error') return 'border-red-300 bg-red-50 text-red-700 dark:border-red-900 dark:bg-red-950/30 dark:text-red-300';
+    return 'border-gray-300 bg-gray-50 text-gray-600 dark:border-gray-600 dark:bg-gray-900/50 dark:text-gray-300';
+}
+
+function renderPlannerDashboard(project) {
+    const meta = window.PROJECT_PLANNER_META || null;
+    const items = Array.isArray(meta?.items) ? meta.items : [];
+    const activeStatuses = new Set(['queued', 'running', 'cancel_requested']);
+    const completedStatuses = new Set(['done', 'completed', 'confirmed']);
+    const activeCount = items.filter(item => activeStatuses.has(item?.status)).length;
+    const completedCount = items.filter(item => completedStatuses.has(item?.status)).length;
+
+    return `
+        <section role="button" tabindex="0" aria-label="플래너 열기" onclick="window.openProjectSection('planner')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openProjectSection('planner'); }" class="group flex min-h-[560px] cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600 lg:min-h-0">
+            <div class="flex flex-col gap-3 border-b border-gray-200 px-4 py-4 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between sm:px-5">
+                <div class="flex items-center gap-3">
+                    <i data-lucide="calendar-check" class="h-5 w-5 text-indigo-600 dark:text-indigo-400"></i>
+                    <h2 class="text-lg font-bold text-gray-900 dark:text-white">플래너</h2>
+                </div>
+                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-bold text-gray-500 dark:text-gray-400">
+                    <span>전체 <strong class="ml-1 text-gray-900 dark:text-white">${items.length}</strong></span>
+                    <span>진행 중 <strong class="ml-1 text-emerald-600 dark:text-emerald-400">${activeCount}</strong></span>
+                    <span>완료 <strong class="ml-1 text-indigo-600 dark:text-indigo-400">${completedCount}</strong></span>
+                    <i data-lucide="chevron-right" class="h-4 w-4 text-gray-400 transition group-hover:translate-x-0.5 group-hover:text-indigo-500"></i>
+                </div>
+            </div>
+            <div class="grid grid-cols-[minmax(0,1fr)_90px_90px] gap-3 border-b border-gray-200 px-4 py-3 text-[11px] font-bold uppercase tracking-wide text-gray-400 dark:border-gray-700 dark:text-gray-500 sm:grid-cols-[52px_minmax(0,1fr)_120px_140px] sm:px-5">
+                <span class="hidden sm:block">#</span>
+                <span>장면</span>
+                <span>상태</span>
+                <span>진행도</span>
+            </div>
+            <div class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1 sm:px-3">
+                ${items.length ? items.map((item, index) => {
+                    const status = getPlannerDashboardStatus(item?.status);
+                    const generatedCount = Array.isArray(item?.images) ? item.images.length : 0;
+                    const targetCount = Math.max(1, Number(item?.count) || 1);
+                    const percent = Math.min(100, Math.round((generatedCount / targetCount) * 100));
+                    const itemNumber = item?.imageNumber ?? index + 1;
+                    const itemName = item?.situationName || item?.situationId || `장면 ${index + 1}`;
+                    return `
+                        <span class="grid min-h-16 grid-cols-[minmax(0,1fr)_90px_90px] items-center gap-3 border-b border-gray-100 px-2 py-3 text-sm dark:border-gray-700/80 sm:grid-cols-[52px_minmax(0,1fr)_120px_140px]">
+                            <span class="hidden font-bold text-gray-400 dark:text-gray-500 sm:block">${escapeHtml(itemNumber)}</span>
+                            <span class="min-w-0 truncate font-bold text-gray-800 transition group-hover:text-indigo-700 dark:text-gray-100 dark:group-hover:text-indigo-300">${escapeHtml(itemName)}</span>
+                            <span class="inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-bold ${getPlannerDashboardStatusClass(status.tone)}">${escapeHtml(status.label)}</span>
+                            <span class="min-w-0">
+                                <span class="block text-xs font-bold text-gray-600 dark:text-gray-300">${generatedCount} / ${targetCount}</span>
+                                <span class="mt-1 block h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
+                                    <span class="block h-full rounded-full bg-indigo-500" style="width:${percent}%"></span>
+                                </span>
+                            </span>
+                        </span>
+                    `;
+                }).join('') : `
+                    <span class="flex h-full min-h-80 flex-col items-center justify-center px-6 text-center">
+                        <i data-lucide="calendar-check" class="mb-3 h-8 w-8 text-indigo-500"></i>
+                        <span class="text-sm font-bold text-gray-700 dark:text-gray-200">생성된 플랜이 없습니다.</span>
+                        <span class="mt-1 text-xs text-gray-400 dark:text-gray-500">플래너를 열어 이미지 생성 계획을 만들어보세요.</span>
+                    </span>
+                `}
+            </div>
+        </section>
+    `;
+}
+
+function renderProjectVisibilityCard(project) {
+    return `
+        <section class="rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+            <div class="flex items-center gap-2 border-b border-gray-200 px-4 py-3.5 dark:border-gray-700">
+                <i data-lucide="settings" class="h-5 w-5 text-indigo-600 dark:text-indigo-400"></i>
+                <h2 class="font-bold text-gray-900 dark:text-white">프로젝트 공개 설정</h2>
+            </div>
+            <label class="flex cursor-pointer items-center justify-between gap-4 px-4 py-5">
+                <span class="min-w-0">
+                    <span class="block text-sm font-bold text-gray-800 dark:text-gray-100">공개 프로젝트</span>
+                    <span class="mt-1 block text-[11px] leading-relaxed text-gray-500 dark:text-gray-400">링크를 통해 누구나 볼 수 있습니다.</span>
+                </span>
+                <span class="relative inline-flex h-6 w-11 flex-shrink-0 items-center">
+                    <input id="project-visibility-checkbox" type="checkbox" class="peer sr-only" onchange="window.toggleActiveProjectVisibility(event)" ${project.isPublic ? 'checked' : ''}>
+                    <span class="absolute inset-0 rounded-full bg-gray-300 transition peer-checked:bg-indigo-600 peer-disabled:opacity-50 dark:bg-gray-600"></span>
+                    <span class="absolute left-1 h-4 w-4 rounded-full bg-white shadow-sm transition-transform peer-checked:translate-x-5"></span>
+                </span>
+            </label>
+        </section>
+    `;
+}
+
+function renderProjectMenuCard(project) {
+    const menuItems = [
+        { key: 'character', title: '캐릭터', meta: `${getProjectItems(project, 'characters').length}명`, icon: 'users' },
+        { key: 'situation', title: '상황', meta: `${getProjectItems(project, 'situations').length}개`, icon: 'map' },
+        { key: 'prompt', title: '프롬프트 설정', meta: '기본 프롬프트 사용 중', icon: 'file-text' },
+        { key: 'image-editor', title: '편집기', meta: '이미지 편집', icon: 'image' }
+    ];
+
+    return `
+        <section class="min-h-0 overflow-hidden rounded-xl border border-gray-200 bg-white shadow-sm dark:border-gray-700 dark:bg-gray-800">
+            <div class="flex items-center gap-2 border-b border-gray-200 px-4 py-3.5 dark:border-gray-700">
+                <i data-lucide="folder" class="h-5 w-5 text-indigo-600 dark:text-indigo-400"></i>
+                <h2 class="font-bold text-gray-900 dark:text-white">프로젝트 메뉴</h2>
+            </div>
+            <div class="divide-y divide-gray-200 px-3 dark:divide-gray-700">
+                ${menuItems.map(item => `
+                    <button type="button" onclick="window.openProjectSection('${escapeJsString(item.key)}')" class="group/menu flex w-full items-center gap-3 px-1 py-4 text-left transition hover:text-indigo-600 dark:hover:text-indigo-400">
+                        <span class="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg text-indigo-600 dark:text-indigo-400">
+                            <i data-lucide="${item.icon}" class="h-5 w-5"></i>
+                        </span>
+                        <span class="min-w-0 flex-1">
+                            <span class="block text-sm font-bold text-gray-800 transition group-hover/menu:text-indigo-600 dark:text-gray-100 dark:group-hover/menu:text-indigo-400">${escapeHtml(item.title)}</span>
+                            <span class="mt-0.5 block truncate text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(item.meta)}</span>
+                        </span>
+                        <i data-lucide="chevron-right" class="h-4 w-4 flex-shrink-0 text-gray-400 transition group-hover/menu:translate-x-0.5 group-hover/menu:text-indigo-500"></i>
+                    </button>
+                `).join('')}
+            </div>
+        </section>
+    `;
 }
 
 export function toggleProjectActionMenu(event) {
