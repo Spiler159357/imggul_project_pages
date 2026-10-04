@@ -486,6 +486,25 @@ function isFilePathPreviewImage(file) {
     return /\.(png|jpe?g|webp|gif|svg)$/i.test(fileName);
 }
 
+function isFilePathDisplayFile(file) {
+    const fileName = String(file?.key || '').split('/').pop();
+    return fileName && fileName !== '.keep' && fileName !== '_meta.json';
+}
+
+function getFilePathFilePresentation(fileName) {
+    const rawExtension = String(fileName || '').includes('.')
+        ? String(fileName).split('.').pop().toLowerCase()
+        : '';
+    const extension = /^[a-z0-9]+$/i.test(rawExtension) ? rawExtension : '';
+    if (/^(png|jpe?g|webp|gif|svg)$/.test(extension)) return { icon: 'image', label: extension.toUpperCase(), color: 'text-indigo-500' };
+    if (extension === 'json') return { icon: 'braces', label: 'JSON', color: 'text-amber-600 dark:text-amber-400' };
+    if (/^(txt|log|md|csv|tsv)$/.test(extension)) return { icon: 'file-text', label: extension.toUpperCase(), color: 'text-emerald-600 dark:text-emerald-400' };
+    if (/^(zip|rar|7z|tar|gz)$/.test(extension)) return { icon: 'archive', label: extension.toUpperCase(), color: 'text-orange-600 dark:text-orange-400' };
+    if (/^(mp4|webm|mov|avi)$/.test(extension)) return { icon: 'file-video', label: extension.toUpperCase(), color: 'text-purple-600 dark:text-purple-400' };
+    if (/^(mp3|wav|ogg|flac)$/.test(extension)) return { icon: 'file-audio', label: extension.toUpperCase(), color: 'text-pink-600 dark:text-pink-400' };
+    return { icon: 'file', label: extension ? extension.toUpperCase() : 'FILE', color: 'text-gray-500 dark:text-gray-400' };
+}
+
 function createFilePathSectionLabel(label, count) {
     const heading = document.createElement('div');
     heading.className = 'col-span-full flex items-center justify-between pt-1 text-[11px] font-bold text-gray-500 dark:text-gray-400';
@@ -505,23 +524,27 @@ function createFilePathEmptyMessage(message) {
     return empty;
 }
 
-function createFilePathImageCard(file) {
+function createFilePathFileCard(file) {
     const fileName = file.key.split('/').pop();
     const alias = window.getAliasOnly(file.key, false);
+    const presentation = getFilePathFilePresentation(fileName);
+    const isImage = isFilePathPreviewImage(file);
     const card = document.createElement('div');
     card.className = 'relative flex min-w-0 items-center gap-3 overflow-hidden rounded-lg border border-gray-200 bg-white p-2 text-gray-700 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200';
     card.title = getProjectRelativePath(file.key);
 
     const thumbnail = document.createElement('div');
-    thumbnail.className = 'relative h-14 w-14 flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-checkered dark:border-gray-700';
-    thumbnail.innerHTML = '<span class="absolute inset-0 flex items-center justify-center"><i data-lucide="image" class="h-6 w-6 text-gray-400"></i></span>';
-    const image = document.createElement('img');
-    image.src = getFilePathAssetUrl(file.key) + (file.uploaded ? `?t=${new Date(file.uploaded).getTime()}` : '');
-    image.alt = '';
-    image.loading = 'lazy';
-    image.className = 'absolute inset-0 h-full w-full object-cover';
-    image.addEventListener('error', () => image.remove());
-    thumbnail.appendChild(image);
+    thumbnail.className = `relative flex h-14 w-14 flex-shrink-0 flex-col items-center justify-center gap-1 overflow-hidden rounded-lg border border-gray-200 ${isImage ? 'bg-checkered' : 'bg-gray-50 dark:bg-gray-800'} dark:border-gray-700`;
+    thumbnail.innerHTML = `<i data-lucide="${presentation.icon}" class="h-6 w-6 ${presentation.color}"></i><span class="text-[9px] font-bold text-gray-500 dark:text-gray-400">${presentation.label}</span>`;
+    if (isImage) {
+        const image = document.createElement('img');
+        image.src = getFilePathAssetUrl(file.key) + (file.uploaded ? `?t=${new Date(file.uploaded).getTime()}` : '');
+        image.alt = '';
+        image.loading = 'lazy';
+        image.className = 'absolute inset-0 h-full w-full object-cover';
+        image.addEventListener('error', () => image.remove());
+        thumbnail.appendChild(image);
+    }
 
     const names = document.createElement('div');
     names.className = 'min-w-0';
@@ -603,7 +626,7 @@ function renderFilePathChangeFolders() {
     }
 
     const folders = filePathChangeState.folders;
-    const images = filePathChangeState.files.filter(isFilePathPreviewImage);
+    const files = filePathChangeState.files.filter(isFilePathDisplayFile);
 
     list.appendChild(createFilePathSectionLabel('하위 폴더', folders.length));
     folders.forEach(folderPrefix => {
@@ -614,9 +637,9 @@ function renderFilePathChangeFolders() {
     });
     if (!folders.length) list.appendChild(createFilePathEmptyMessage('하위 폴더가 없습니다. 현재 폴더가 이동 대상으로 선택되어 있습니다.'));
 
-    list.appendChild(createFilePathSectionLabel('현재 폴더 이미지', images.length));
-    images.forEach(file => list.appendChild(createFilePathImageCard(file)));
-    if (!images.length) list.appendChild(createFilePathEmptyMessage('현재 폴더에 이미지가 없습니다.'));
+    list.appendChild(createFilePathSectionLabel('현재 폴더 파일', files.length));
+    files.forEach(file => list.appendChild(createFilePathFileCard(file)));
+    if (!files.length) list.appendChild(createFilePathEmptyMessage('현재 폴더에 표시할 파일이 없습니다.'));
     if (window.lucide) window.lucide.createIcons();
 }
 
@@ -654,11 +677,13 @@ async function loadFilePathChangeFolder(prefix) {
         filePathChangeState.folders = (data.folders || [])
             .filter(isExplorerVisibleFolder)
             .filter(isPrefixInsideFilePathRoot);
-        filePathChangeState.files = (data.files || []).filter(isExplorerVisibleFile);
+        filePathChangeState.files = (data.files || [])
+            .filter(isExplorerVisibleFile)
+            .sort((left, right) => compareNumberedFileNames(left.key, right.key));
         filePathChangeState.loading = false;
         filePathChangeState.loadError = false;
-        const imageCount = filePathChangeState.files.filter(isFilePathPreviewImage).length;
-        setFilePathFolderStatus(`하위 폴더 ${filePathChangeState.folders.length}개 · 이미지 ${imageCount}개`);
+        const fileCount = filePathChangeState.files.filter(isFilePathDisplayFile).length;
+        setFilePathFolderStatus(`하위 폴더 ${filePathChangeState.folders.length}개 · 파일 ${fileCount}개`);
         renderFilePathChangeBreadcrumbs();
         renderFilePathChangeFolders();
         updateFilePathChangePreview();
@@ -747,6 +772,7 @@ export function openFilePathChangeModal() {
     const alias = window.getAliasOnly(filePathChangeState.oldKey, false);
     const previewImage = document.getElementById('modal-img');
     const thumbnail = document.getElementById('file-path-change-thumbnail');
+    const fileIcon = document.getElementById('file-path-change-file-icon');
     if (nameInput) nameInput.value = fileName;
     const displayName = document.getElementById('file-path-change-display-name');
     const currentName = document.getElementById('file-path-change-current-name');
@@ -756,7 +782,17 @@ export function openFilePathChangeModal() {
     if (currentName) currentName.textContent = fileName;
     if (currentPath) currentPath.textContent = getProjectRelativePath(filePathChangeState.oldKey);
     if (submitError) submitError.textContent = '';
-    if (thumbnail) thumbnail.src = previewImage?.src || `/${filePathChangeState.oldKey}`;
+    const currentFileIsImage = isFilePathPreviewImage({ key: filePathChangeState.oldKey });
+    if (thumbnail) {
+        thumbnail.classList.toggle('hidden', !currentFileIsImage);
+        thumbnail.src = currentFileIsImage ? (previewImage?.src || getFilePathAssetUrl(filePathChangeState.oldKey)) : '';
+    }
+    if (fileIcon) {
+        const presentation = getFilePathFilePresentation(fileName);
+        fileIcon.classList.toggle('hidden', currentFileIsImage);
+        fileIcon.classList.toggle('flex', !currentFileIsImage);
+        fileIcon.innerHTML = currentFileIsImage ? '' : `<i data-lucide="${presentation.icon}" class="h-7 w-7 ${presentation.color}"></i><span class="text-[9px] font-bold">${presentation.label}</span>`;
+    }
 
     modal.classList.remove('hidden');
     modal.classList.add('flex');
