@@ -286,10 +286,10 @@ async function moveFileKey(oldKey, newKey) {
         body: JSON.stringify({ action: 'move', key: oldKey, newKey })
     });
     if (!res.ok) {
-        let message = '파일 이동에 실패했습니다.';
+        let message = res.status === 409 ? '대상 폴더에 같은 이름의 파일이 있습니다.' : '파일 이동에 실패했습니다.';
         try {
             const data = await res.json();
-            if (data && data.error) message = data.error;
+            if (data && data.error && res.status !== 409) message = data.error;
         } catch(e) {}
         throw new Error(message);
     }
@@ -396,58 +396,370 @@ export async function setModalFileAlias() {
     }
 }
 
-export async function renameCurrentFileOnly() {
-    if (!window.currentFileKey) return alert('선택된 파일이 없습니다.');
+const filePathChangeState = {
+    open: false,
+    busy: false,
+    loading: false,
+    loadError: false,
+    requestId: 0,
+    oldKey: '',
+    oldPrefix: '',
+    oldFileName: '',
+    rootPrefix: '',
+    browsePrefix: '',
+    folders: [],
+    files: [],
+    validation: null
+};
 
-    const { prefix, fileName } = splitFileKey(window.currentFileKey);
-    const nextName = prompt('새 파일 경로명을 입력하세요.', fileName);
-    if (nextName === null) return;
+function isPrefixInsideFilePathRoot(prefix) {
+    const normalized = normalizeFolderPrefix(prefix);
+    const root = filePathChangeState.rootPrefix;
+    return !root || normalized === root || normalized.startsWith(root);
+}
 
-    const cleanName = nextName.trim().replace(/^\/+/, '');
-    if (!cleanName) return alert('파일명을 입력하세요.');
-    if (cleanName.includes('/')) return alert('파일명에는 경로 구분자(/)를 넣을 수 없습니다.');
-    if (cleanName === fileName) return;
+function getProjectRelativePath(key) {
+    const root = filePathChangeState.rootPrefix;
+    const relative = root && key.startsWith(root) ? key.slice(root.length) : key;
+    return '/' + relative.replace(/^\/+/, '');
+}
 
-    const oldKey = window.currentFileKey;
-    const newKey = prefix + cleanName;
+function getFileExtension(fileName) {
+    const dotIndex = String(fileName || '').lastIndexOf('.');
+    return dotIndex > 0 ? fileName.slice(dotIndex).toLowerCase() : '';
+}
+
+function getFilePathProjectRoot(key) {
+    const configuredRoot = normalizeFolderPrefix(window.ROOT_PATH || '');
+    if (configuredRoot) return configuredRoot;
+    const parts = String(key || '').split('/').filter(Boolean);
+    return parts.length > 1 ? parts[0] + '/' : '';
+}
+
+function setFilePathFolderStatus(message, type = 'info') {
+    const status = document.getElementById('file-path-change-folder-status');
+    if (!status) return;
+    status.textContent = message || '';
+    status.className = message
+        ? `px-4 py-2 text-xs ${type === 'error' ? 'text-red-600 dark:text-red-400' : 'text-gray-500 dark:text-gray-400'}`
+        : 'hidden px-4 py-2 text-xs';
+}
+
+function createFilePathFolderButton(prefix, label, options = {}) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'flex min-w-0 items-center gap-3 rounded-lg border border-gray-200 bg-white px-3 py-3 text-left text-sm text-gray-700 transition hover:border-indigo-300 hover:bg-indigo-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 dark:border-gray-700 dark:bg-gray-900 dark:text-gray-200 dark:hover:border-indigo-700 dark:hover:bg-indigo-950/30';
+    button.innerHTML = `<i data-lucide="${options.parent ? 'corner-left-up' : 'folder'}" class="h-5 w-5 flex-shrink-0 ${options.parent ? 'text-gray-500' : 'fill-current text-yellow-500'}"></i>`;
+    const text = document.createElement('span');
+    text.className = 'min-w-0 truncate font-medium';
+    text.textContent = label;
+    button.appendChild(text);
+    button.title = getProjectRelativePath(prefix);
+    button.addEventListener('click', () => loadFilePathChangeFolder(prefix));
+    return button;
+}
+
+function renderFilePathChangeBreadcrumbs() {
+    const container = document.getElementById('file-path-change-breadcrumbs');
+    if (!container) return;
+    container.innerHTML = '';
+
+    const rootButton = document.createElement('button');
+    rootButton.type = 'button';
+    rootButton.className = 'inline-flex flex-shrink-0 items-center gap-1 rounded-md px-2 py-1.5 font-bold text-gray-700 hover:bg-gray-100 hover:text-indigo-600 dark:text-gray-200 dark:hover:bg-gray-800 dark:hover:text-indigo-400';
+    rootButton.innerHTML = '<i data-lucide="home" class="h-3.5 w-3.5"></i>';
+    const rootText = document.createElement('span');
+    const rootName = filePathChangeState.rootPrefix.split('/').filter(Boolean).pop();
+    rootText.textContent = window.getAliasOnly(filePathChangeState.rootPrefix, true) || rootName || '프로젝트';
+    rootButton.appendChild(rootText);
+    rootButton.addEventListener('click', () => loadFilePathChangeFolder(filePathChangeState.rootPrefix));
+    container.appendChild(rootButton);
+
+    const relative = filePathChangeState.browsePrefix.slice(filePathChangeState.rootPrefix.length);
+    const parts = relative.split('/').filter(Boolean);
+    let accumulated = filePathChangeState.rootPrefix;
+    parts.forEach(part => {
+        const separator = document.createElement('span');
+        separator.className = 'flex-shrink-0 text-gray-400';
+        separator.textContent = '›';
+        container.appendChild(separator);
+
+        accumulated += part + '/';
+        const targetPrefix = accumulated;
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'max-w-40 flex-shrink-0 truncate rounded-md px-2 py-1.5 text-gray-600 hover:bg-gray-100 hover:text-indigo-600 dark:text-gray-300 dark:hover:bg-gray-800 dark:hover:text-indigo-400';
+        button.textContent = window.getAliasOnly(targetPrefix, true) || part;
+        button.title = part;
+        button.addEventListener('click', () => loadFilePathChangeFolder(targetPrefix));
+        container.appendChild(button);
+    });
+
+    requestAnimationFrame(() => { container.scrollLeft = container.scrollWidth; });
+    if (window.lucide) window.lucide.createIcons();
+}
+
+function renderFilePathChangeFolders() {
+    const list = document.getElementById('file-path-change-folder-list');
+    if (!list) return;
+    list.innerHTML = '';
+
+    if (filePathChangeState.browsePrefix !== filePathChangeState.rootPrefix) {
+        const parts = filePathChangeState.browsePrefix.split('/').filter(Boolean);
+        parts.pop();
+        const parentPrefix = normalizeFolderPrefix(parts.join('/'));
+        list.appendChild(createFilePathFolderButton(
+            isPrefixInsideFilePathRoot(parentPrefix) ? parentPrefix : filePathChangeState.rootPrefix,
+            '상위 폴더',
+            { parent: true }
+        ));
+    }
+
+    filePathChangeState.folders.forEach(folderPrefix => {
+        const folderName = folderPrefix.split('/').filter(Boolean).pop();
+        const alias = window.getAliasOnly(folderPrefix, true);
+        const label = alias ? `${alias} (${folderName})` : folderName;
+        list.appendChild(createFilePathFolderButton(folderPrefix, label));
+    });
+
+    if (!list.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'col-span-full flex min-h-48 flex-col items-center justify-center rounded-lg border border-dashed border-gray-300 px-4 text-center text-xs text-gray-500 dark:border-gray-700 dark:text-gray-400';
+        empty.innerHTML = '<i data-lucide="folder-open" class="mb-2 h-8 w-8 text-gray-400"></i><span>하위 폴더가 없습니다.<br>현재 폴더가 이동 대상으로 선택되어 있습니다.</span>';
+        list.appendChild(empty);
+    }
+    if (window.lucide) window.lucide.createIcons();
+}
+
+async function loadFilePathChangeFolder(prefix) {
+    const normalized = normalizeFolderPrefix(prefix);
+    if (!filePathChangeState.open || !isPrefixInsideFilePathRoot(normalized)) return;
+
+    filePathChangeState.browsePrefix = normalized;
+    filePathChangeState.loading = true;
+    filePathChangeState.loadError = false;
+    filePathChangeState.folders = [];
+    filePathChangeState.files = [];
+    const requestId = ++filePathChangeState.requestId;
+    renderFilePathChangeBreadcrumbs();
+    setFilePathFolderStatus('폴더 목록을 불러오는 중입니다.');
+    const list = document.getElementById('file-path-change-folder-list');
+    if (list) list.innerHTML = '<div class="col-span-full flex min-h-48 items-center justify-center text-sm text-gray-500 dark:text-gray-400"><i data-lucide="loader" class="mr-2 h-5 w-5 animate-spin"></i>불러오는 중...</div>';
+    if (window.lucide) window.lucide.createIcons();
+    updateFilePathChangePreview();
 
     try {
-        await moveFileKey(oldKey, newKey);
-        await window.moveMetadataInDB(prefix, fileName, prefix, cleanName);
+        const [listRes, aliasRes] = await Promise.all([
+            fetch(`/api/list?prefix=${encodeURIComponent(normalized)}`),
+            fetch(`/api/aliases?prefix=${encodeURIComponent(normalized)}`)
+        ]);
+        if (!listRes.ok) throw new Error('폴더 목록을 불러오지 못했습니다.');
+        if (requestId !== filePathChangeState.requestId || !filePathChangeState.open) return;
 
-        window.currentFileKey = newKey;
-        clearFolderCache(prefix, window.currentPrefix);
-        await window.loadPath(window.currentPrefix, true);
-        window.closeModal(null, true);
-        alert('파일명이 변경되었습니다.');
-    } catch (err) {
-        alert(err.message);
+        if (aliasRes.ok) {
+            const aliasData = await aliasRes.json();
+            window.GLOBAL_ALIASES = Object.assign(window.GLOBAL_ALIASES || {}, aliasData.global || {});
+            window.PROJECT_ALIASES = Object.assign(window.PROJECT_ALIASES || {}, aliasData.project || {});
+        }
+        const data = await listRes.json();
+        filePathChangeState.folders = (data.folders || [])
+            .filter(isExplorerVisibleFolder)
+            .filter(isPrefixInsideFilePathRoot);
+        filePathChangeState.files = (data.files || []).filter(isExplorerVisibleFile);
+        filePathChangeState.loading = false;
+        filePathChangeState.loadError = false;
+        setFilePathFolderStatus('');
+        renderFilePathChangeBreadcrumbs();
+        renderFilePathChangeFolders();
+        updateFilePathChangePreview();
+    } catch (error) {
+        if (requestId !== filePathChangeState.requestId || !filePathChangeState.open) return;
+        filePathChangeState.loading = false;
+        filePathChangeState.loadError = true;
+        filePathChangeState.files = [];
+        setFilePathFolderStatus(error.message || '폴더 목록을 불러오지 못했습니다.', 'error');
+        if (list) list.innerHTML = '<div class="col-span-full flex min-h-48 items-center justify-center text-center text-xs text-red-600 dark:text-red-400">목록을 다시 불러오려면 breadcrumb의 폴더를 선택하세요.</div>';
+        updateFilePathChangePreview();
     }
 }
 
-export async function moveCurrentFile() {
+function validateFilePathChange() {
+    const input = document.getElementById('file-path-change-name');
+    const fileName = String(input?.value || '').trim();
+    let error = '';
+    if (!fileName) error = '파일명을 입력하세요.';
+    else if (fileName === '.' || fileName === '..') error = '사용할 수 없는 파일명입니다.';
+    else if (/[\\/]/.test(fileName)) error = '파일명에는 경로 구분자를 넣을 수 없습니다.';
+    else if (/[\u0000-\u001f\u007f]/.test(fileName)) error = '파일명에는 제어문자를 넣을 수 없습니다.';
+    else if (getFileExtension(fileName) !== getFileExtension(filePathChangeState.oldFileName)) error = '파일 확장자는 변경할 수 없습니다.';
+
+    const newKey = filePathChangeState.browsePrefix + fileName;
+    if (!error && !isPrefixInsideFilePathRoot(filePathChangeState.browsePrefix)) error = '프로젝트 밖으로 이동할 수 없습니다.';
+    if (!error && !filePathChangeState.loading && newKey !== filePathChangeState.oldKey) {
+        const conflict = filePathChangeState.files.some(file => file.key === newKey);
+        if (conflict) error = '대상 폴더에 같은 이름의 파일이 있습니다.';
+    }
+
+    return {
+        fileName,
+        newKey,
+        error,
+        folderChanged: filePathChangeState.browsePrefix !== filePathChangeState.oldPrefix,
+        nameChanged: fileName !== filePathChangeState.oldFileName,
+        changed: newKey !== filePathChangeState.oldKey
+    };
+}
+
+export function updateFilePathChangePreview() {
+    if (!filePathChangeState.open) return;
+    const validation = validateFilePathChange();
+    filePathChangeState.validation = validation;
+
+    const error = document.getElementById('file-path-change-name-error');
+    const nextPath = document.getElementById('file-path-change-next-path');
+    const summary = document.getElementById('file-path-change-summary');
+    const submit = document.getElementById('file-path-change-submit');
+    if (error) error.textContent = validation.error;
+    if (nextPath) nextPath.textContent = getProjectRelativePath(validation.newKey);
+    if (summary) {
+        if (!validation.changed) summary.textContent = '현재 경로와 같습니다.';
+        else if (validation.folderChanged && validation.nameChanged) summary.textContent = '폴더 이동과 파일명 변경을 함께 적용합니다.';
+        else if (validation.folderChanged) summary.textContent = '선택한 폴더로 파일을 이동합니다.';
+        else summary.textContent = '현재 폴더에서 파일명을 변경합니다.';
+    }
+    if (submit) submit.disabled = Boolean(validation.error) || !validation.changed || filePathChangeState.loading || filePathChangeState.loadError || filePathChangeState.busy;
+}
+
+export function openFilePathChangeModal() {
     if (!window.currentFileKey) return alert('선택된 파일이 없습니다.');
+    const modal = document.getElementById('file-path-change-modal');
+    if (!modal) return;
 
-    const { prefix: oldPrefix, fileName } = splitFileKey(window.currentFileKey);
-    const destinationInput = prompt('이동할 폴더 경로를 입력하세요.', oldPrefix);
-    if (destinationInput === null) return;
+    const { prefix, fileName } = splitFileKey(window.currentFileKey);
+    filePathChangeState.open = true;
+    filePathChangeState.busy = false;
+    filePathChangeState.loading = false;
+    filePathChangeState.loadError = false;
+    filePathChangeState.oldKey = window.currentFileKey;
+    filePathChangeState.oldPrefix = normalizeFolderPrefix(prefix);
+    filePathChangeState.oldFileName = fileName;
+    filePathChangeState.rootPrefix = getFilePathProjectRoot(window.currentFileKey);
+    filePathChangeState.browsePrefix = filePathChangeState.oldPrefix;
+    filePathChangeState.folders = [];
+    filePathChangeState.files = [];
 
-    const newPrefix = normalizeFolderPrefix(destinationInput);
-    const oldKey = window.currentFileKey;
-    const newKey = newPrefix + fileName;
-    if (newKey === oldKey) return;
+    if (!isPrefixInsideFilePathRoot(filePathChangeState.oldPrefix)) {
+        filePathChangeState.open = false;
+        return alert('현재 파일이 프로젝트 경로 밖에 있어 변경할 수 없습니다.');
+    }
+
+    const nameInput = document.getElementById('file-path-change-name');
+    const alias = window.getAliasOnly(filePathChangeState.oldKey, false);
+    const previewImage = document.getElementById('modal-img');
+    const thumbnail = document.getElementById('file-path-change-thumbnail');
+    if (nameInput) nameInput.value = fileName;
+    const displayName = document.getElementById('file-path-change-display-name');
+    const currentName = document.getElementById('file-path-change-current-name');
+    const currentPath = document.getElementById('file-path-change-current-path');
+    const submitError = document.getElementById('file-path-change-submit-error');
+    if (displayName) displayName.textContent = alias || fileName;
+    if (currentName) currentName.textContent = fileName;
+    if (currentPath) currentPath.textContent = getProjectRelativePath(filePathChangeState.oldKey);
+    if (submitError) submitError.textContent = '';
+    if (thumbnail) thumbnail.src = previewImage?.src || `/${filePathChangeState.oldKey}`;
+
+    modal.classList.remove('hidden');
+    modal.classList.add('flex');
+    void loadFilePathChangeFolder(filePathChangeState.oldPrefix);
+    setTimeout(() => {
+        nameInput?.focus({ preventScroll: true });
+        nameInput?.select();
+    }, 0);
+    if (window.lucide) window.lucide.createIcons();
+}
+
+export function closeFilePathChangeModal(event) {
+    const modal = document.getElementById('file-path-change-modal');
+    if (!modal || !filePathChangeState.open || filePathChangeState.busy) return;
+    if (event && event.target !== modal) return;
+    filePathChangeState.open = false;
+    filePathChangeState.requestId += 1;
+    modal.classList.add('hidden');
+    modal.classList.remove('flex');
+    document.getElementById('modal-path-change-btn')?.focus({ preventScroll: true });
+}
+
+export function handleFilePathChangeModalKeydown(event) {
+    if (!filePathChangeState.open) return;
+    if (event.key === 'Escape') {
+        event.preventDefault();
+        closeFilePathChangeModal();
+        return;
+    }
+    if (event.key !== 'Tab') return;
+    const modal = document.getElementById('file-path-change-modal');
+    const focusable = Array.from(modal?.querySelectorAll('button:not([disabled]), input:not([disabled]), [tabindex="0"]') || [])
+        .filter(element => element.offsetParent !== null);
+    if (!focusable.length) return;
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+    } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+    }
+}
+
+export async function applyFilePathChange() {
+    if (!filePathChangeState.open || filePathChangeState.busy || filePathChangeState.loading || filePathChangeState.loadError) return;
+    updateFilePathChangePreview();
+    const validation = filePathChangeState.validation;
+    if (!validation || validation.error || !validation.changed) return;
+
+    const submit = document.getElementById('file-path-change-submit');
+    const submitLabel = submit?.querySelector('span');
+    const submitError = document.getElementById('file-path-change-submit-error');
+    filePathChangeState.busy = true;
+    if (submit) submit.disabled = true;
+    if (submitLabel) submitLabel.textContent = '변경 중...';
+    if (submitError) submitError.textContent = '';
+
+    const oldKey = filePathChangeState.oldKey;
+    const oldPrefix = filePathChangeState.oldPrefix;
+    const oldFileName = filePathChangeState.oldFileName;
+    const newKey = validation.newKey;
+    const newPrefix = filePathChangeState.browsePrefix;
 
     try {
         await moveFileKey(oldKey, newKey);
-        await window.moveMetadataInDB(oldPrefix, fileName, newPrefix, fileName);
+        try {
+            await window.moveMetadataInDB(oldPrefix, oldFileName, newPrefix, validation.fileName, { throwOnError: true });
+        } catch (metadataError) {
+            try {
+                await moveFileKey(newKey, oldKey);
+            } catch (rollbackError) {
+                throw new Error(`파일은 이동되었지만 메타데이터 갱신과 자동 복구에 실패했습니다. 새 경로: ${getProjectRelativePath(newKey)}`);
+            }
+            throw new Error('메타데이터 갱신에 실패하여 파일 이동을 취소했습니다. 다시 시도해 주세요.');
+        }
 
         window.currentFileKey = newKey;
         clearFolderCache(oldPrefix, newPrefix, window.currentPrefix);
         await window.loadPath(window.currentPrefix, true);
+        filePathChangeState.busy = false;
+        closeFilePathChangeModal();
         window.closeModal(null, true);
-        alert('파일이 이동되었습니다.');
-    } catch (err) {
-        alert(err.message);
+        alert(validation.folderChanged && validation.nameChanged
+            ? '파일 이동과 파일명 변경이 완료되었습니다.'
+            : validation.folderChanged ? '파일 이동이 완료되었습니다.' : '파일명 변경이 완료되었습니다.');
+    } catch (error) {
+        filePathChangeState.busy = false;
+        if (submitError) submitError.textContent = error.message || '경로 변경에 실패했습니다.';
+        updateFilePathChangePreview();
+    } finally {
+        if (submitLabel) submitLabel.textContent = '변경 적용';
     }
 }
 

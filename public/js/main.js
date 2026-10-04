@@ -1,8 +1,8 @@
 // 8. main.js: 애플리케이션 진입점 및 모듈 통합 관리
 import './state.js?v=planner-demo-20260525a';
-import * as Api from './api.js?v=temp-meta-trace-20260521';
+import * as Api from './api.js?v=file-path-change-20261005a';
 import * as Ui from './ui.js?v=planner-sync-preserve-20260608a';
-import * as Explorer from './explorer.js?v=file-sort-20260925a';
+import * as Explorer from './explorer.js?v=file-path-change-20261005a';
 import * as Craft from './craft.js?v=planner-eta-health-20260925b';
 import * as TempGallery from './temp_gallery.js?v=novelai-v5-20260823d';
 import * as Modals from './modals.js?v=novelai-v5-20260823d';
@@ -341,8 +341,10 @@ window.addEventListener('popstate', (e) => {
     const previewModal = document.getElementById('preview-modal'); const uploadModal = document.getElementById('gallery-upload-modal');
     const memoModal = document.getElementById('memo-create-modal'); const importModal = document.getElementById('import-modal');
     const inpaintEditorModal = document.getElementById('inpaint-editor-modal'); const inpaintLibraryModal = document.getElementById('inpaint-library-modal');
+    const filePathChangeModal = document.getElementById('file-path-change-modal');
     let modalClosed = false;
-    
+
+    if (filePathChangeModal && !filePathChangeModal.classList.contains('hidden')) { window.closeFilePathChangeModal(); modalClosed = true; }
     if (previewModal && !previewModal.classList.contains('hidden')) { window.closeModal(null, true); modalClosed = true; }
     if (uploadModal && !uploadModal.classList.contains('hidden')) { window.closeGalleryUploadModal(null, true); modalClosed = true; }
     if (memoModal && !memoModal.classList.contains('hidden')) { window.closeMemoCreateModal(null, true); modalClosed = true; }

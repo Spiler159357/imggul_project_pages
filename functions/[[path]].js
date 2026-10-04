@@ -2918,7 +2918,12 @@ export async function onRequest(context) {
         try {
             await ensureJsonDbSchema(env);
             const body = await request.json();
-            if (!body?.oldPrefix || !body?.oldName || !body?.newPrefix || !body?.newName) {
+            if (
+                typeof body?.oldPrefix !== 'string'
+                || !body?.oldName
+                || typeof body?.newPrefix !== 'string'
+                || !body?.newName
+            ) {
                 return jsonResponse({ error: 'oldPrefix, oldName, newPrefix and newName are required' }, { status: 400 });
             }
             const row = await env.DB.prepare(
@@ -3346,6 +3351,16 @@ export async function onRequest(context) {
 
             if (action === 'move') {
                 if (!newKey) throw new Error('New path required');
+                if (!key) throw new Error('Current path required');
+                if (key === newKey) return new Response(JSON.stringify({ success: true, newKey }));
+
+                const destinationObject = await env.imgBucket.head(newKey);
+                if (destinationObject) {
+                    return new Response(JSON.stringify({ error: 'Destination file already exists' }), {
+                        status: 409,
+                        headers: { 'Content-Type': 'application/json; charset=utf-8' }
+                    });
+                }
                 let movedVirtual = false;
 
                 if (isTextFile(key)) {
@@ -3385,6 +3400,10 @@ export async function onRequest(context) {
                 } else if (!movedVirtual) {
                     throw new Error('File not found');
                 }
+
+                try {
+                    await moveAliasPrefix(env, key, newKey).catch(() => null);
+                } catch(e){}
                 
                 return new Response(JSON.stringify({ success: true, newKey }));
             }

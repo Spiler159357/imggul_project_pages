@@ -86,19 +86,31 @@ export async function removeMultipleMetadataFromDB(folderPrefix, fileNamesArray)
 
 /**
  * 역할: 파일 이동 시 기존 _meta.json의 메타데이터를 새 위치의 _meta.json으로 옮긴다.
- * 매개변수: oldPrefix, oldName - 원본 위치/파일명, newPrefix, newName - 새 위치/파일명.
- * 주요 변수: metaDataObj, oldMetaPath, db, buffer - 이동할 메타데이터와 원본 DB 갱신 데이터.
- * 반환값: 명시 반환 없음. 이동할 메타데이터가 있으면 saveMetadataToDB를 호출한다.
+ * 매개변수: oldPrefix, oldName - 원본 위치/파일명, newPrefix, newName - 새 위치/파일명, options - 오류 전달 여부.
+ * 주요 변수: response - 메타데이터 이동 API 응답.
+ * 반환값: 성공 여부. options.throwOnError가 true이면 실패 원인을 호출부로 전달한다.
  */
-export async function moveMetadataInDB(oldPrefix, oldName, newPrefix, newName) {
+export async function moveMetadataInDB(oldPrefix, oldName, newPrefix, newName, options = {}) {
     try {
-        await fetch('/api/db/file-metadata/move?_t=' + Date.now(), {
+        const response = await fetch('/api/db/file-metadata/move?_t=' + Date.now(), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json; charset=utf-8' },
             body: JSON.stringify({ oldPrefix, oldName, newPrefix, newName }),
             cache: 'no-store'
         });
-    } catch(e) {}
+        if (!response.ok) {
+            let message = '파일 메타데이터 이동에 실패했습니다.';
+            try {
+                const data = await response.json();
+                if (data?.error) message = data.error;
+            } catch (error) {}
+            throw new Error(message);
+        }
+        return true;
+    } catch (error) {
+        if (options.throwOnError) throw error;
+        return false;
+    }
 }
 
 /**

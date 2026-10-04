@@ -1143,18 +1143,83 @@
                             </button>
                          </div>
 
-                         <button onclick="window.renameCurrentFileOnly()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="R2 파일 경로명 변경">
-                            <i data-lucide="edit-2" class="w-4 h-4"></i><span class="modal-action-label">경로명</span>
-                         </button>
-
-                         <button onclick="window.moveCurrentFile()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="상위 경로 이동">
-                            <i data-lucide="folder-output" class="w-4 h-4"></i><span class="modal-action-label">이동</span>
+                         <button id="modal-path-change-btn" onclick="window.openFilePathChangeModal()" class="modal-action-button flex-1 sm:flex-none flex justify-center items-center gap-1.5 text-xs sm:text-sm text-gray-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 px-3 py-2 border border-gray-200 dark:border-gray-600 sm:border-transparent rounded sm:hover:bg-gray-100 dark:hover:bg-gray-700 transition" title="폴더 이동 또는 파일명 변경">
+                            <i data-lucide="folder-output" class="w-4 h-4"></i><span class="modal-action-label">경로 변경</span>
                          </button>
                     </div>
                     <button onclick="window.deleteCurrentFile()" class="modal-action-button w-full sm:w-auto mt-2 sm:mt-0 flex justify-center items-center gap-1.5 text-xs sm:text-sm text-red-500 hover:text-white hover:bg-red-500 dark:text-red-400 dark:hover:text-white dark:hover:bg-red-600 px-3 py-2 border border-red-200 dark:border-red-900 sm:border-transparent rounded transition" title="삭제">
                         <i data-lucide="trash-2" class="w-4 h-4"></i><span class="modal-action-label">삭제</span>
                     </button>
                 </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="file-path-change-modal" class="fixed inset-0 z-[60] hidden items-center justify-center bg-black/70 p-2 backdrop-blur-sm sm:p-4" onclick="window.closeFilePathChangeModal(event)">
+        <div role="dialog" aria-modal="true" aria-labelledby="file-path-change-title" aria-describedby="file-path-change-description" tabindex="-1" class="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900 sm:max-h-[90vh]" onclick="event.stopPropagation()" onkeydown="window.handleFilePathChangeModalKeydown(event)">
+            <div class="flex flex-shrink-0 items-start justify-between gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-700 sm:px-5 sm:py-4">
+                <div class="min-w-0">
+                    <h3 id="file-path-change-title" class="text-base font-bold text-gray-900 dark:text-white sm:text-lg">이미지 경로 변경</h3>
+                    <p id="file-path-change-description" class="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 sm:text-xs">프로젝트 안에서 이동할 폴더를 선택하고 파일명을 수정할 수 있습니다.</p>
+                </div>
+                <button id="file-path-change-close-btn" type="button" onclick="window.closeFilePathChangeModal()" class="flex-shrink-0 rounded-lg p-2 text-gray-500 transition hover:bg-gray-100 hover:text-red-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-red-400" aria-label="경로 변경 닫기">
+                    <i data-lucide="x" class="h-5 w-5"></i>
+                </button>
+            </div>
+
+            <div class="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
+                <div class="grid min-h-0 grid-cols-1 gap-4 lg:grid-cols-[minmax(0,1.35fr)_minmax(280px,0.65fr)]">
+                    <section class="flex min-h-[320px] flex-col overflow-hidden rounded-xl border border-gray-200 bg-gray-50 dark:border-gray-700 dark:bg-gray-800/40" aria-labelledby="file-path-folder-heading">
+                        <div class="border-b border-gray-200 bg-white px-3 py-3 dark:border-gray-700 dark:bg-gray-900/70 sm:px-4">
+                            <div class="flex items-center justify-between gap-2">
+                                <h4 id="file-path-folder-heading" class="text-sm font-bold text-gray-800 dark:text-gray-100">대상 폴더</h4>
+                                <span class="rounded-full bg-indigo-50 px-2 py-1 text-[10px] font-bold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">현재 위치가 선택됨</span>
+                            </div>
+                            <nav id="file-path-change-breadcrumbs" class="mt-2 flex min-h-8 items-center gap-1 overflow-x-auto whitespace-nowrap text-xs" aria-label="대상 폴더 경로"></nav>
+                        </div>
+                        <div id="file-path-change-folder-status" class="hidden px-4 py-2 text-xs" role="status" aria-live="polite"></div>
+                        <div id="file-path-change-folder-list" class="grid flex-1 content-start grid-cols-1 gap-2 overflow-y-auto p-3 sm:grid-cols-2 sm:p-4"></div>
+                    </section>
+
+                    <section class="flex flex-col gap-4 rounded-xl border border-gray-200 p-4 dark:border-gray-700">
+                        <div class="flex items-center gap-3">
+                            <div class="h-16 w-16 flex-shrink-0 overflow-hidden rounded-lg border border-gray-200 bg-checkered dark:border-gray-700">
+                                <img id="file-path-change-thumbnail" src="" alt="" class="h-full w-full object-cover">
+                            </div>
+                            <div class="min-w-0">
+                                <p id="file-path-change-display-name" class="truncate text-sm font-bold text-gray-900 dark:text-white"></p>
+                                <p id="file-path-change-current-name" class="mt-1 truncate font-mono text-[11px] text-gray-500 dark:text-gray-400"></p>
+                            </div>
+                        </div>
+
+                        <div>
+                            <label for="file-path-change-name" class="mb-1.5 block text-xs font-bold text-gray-700 dark:text-gray-200">파일명</label>
+                            <input id="file-path-change-name" type="text" autocomplete="off" spellcheck="false" oninput="window.updateFilePathChangePreview()" class="w-full rounded-lg border border-gray-300 bg-white px-3 py-2.5 font-mono text-sm text-gray-900 outline-none transition focus:border-indigo-500 focus:ring-2 focus:ring-indigo-500/20 dark:border-gray-600 dark:bg-gray-800 dark:text-white" aria-describedby="file-path-change-name-error">
+                            <p id="file-path-change-name-error" class="mt-1.5 min-h-4 text-[11px] text-red-600 dark:text-red-400" aria-live="polite"></p>
+                        </div>
+
+                        <div class="space-y-2 rounded-lg bg-gray-50 p-3 text-[11px] dark:bg-gray-800/70">
+                            <div>
+                                <span class="font-bold text-gray-500 dark:text-gray-400">현재 경로</span>
+                                <p id="file-path-change-current-path" class="mt-0.5 break-all font-mono text-gray-700 dark:text-gray-200"></p>
+                            </div>
+                            <div class="border-t border-gray-200 pt-2 dark:border-gray-700">
+                                <span class="font-bold text-indigo-600 dark:text-indigo-400">변경 후 경로</span>
+                                <p id="file-path-change-next-path" class="mt-0.5 break-all font-mono text-gray-900 dark:text-white"></p>
+                            </div>
+                        </div>
+
+                        <div id="file-path-change-summary" class="rounded-lg border border-gray-200 px-3 py-2 text-xs text-gray-600 dark:border-gray-700 dark:text-gray-300" aria-live="polite">변경할 내용을 선택하세요.</div>
+                        <p id="file-path-change-submit-error" class="min-h-4 text-xs text-red-600 dark:text-red-400" role="alert"></p>
+                    </section>
+                </div>
+            </div>
+
+            <div class="flex flex-shrink-0 items-center justify-end gap-2 border-t border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900/70 sm:px-5">
+                <button type="button" onclick="window.closeFilePathChangeModal()" class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-bold text-gray-700 transition hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">취소</button>
+                <button id="file-path-change-submit" type="button" onclick="window.applyFilePathChange()" disabled class="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-indigo-700 dark:hover:bg-indigo-600">
+                    <i data-lucide="check" class="h-4 w-4"></i><span>변경 적용</span>
+                </button>
             </div>
         </div>
     </div>
@@ -1223,6 +1288,6 @@
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=planner-eta-health-20260925b"></script>
+    <script type="module" src="/js/main.js?v=file-path-change-20261005a"></script>
 </body>
 </html>
