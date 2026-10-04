@@ -9,6 +9,11 @@ import {
     calculateNovelAiRepeatedRequestCost,
     calculateNovelAiRequestCost
 } from './nai-pricing.js?v=novelai-v5-20260823e';
+import {
+    PROMPT_COMPONENTS_METADATA_KEY,
+    buildPromptComponentsMetadata,
+    stripLeadingDefaultNegativePrompt
+} from './prompt-metadata.js?v=prompt-components-20261005a';
 
 const CRAFT_EXCLUDED_PROJECT_CHILD_FOLDERS = new Set(['logs', '_temp_craft', '_planner_temp_image']);
 const CRAFT_UPLOAD_CONTEXT_STORAGE_KEY = 'imggul_craft_upload_context';
@@ -1035,7 +1040,8 @@ export async function generateNaiImage(options = {}) {
 
     const promptDefaults = getCraftPromptDefaultSettings(window.readCraftSettings ? window.readCraftSettings() : null);
     const combinedPrompt = combinePromptSegments(promptParts.join(', '), promptDefaults.qualityTags);
-    const negativeText = combinePromptSegments(promptDefaults.defaultNegativePrompt, document.getElementById('nai-negative')?.value || '');
+    const userNegativePrompt = String(document.getElementById('nai-negative')?.value || '').trim();
+    const negativeText = combinePromptSegments(promptDefaults.defaultNegativePrompt, userNegativePrompt);
     const resRadio = document.querySelector('input[name="nai-res"]:checked');
     const [width, height] = resRadio ? resRadio.value.split('x').map(Number) : [832, 1216];
     const model = normalizeNovelAiModelId(document.getElementById('nai-model')?.value);
@@ -1148,7 +1154,7 @@ export async function generateNaiImage(options = {}) {
     window.GENERATION_QUEUE = [];
     for (let i = 0; i < repeatCount; i++) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
-        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: repeatCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, sm, smDyn, seed: loopSeed, approvedAnlasPerRequest, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, outputFileName: options.outputFileName || '', planner: options.planner || null, estimatedDurationMs });
+        window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: repeatCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, userNegativePrompt, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, sm, smDyn, seed: loopSeed, approvedAnlasPerRequest, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, outputFileName: options.outputFileName || '', planner: options.planner || null, estimatedDurationMs });
     }
     window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
 }
@@ -1319,6 +1325,15 @@ export async function processNextQueueItem() {
         
         updateProgress('최적화 및 임시 저장소 업로드 중...', 99);
         let extractedMetadata = await window.extractMetadata(generatedFile);
+        if (!extractedMetadata) extractedMetadata = {};
+        const appliedDefaultNegativePrompt = task.useDefaultNegativePrompt === false ? '' : task.defaultNegativePrompt;
+        const storedUserNegativePrompt = Object.prototype.hasOwnProperty.call(task, 'userNegativePrompt')
+            ? task.userNegativePrompt
+            : stripLeadingDefaultNegativePrompt(task.negative, appliedDefaultNegativePrompt);
+        extractedMetadata[PROMPT_COMPONENTS_METADATA_KEY] = buildPromptComponentsMetadata({
+            userNegativePrompt: storedUserNegativePrompt,
+            appliedDefaultNegativePrompt
+        });
         if (extractedMetadata && task.splitPrompts && Object.keys(task.splitPrompts).length > 0) { extractedMetadata["Split Prompts"] = task.splitPrompts; delete extractedMetadata["Prompt"]; }
         if (!extractedMetadata && task.inpaintSource?.key) extractedMetadata = {};
         if (extractedMetadata && task.inpaintSource?.key) {

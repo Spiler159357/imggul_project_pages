@@ -3,6 +3,7 @@ import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.j
 import { renderSectionHeader } from './manage.js?v=project-dashboard-20261005b';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=global-posts-20261005a';
 import { combinePromptParts, getSituationById } from './situation.js?v=global-posts-20261005a';
+import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 
 const PLANNER_DEFAULT_IMAGE_COUNT = 20;
 const PLANNER_MIN_IMAGE_COUNT = 1;
@@ -5908,10 +5909,22 @@ export function buildPlannerMetadataFallback(item) {
     const generation = item?.generation || {};
     const fields = generation.fields || {};
     const splitPrompts = buildPlannerSplitPrompts(generation);
+    const userNegativePrompt = generation.negative || fields.negative || '';
+    const appliedDefaultNegativePrompt = generation.useDefaultNegativePrompt === false
+        ? ''
+        : generation.defaultNegativePrompt || '';
+    const effectiveNegativePrompt = [appliedDefaultNegativePrompt, userNegativePrompt]
+        .map(value => String(value || '').trim())
+        .filter(Boolean)
+        .join(', ');
 
     const [width, height] = String(generation.res || DEFAULT_PLANNER_RESOLUTION).split('x').map(Number);
     const metadata = {
-        'Negative Prompt': generation.negative || fields.negative || '',
+        'Negative Prompt': effectiveNegativePrompt,
+        [PROMPT_COMPONENTS_METADATA_KEY]: buildPromptComponentsMetadata({
+            userNegativePrompt,
+            appliedDefaultNegativePrompt
+        }),
         'Resolution': `${Number.isFinite(width) ? width : 832} x ${Number.isFinite(height) ? height : 1216}`,
         'Steps': generation.steps,
         'Sampler': generation.sampler,

@@ -1,4 +1,5 @@
 // 팝업 창(업로드, 메모, 파일 미리보기, Import 탐색기) 제어
+import { resolveImportedNegativePrompt } from './prompt-metadata.js?v=prompt-components-20261005a';
 
 /**
  * 역할: 미리보기 모달의 현재 이미지를 다운로드하고 WebP는 PNG로 변환해 제공한다.
@@ -126,8 +127,13 @@ function applyImportedMetadataToCraft(meta, options = {}) {
         promptValues['prompt-raw'] = meta['Prompt'];
     }
 
+    const importedNegativePrompt = resolveImportedNegativePrompt(
+        meta,
+        window.readCraftBasePromptSettings ? window.readCraftBasePromptSettings() : {}
+    );
+
     if (window.applyCraftPromptValues) {
-        window.applyCraftPromptValues(promptValues, meta['Negative Prompt'] || '', {
+        window.applyCraftPromptValues(promptValues, importedNegativePrompt, {
             clearMissing: false,
             applyNegative: optNegative
         });
@@ -176,6 +182,10 @@ window.importMetadata = async function(fileKey, applyOptions = getFullImportAppl
             optSettings,
             optSeed
         } = normalizeImportApplyOptions(applyOptions);
+        const importedNegativePrompt = resolveImportedNegativePrompt(
+            meta,
+            window.readCraftBasePromptSettings ? window.readCraftBasePromptSettings() : {}
+        );
 
         if (window.applyCraftPromptValues) {
             applyImportedMetadataToCraft(meta, { optStyle, optComp, optChar, optCloth, optExp, optAct, optBg, optNegative });
@@ -237,9 +247,9 @@ window.importMetadata = async function(fileKey, applyOptions = getFullImportAppl
             }
         }
         
-        if (optNegative && meta['Negative Prompt'] !== undefined) {
+        if (optNegative && (meta['Negative Prompt'] !== undefined || meta['Prompt Components'])) {
             const el = document.getElementById('nai-negative');
-            if (el) { el.value = meta['Negative Prompt']; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
+            if (el) { el.value = importedNegativePrompt; el.style.height = 'auto'; el.style.height = el.scrollHeight + 'px'; }
         }
         }
 
