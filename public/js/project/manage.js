@@ -1,9 +1,8 @@
-import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=project-visibility-20260830a';
-import { renderCharacterSection } from './character.js?v=project-visibility-20260830a';
-import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js?v=planner-eta-health-20260925b';
-import { renderSituationSection } from './situation.js?v=project-visibility-20260830a';
+import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=global-posts-20261005a';
+import { renderCharacterSection } from './character.js?v=global-posts-20261005a';
+import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, renderPlannerSection } from './planner.js?v=global-posts-20261005a';
+import { renderSituationSection } from './situation.js?v=global-posts-20261005a';
 import { renderImageEditor } from '../image_editor.js';
-import { openProjectPostsSection } from './posts.js?v=project-visibility-20260830a';
 
 export async function renderProjectManage(skipHistory = true) {
     if (window.PROJECT_PLANNER_TARGET_PICKER?.open) window.closePlannerTargetPicker?.(null, false);
@@ -27,7 +26,17 @@ export async function renderProjectManage(skipHistory = true) {
 export function renderProjectManageShell(projects, state = {}) {
     renderProjectShell(`
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
-            <section class="w-full max-w-2xl mx-auto pt-8 sm:pt-14">
+            <section class="w-full max-w-3xl mx-auto pt-8 sm:pt-12">
+                <button type="button" onclick="window.openGlobalPostsSection()" class="mb-8 flex w-full items-center gap-4 rounded-xl border border-indigo-200 bg-indigo-50 p-4 text-left shadow-sm transition hover:border-indigo-400 hover:shadow-md dark:border-indigo-900/70 dark:bg-indigo-950/30 dark:hover:border-indigo-700 sm:p-5">
+                    <span class="flex h-11 w-11 flex-shrink-0 items-center justify-center rounded-xl bg-indigo-600 text-white dark:bg-indigo-500">
+                        <i data-lucide="newspaper" class="h-5 w-5"></i>
+                    </span>
+                    <span class="min-w-0 flex-1">
+                        <span class="block text-sm font-bold text-gray-900 dark:text-white sm:text-base">게시글 관리</span>
+                        <span class="mt-1 block text-xs leading-5 text-gray-500 dark:text-gray-400">모든 공개 프로젝트에 공통으로 표시되는 게시글과 댓글을 관리합니다.</span>
+                    </span>
+                    <i data-lucide="chevron-right" class="h-5 w-5 flex-shrink-0 text-indigo-500"></i>
+                </button>
                 <div class="grid grid-cols-[2rem_minmax(0,1fr)_2rem] items-center mb-4">
                     <div></div>
                     <h2 class="text-center text-lg font-bold text-gray-900 dark:text-white">프로젝트 목록</h2>
@@ -218,13 +227,12 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
         </div>
 
         <div class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6 flex items-stretch lg:items-center">
-            <section class="mx-auto grid min-h-full w-full max-w-6xl grid-cols-2 grid-rows-3 gap-3 sm:gap-4 lg:h-full lg:min-h-0 lg:grid-cols-3 lg:grid-rows-2 lg:gap-6">
+            <section class="mx-auto grid min-h-full w-full max-w-6xl grid-cols-2 gap-3 sm:gap-4 lg:h-auto lg:min-h-0 lg:grid-cols-5 lg:gap-4">
                 ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'prompt'), 'min-h-0')}
                 ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'character'), 'min-h-0')}
                 ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'situation'), 'min-h-0')}
                 ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'planner'), 'min-h-0')}
                 ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'image-editor'), 'min-h-0')}
-                ${renderProjectDashboardCard(project, PROJECT_SECTIONS.find(section => section.key === 'posts'), 'min-h-0')}
             </section>
         </div>
     `);
@@ -393,17 +401,6 @@ export function renderProjectPanelItems(project, section) {
         `;
     }
 
-    if (section.key === 'posts') {
-        const count = Array.isArray(project.posts) ? project.posts.length : 0;
-        return `
-            <span class="h-full flex flex-col items-center justify-center text-center text-xs text-gray-500 dark:text-gray-400">
-                <i data-lucide="newspaper" class="w-8 h-8 mb-2 text-indigo-500"></i>
-                <span class="font-bold text-gray-700 dark:text-gray-200">${count ? `${count}개 게시글` : section.emptyText}</span>
-                <span class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">게스트에게 공개할 소식을 관리합니다.</span>
-            </span>
-        `;
-    }
-
     const items = getProjectItems(project, section.itemKey);
     if (!items.length) {
         return `
@@ -520,10 +517,6 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         });
         window.PROJECT_IMAGE_EDITOR_NEXT_OPTIONS = null;
     }
-    else if (section.key === 'posts') {
-        await openProjectPostsSection(true);
-    }
-
     const routeState = { projectView: 'section', projectId: window.PROJECT_ACTIVE_PROJECT_ID, projectSection: section.key };
     const routeHash = `#project/${window.PROJECT_ACTIVE_PROJECT_ID}/${section.key}`;
     if (!skipHistory) setProjectRoute(routeState, routeHash);

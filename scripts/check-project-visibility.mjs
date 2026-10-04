@@ -16,8 +16,6 @@ const projects = new Map([
     }]
 ]);
 
-let deletedCommentId = '';
-
 function findProject(values) {
     return [...projects.values()].find(project => values.some(value => (
         value === project.id
@@ -40,18 +38,6 @@ const env = {
                 bind(...values) {
                     return {
                         async first() {
-                            if (normalized.includes('FROM guest_comments c')) {
-                                return values[0] === 'private-comment'
-                                    ? {
-                                        id: 'private-comment',
-                                        post_id: 'private-post',
-                                        project_id: 'private-project',
-                                        project_is_public: 0,
-                                        password_hash: 'unused',
-                                        password_salt: 'unused'
-                                    }
-                                    : null;
-                            }
                             if (normalized.includes('FROM v2_projects')) {
                                 const project = findProject(values);
                                 if (!project) return null;
@@ -67,9 +53,6 @@ const env = {
                                 assert.ok(project);
                                 assert.ok(updatedAt);
                                 project.is_public = Number(isPublic);
-                            }
-                            if (normalized.startsWith('DELETE FROM guest_comments')) {
-                                deletedCommentId = String(values[0] || '');
                             }
                             return { success: true };
                         }
@@ -127,26 +110,5 @@ const updateResponse = await guestApi('/api/admin/projects/private-project/visib
 assert.equal(updateResponse.status, 200);
 assert.equal((await updateResponse.json()).data.isPublic, true);
 assert.equal(projects.get('private-project').is_public, 1);
-
-projects.get('private-project').is_public = 0;
-const privateCommentResponse = await guestApi('/api/guest/comments/private-comment', {
-    method: 'PATCH',
-    body: {
-        password: 'password-123',
-        authorName: 'Guest',
-        body: 'Updated'
-    }
-});
-assert.equal(privateCommentResponse.status, 404);
-assert.deepEqual(await privateCommentResponse.json(), {
-    error: { code: 'COMMENT_NOT_FOUND', message: '댓글을 찾을 수 없습니다.' }
-});
-
-const adminCommentDeleteResponse = await guestApi('/api/guest/comments/private-comment', {
-    method: 'DELETE',
-    isAdmin: true
-});
-assert.equal(adminCommentDeleteResponse.status, 200);
-assert.equal(deletedCommentId, 'private-comment');
 
 console.log('project visibility checks passed');

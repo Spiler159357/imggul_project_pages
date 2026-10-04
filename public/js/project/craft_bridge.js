@@ -1,7 +1,7 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=project-visibility-20260830a';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=project-visibility-20260830a';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=project-visibility-20260830a';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=project-visibility-20260830a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=global-posts-20261005a';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=global-posts-20261005a';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=global-posts-20261005a';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=global-posts-20261005a';
 
 export function getCraftPromptFields() {
     return {
@@ -641,10 +641,11 @@ export async function saveCraftPromptToSituation() {
 }
 
 export async function restoreProjectState(state = {}) {
-    if (state.projectView === 'post-detail' && state.projectPostId) {
-        window.PROJECT_ACTIVE_PROJECT_ID = state.projectId || getDefaultProjectId();
-        await openProjectSection('posts', true);
+    if (state.projectView === 'global-post-detail' && state.projectPostId) {
+        await window.openGlobalPostsSection?.(true);
         await window.openAdminPost?.(state.projectPostId, true);
+    } else if (state.projectView === 'global-posts') {
+        await window.openGlobalPostsSection?.(true);
     } else if (state.projectView === 'section' && state.projectSection) {
         window.PROJECT_ACTIVE_PROJECT_ID = state.projectId || getDefaultProjectId();
         await openProjectSection(state.projectSection, true);

@@ -3338,11 +3338,6 @@ export async function onRequest(context) {
                         UPDATE v2_assets
                         SET r2_key = ? || substr(r2_key, length(?) + 1), updated_at = ?
                         WHERE r2_key LIKE ?
-                    `).bind(newPrefix, oldPrefix, timestamp, `${oldPrefix}%`),
-                    env.DB.prepare(`
-                        UPDATE guest_posts
-                        SET image_key = ? || substr(image_key, length(?) + 1), updated_at = ?
-                        WHERE image_key LIKE ?
                     `).bind(newPrefix, oldPrefix, timestamp, `${oldPrefix}%`)
                 ]);
 

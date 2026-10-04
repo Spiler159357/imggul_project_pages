@@ -42,13 +42,6 @@ export const PROJECT_SECTIONS = [
         title: '편집기',
         icon: 'scissors',
         emptyText: '편집할 이미지를 선택하세요.'
-    },
-    {
-        key: 'posts',
-        itemKey: 'posts',
-        title: '게시글',
-        icon: 'newspaper',
-        emptyText: '등록된 게시글이 없습니다.'
     }
 ];
 
@@ -898,8 +891,7 @@ export async function loadProjects(force = false) {
                 isPublic: visibilityByPrefix.get(folderPrefix) === true,
                 prompts: [],
                 characters: [],
-                situations: [],
-                posts: []
+                situations: []
             };
         })
         .filter(project => project.folderName && !EXCLUDED_PROJECT_FOLDERS.has(project.folderName));

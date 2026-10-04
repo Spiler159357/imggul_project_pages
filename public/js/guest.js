@@ -11,6 +11,7 @@ const state = {
     imageClosePending: false,
     commentReturnFocus: null,
     commentAction: null,
+    replyingToId: null,
     postsRefreshInFlight: false
 };
 
@@ -20,6 +21,7 @@ const content = document.getElementById('guest-content');
 const main = document.getElementById('guest-main');
 const projectPath = String(window.GUEST_PROJECT_PATH || '').trim();
 const apiBase = `/api/guest/projects/${encodeURIComponent(projectPath)}`;
+const globalPostsApiBase = '/api/guest/posts';
 
 function escapeHtml(value) {
     return String(value ?? '')
@@ -79,7 +81,13 @@ function postRevision(post) {
         post.body,
         post.imageUrl,
         post.updatedAt,
-        (post.comments || []).map(comment => [comment.id, comment.authorName, comment.body, comment.updatedAt])
+        (post.comments || []).map(comment => [
+            comment.id,
+            comment.authorName,
+            comment.body,
+            comment.updatedAt,
+            (comment.replies || []).map(reply => [reply.id, reply.authorName, reply.body, reply.updatedAt])
+        ])
     ]);
 }
 
@@ -221,7 +229,7 @@ function postCard(post) {
 
 async function ensurePosts() {
     if (state.postsLoaded) return;
-    const page = await api(`${apiBase}/posts?limit=20`);
+    const page = await api(`${globalPostsApiBase}?limit=20`);
     state.posts = page.items;
     state.nextCursor = page.nextCursor;
     state.postsLoaded = true;
@@ -251,21 +259,48 @@ async function renderPosts() {
     }
 }
 
-function commentHtml(comment) {
+function replyFormHtml(commentId) {
+    if (state.replyingToId !== commentId) return '';
+    const suffix = escapeHtml(commentId);
     return `
-        <article class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/50">
-            <div class="flex items-start justify-between gap-3">
-                <div class="min-w-0">
-                    <p class="truncate text-xs font-bold text-gray-800 dark:text-gray-100">${escapeHtml(comment.authorName)}</p>
-                    <p class="mt-0.5 text-[10px] text-gray-400">${escapeHtml(formatDate(comment.updatedAt || comment.createdAt))}${comment.edited ? ' · 수정됨' : ''}</p>
-                </div>
-                <div class="flex flex-shrink-0 gap-1">
-                    <button type="button" data-comment-edit="${escapeHtml(comment.id)}" class="rounded p-1.5 text-gray-400 hover:bg-white hover:text-indigo-600 dark:hover:bg-gray-800" aria-label="댓글 수정"><i data-lucide="pencil" class="h-3.5 w-3.5"></i></button>
-                    <button type="button" data-comment-delete="${escapeHtml(comment.id)}" class="rounded p-1.5 text-gray-400 hover:bg-white hover:text-red-500 dark:hover:bg-gray-800" aria-label="댓글 삭제"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i></button>
+        <form class="mt-2 rounded-lg border border-indigo-200 bg-indigo-50/60 p-3 dark:border-indigo-900/70 dark:bg-indigo-950/20" data-reply-form="${suffix}">
+            <p class="mb-2 text-xs font-bold text-indigo-700 dark:text-indigo-300">대댓글 작성</p>
+            <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
+                <input id="guest-reply-name-${suffix}" type="text" maxlength="30" placeholder="이름" aria-label="대댓글 이름" class="rounded-lg border border-gray-300 bg-white p-2.5 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" required>
+                <input id="guest-reply-password-${suffix}" type="password" minlength="8" maxlength="72" autocomplete="new-password" placeholder="비밀번호 (8자 이상)" aria-label="대댓글 비밀번호" class="rounded-lg border border-gray-300 bg-white p-2.5 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" required>
+            </div>
+            <textarea id="guest-reply-body-${suffix}" maxlength="2000" rows="3" placeholder="대댓글을 입력하세요." aria-label="대댓글 내용" class="mt-2 w-full resize-y rounded-lg border border-gray-300 bg-white p-2.5 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" required></textarea>
+            <div class="mt-2 flex items-center justify-between gap-3">
+                <p id="guest-reply-error-${suffix}" class="hidden text-xs text-red-500" role="alert"></p>
+                <div class="ml-auto flex gap-2">
+                    <button type="button" data-reply-cancel class="rounded-lg border border-gray-200 bg-white px-3 py-2 text-xs font-bold text-gray-600 dark:border-gray-700 dark:bg-gray-800 dark:text-gray-300">취소</button>
+                    <button type="submit" class="rounded-lg bg-indigo-600 px-3 py-2 text-xs font-bold text-white hover:bg-indigo-700">대댓글 등록</button>
                 </div>
             </div>
-            <p class="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-gray-700 dark:text-gray-200">${escapeHtml(comment.body)}</p>
-        </article>`;
+        </form>`;
+}
+
+function commentHtml(comment, isReply = false) {
+    const replies = isReply ? '' : (comment.replies || []).map(reply => commentHtml(reply, true)).join('');
+    return `
+        <div class="${isReply ? 'ml-4 border-l-2 border-indigo-100 pl-3 dark:border-indigo-900/60' : ''}">
+            <article class="rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/50">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <p class="truncate text-xs font-bold text-gray-800 dark:text-gray-100">${isReply ? '<span class="mr-1 text-indigo-500">답글</span>' : ''}${escapeHtml(comment.authorName)}</p>
+                        <p class="mt-0.5 text-[10px] text-gray-400">${escapeHtml(formatDate(comment.updatedAt || comment.createdAt))}${comment.edited ? ' · 수정됨' : ''}</p>
+                    </div>
+                    <div class="flex flex-shrink-0 gap-1">
+                        ${isReply ? '' : `<button type="button" data-comment-reply="${escapeHtml(comment.id)}" class="rounded px-2 py-1 text-[11px] font-bold text-gray-500 hover:bg-white hover:text-indigo-600 dark:text-gray-400 dark:hover:bg-gray-800" aria-label="대댓글 작성">답글</button>`}
+                        <button type="button" data-comment-edit="${escapeHtml(comment.id)}" class="rounded p-1.5 text-gray-400 hover:bg-white hover:text-indigo-600 dark:hover:bg-gray-800" aria-label="${isReply ? '대댓글' : '댓글'} 수정"><i data-lucide="pencil" class="h-3.5 w-3.5"></i></button>
+                        <button type="button" data-comment-delete="${escapeHtml(comment.id)}" class="rounded p-1.5 text-gray-400 hover:bg-white hover:text-red-500 dark:hover:bg-gray-800" aria-label="${isReply ? '대댓글' : '댓글'} 삭제"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i></button>
+                    </div>
+                </div>
+                <p class="mt-2 whitespace-pre-wrap break-words text-sm leading-6 text-gray-700 dark:text-gray-200">${escapeHtml(comment.body)}</p>
+            </article>
+            ${isReply ? '' : replyFormHtml(comment.id)}
+            ${replies ? `<div class="mt-2 space-y-2">${replies}</div>` : ''}
+        </div>`;
 }
 
 async function renderPostDetail(postId, options = {}) {
@@ -282,7 +317,8 @@ async function renderPostDetail(postId, options = {}) {
     } : null;
     if (!options.post) renderState('loader-circle', '게시글을 불러오는 중입니다.');
     try {
-        const post = options.post || await api(`${apiBase}/posts/${encodeURIComponent(postId)}`);
+        const post = options.post || await api(`${globalPostsApiBase}/${encodeURIComponent(postId)}`);
+        if (state.activePost?.id !== post.id) state.replyingToId = null;
         state.activePost = post;
         const summaryIndex = state.posts.findIndex(item => item.id === post.id);
         if (summaryIndex >= 0) {
@@ -317,7 +353,7 @@ async function renderPostDetail(postId, options = {}) {
                 </section>
 
                 <section class="mt-4 rounded-lg border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-gray-800 sm:p-5">
-                    <h2 class="text-sm font-bold text-gray-900 dark:text-white">댓글 ${post.comments.length}개</h2>
+                    <h2 class="text-sm font-bold text-gray-900 dark:text-white">댓글 ${post.commentCount || 0}개</h2>
                     <form id="guest-comment-create-form" class="mt-4 rounded-lg border border-gray-200 bg-gray-50 p-3 dark:border-gray-700 dark:bg-gray-900/50">
                         <div class="grid grid-cols-1 gap-2 sm:grid-cols-2">
                             <input id="guest-comment-name" type="text" maxlength="30" placeholder="이름" aria-label="댓글 이름" class="rounded-lg border border-gray-300 bg-white p-2.5 text-sm focus:border-indigo-500 focus:ring-indigo-500 dark:border-gray-600 dark:bg-gray-700 dark:text-white" required>
@@ -401,12 +437,12 @@ async function detectVisibleGuestPostChanges() {
     try {
         if (!route.id) {
             const limit = Math.min(50, Math.max(20, state.posts.length || 0));
-            const page = await api(`${apiBase}/posts?limit=${limit}`);
+            const page = await api(`${globalPostsApiBase}?limit=${limit}`);
             setGuestPostsRefreshNeeded(postsRevision(state.posts) !== postsRevision(page.items));
             return;
         }
 
-        const post = await api(`${apiBase}/posts/${encodeURIComponent(route.id)}`);
+        const post = await api(`${globalPostsApiBase}/${encodeURIComponent(route.id)}`);
         setGuestPostsRefreshNeeded(postRevision(state.activePost) !== postRevision(post));
     } catch (error) {
         if (error.status === 404) setGuestPostsRefreshNeeded(true);
@@ -424,14 +460,14 @@ async function refreshGuestPosts() {
     try {
         if (!route.id) {
             const limit = Math.min(50, Math.max(20, state.posts.length || 0));
-            const page = await api(`${apiBase}/posts?limit=${limit}`);
+            const page = await api(`${globalPostsApiBase}?limit=${limit}`);
             state.postsScrollTop = main.scrollTop;
             state.posts = page.items;
             state.nextCursor = page.nextCursor;
             state.postsLoaded = true;
             renderPostList();
         } else {
-            const post = await api(`${apiBase}/posts/${encodeURIComponent(route.id)}`);
+            const post = await api(`${globalPostsApiBase}/${encodeURIComponent(route.id)}`);
             await renderPostDetail(route.id, { post, preserveView: true });
         }
         setGuestPostsRefreshNeeded(false);
@@ -494,13 +530,24 @@ function closeImageModal() {
     hideImageModal();
 }
 
+function findActiveComment(commentId) {
+    for (const comment of state.activePost?.comments || []) {
+        if (comment.id === commentId) return { comment, isReply: false };
+        const reply = (comment.replies || []).find(item => item.id === commentId);
+        if (reply) return { comment: reply, isReply: true };
+    }
+    return null;
+}
+
 function openCommentModal(mode, commentId, button) {
-    const comment = state.activePost?.comments.find(item => item.id === commentId);
+    const found = findActiveComment(commentId);
+    const comment = found?.comment;
     if (!comment) return;
-    state.commentAction = { mode, commentId };
+    state.commentAction = { mode, commentId, isReply: found.isReply, hasReplies: (comment.replies || []).length > 0 };
     state.commentReturnFocus = button;
     const isDelete = mode === 'delete';
-    document.getElementById('guest-comment-modal-title').textContent = isDelete ? '댓글 삭제' : '댓글 수정';
+    const label = found.isReply ? '대댓글' : '댓글';
+    document.getElementById('guest-comment-modal-title').textContent = isDelete ? `${label} 삭제` : `${label} 수정`;
     document.getElementById('guest-comment-edit-fields').classList.toggle('hidden', isDelete);
     const nameInput = document.getElementById('guest-comment-edit-name');
     const bodyInput = document.getElementById('guest-comment-edit-body');
@@ -509,7 +556,11 @@ function openCommentModal(mode, commentId, button) {
     nameInput.disabled = isDelete;
     bodyInput.disabled = isDelete;
     document.getElementById('guest-comment-action-password').value = '';
-    document.getElementById('guest-comment-action-error').classList.add('hidden');
+    const actionMessage = document.getElementById('guest-comment-action-error');
+    actionMessage.textContent = isDelete && !found.isReply && (comment.replies || []).length
+        ? '이 댓글을 삭제하면 대댓글도 함께 삭제됩니다.'
+        : '';
+    actionMessage.classList.toggle('hidden', !actionMessage.textContent);
     const submit = document.getElementById('guest-comment-action-submit');
     submit.textContent = isDelete ? '삭제' : '저장';
     submit.classList.toggle('bg-red-600', isDelete);
@@ -537,7 +588,7 @@ async function createComment(form) {
     submit.disabled = true;
     errorElement.classList.add('hidden');
     try {
-        await api(`${apiBase}/posts/${encodeURIComponent(state.activePost.id)}/comments`, {
+        await api(`${globalPostsApiBase}/${encodeURIComponent(state.activePost.id)}/comments`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
@@ -549,6 +600,56 @@ async function createComment(form) {
         });
         passwordInput.value = '';
         form.reset();
+        await renderPostDetail(state.activePost.id);
+        setGuestPostsRefreshNeeded(false);
+    } catch (error) {
+        passwordInput.value = '';
+        errorElement.textContent = error.message;
+        errorElement.classList.remove('hidden');
+    } finally {
+        submit.disabled = false;
+    }
+}
+
+async function openReplyForm(commentId) {
+    if (!state.activePost?.id) return;
+    state.replyingToId = commentId;
+    await renderPostDetail(state.activePost.id, { post: state.activePost, preserveView: true });
+    document.getElementById(`guest-reply-name-${commentId}`)?.focus({ preventScroll: true });
+}
+
+async function closeReplyForm() {
+    if (!state.activePost?.id || !state.replyingToId) return;
+    const commentId = state.replyingToId;
+    state.replyingToId = null;
+    await renderPostDetail(state.activePost.id, { post: state.activePost, preserveView: true });
+    document.querySelector(`[data-comment-reply="${commentId}"]`)?.focus({ preventScroll: true });
+}
+
+async function createReply(form, parentCommentId) {
+    if (!state.activePost?.id) return;
+    const submit = form.querySelector('button[type="submit"]');
+    const nameInput = form.querySelector('[id^="guest-reply-name-"]');
+    const passwordInput = form.querySelector('[id^="guest-reply-password-"]');
+    const bodyInput = form.querySelector('[id^="guest-reply-body-"]');
+    const errorElement = form.querySelector('[id^="guest-reply-error-"]');
+    if (!submit || !nameInput || !passwordInput || !bodyInput || !errorElement) return;
+    submit.disabled = true;
+    errorElement.classList.add('hidden');
+    try {
+        await api(`${globalPostsApiBase}/${encodeURIComponent(state.activePost.id)}/comments`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                parentCommentId,
+                authorName: nameInput.value,
+                password: passwordInput.value,
+                body: bodyInput.value,
+                requestId: crypto.randomUUID()
+            })
+        });
+        passwordInput.value = '';
+        state.replyingToId = null;
         await renderPostDetail(state.activePost.id);
         setGuestPostsRefreshNeeded(false);
     } catch (error) {
@@ -600,7 +701,7 @@ async function loadMorePosts(button) {
     if (!state.nextCursor) return;
     button.disabled = true;
     try {
-        const page = await api(`${apiBase}/posts?limit=20&cursor=${encodeURIComponent(state.nextCursor)}`);
+        const page = await api(`${globalPostsApiBase}?limit=20&cursor=${encodeURIComponent(state.nextCursor)}`);
         state.posts.push(...page.items);
         state.nextCursor = page.nextCursor;
         state.postsScrollTop = main.scrollTop;
@@ -641,6 +742,16 @@ content.addEventListener('click', event => {
         openImageModal(imageButton);
         return;
     }
+    const replyButton = event.target.closest('[data-comment-reply]');
+    if (replyButton) {
+        openReplyForm(replyButton.dataset.commentReply);
+        return;
+    }
+    const replyCancelButton = event.target.closest('[data-reply-cancel]');
+    if (replyCancelButton) {
+        closeReplyForm();
+        return;
+    }
     const editButton = event.target.closest('[data-comment-edit]');
     if (editButton) {
         openCommentModal('edit', editButton.dataset.commentEdit, editButton);
@@ -651,9 +762,16 @@ content.addEventListener('click', event => {
 });
 
 content.addEventListener('submit', event => {
-    if (event.target.id !== 'guest-comment-create-form') return;
-    event.preventDefault();
-    createComment(event.target);
+    if (event.target.id === 'guest-comment-create-form') {
+        event.preventDefault();
+        createComment(event.target);
+        return;
+    }
+    const parentCommentId = event.target.dataset.replyForm;
+    if (parentCommentId) {
+        event.preventDefault();
+        createReply(event.target, parentCommentId);
+    }
 });
 
 content.addEventListener('click', event => {

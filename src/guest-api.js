@@ -444,13 +444,13 @@ async function readPostForm(request) {
     };
 }
 
-async function putPostImage(env, project, postId, image) {
+async function putPostImage(env, postId, image) {
     if (!image) return null;
     const extension = getExtension(image.name) === 'jpeg' ? 'jpg' : getExtension(image.name);
-    const key = `${project.prefix}_guest_posts/${postId}/image-${crypto.randomUUID()}.${extension}`;
+    const key = `_guest_posts/${postId}/image-${crypto.randomUUID()}.${extension}`;
     await env.imgBucket.put(key, await image.arrayBuffer(), {
         httpMetadata: { contentType: image.type },
-        customMetadata: { ispublic: 'false', kind: 'guest-post', projectid: String(project.id), postid: postId }
+        customMetadata: { ispublic: 'false', kind: 'guest-post', postid: postId }
     });
     return key;
 }
@@ -467,6 +467,7 @@ function runCleanup(context, promise, details) {
 function serializeComment(row) {
     return {
         id: row.id,
+        parentCommentId: row.parent_comment_id || null,
         authorName: row.author_name,
         body: row.body,
         createdAt: row.created_at,
@@ -475,7 +476,7 @@ function serializeComment(row) {
     };
 }
 
-function serializePost(row, projectPath, { detail = false, comments = [] } = {}) {
+function serializePost(row, { detail = false, comments = [] } = {}) {
     const imageVersion = row.image_key ? String(row.image_key).split('/').pop() : '';
     const post = {
         id: row.id,
@@ -486,10 +487,25 @@ function serializePost(row, projectPath, { detail = false, comments = [] } = {})
         edited: row.updated_at !== row.created_at,
         commentCount: Number(row.comment_count || comments.length || 0),
         imageUrl: row.image_key
-            ? `/api/guest/projects/${encodeURIComponent(projectPath)}/posts/${encodeURIComponent(row.id)}/image?v=${encodeURIComponent(imageVersion)}`
+            ? `/api/guest/posts/${encodeURIComponent(row.id)}/image?v=${encodeURIComponent(imageVersion)}`
             : null
     };
-    if (detail) post.comments = comments.map(serializeComment);
+    if (detail) {
+        const topLevel = [];
+        const byId = new Map();
+        for (const rowComment of comments) {
+            const comment = { ...serializeComment(rowComment), replies: [] };
+            byId.set(comment.id, comment);
+            if (!comment.parentCommentId) topLevel.push(comment);
+        }
+        for (const rowComment of comments) {
+            if (!rowComment.parent_comment_id) continue;
+            const parent = byId.get(rowComment.parent_comment_id);
+            const reply = byId.get(rowComment.id);
+            if (parent && reply) parent.replies.push(reply);
+        }
+        post.comments = topLevel;
+    }
     return post;
 }
 
@@ -509,17 +525,17 @@ function decodeCursor(value) {
     }
 }
 
-async function listPosts(env, project, cursorValue, limitValue = 20) {
+async function listPosts(env, cursorValue, limitValue = 20) {
     const limit = Math.min(Math.max(Number(limitValue) || 20, 1), 50);
     const cursor = decodeCursor(cursorValue);
-    const whereCursor = cursor ? 'AND (p.created_at < ? OR (p.created_at = ? AND p.id < ?))' : '';
-    const bindings = cursor ? [project.id, cursor[0], cursor[0], cursor[1], limit + 1] : [project.id, limit + 1];
+    const whereCursor = cursor ? 'WHERE (p.created_at < ? OR (p.created_at = ? AND p.id < ?))' : '';
+    const bindings = cursor ? [cursor[0], cursor[0], cursor[1], limit + 1] : [limit + 1];
     const rows = (await env.DB.prepare(`
         SELECT p.id, p.title, p.body, p.image_key, p.created_at, p.updated_at,
                COUNT(c.id) AS comment_count
         FROM guest_posts p
         LEFT JOIN guest_comments c ON c.post_id = p.id
-        WHERE p.project_id = ? ${whereCursor}
+        ${whereCursor}
         GROUP BY p.id
         ORDER BY p.created_at DESC, p.id DESC
         LIMIT ?
@@ -527,42 +543,44 @@ async function listPosts(env, project, cursorValue, limitValue = 20) {
     const hasMore = rows.length > limit;
     const page = rows.slice(0, limit);
     return {
-        items: page.map(row => serializePost(row, project.path)),
+        items: page.map(row => serializePost(row)),
         nextCursor: hasMore && page.length ? encodeCursor(page[page.length - 1]) : null
     };
 }
 
-async function getPostForProject(env, project, postId) {
+async function getPost(env, postId) {
     const row = await env.DB.prepare(`
         SELECT p.*, (SELECT COUNT(*) FROM guest_comments c WHERE c.post_id = p.id) AS comment_count
         FROM guest_posts p
-        WHERE p.id = ? AND p.project_id = ?
+        WHERE p.id = ?
         LIMIT 1
-    `).bind(decodeSegment(postId), project.id).first();
+    `).bind(decodeSegment(postId)).first();
     if (!row) throw new GuestApiError(404, 'POST_NOT_FOUND', '게시글을 찾을 수 없습니다.');
     return row;
 }
 
-async function getGuestPostDetail(env, project, postId) {
-    const post = await getPostForProject(env, project, postId);
+async function getGuestPostDetail(env, postId) {
+    const post = await getPost(env, postId);
     const comments = (await env.DB.prepare(`
-        SELECT id, author_name, body, created_at, updated_at
+        SELECT id, parent_comment_id, author_name, body, created_at, updated_at
         FROM guest_comments
         WHERE post_id = ?
         ORDER BY created_at ASC, id ASC
         LIMIT 500
     `).bind(post.id).all()).results || [];
-    return serializePost(post, project.path, { detail: true, comments });
+    return serializePost(post, { detail: true, comments });
 }
 
-async function servePostImage(request, env, project, postId, isAdmin = false) {
-    const post = await getPostForProject(env, project, postId);
+async function servePostImage(request, env, postId, isAdmin = false) {
+    const post = await getPost(env, postId);
     if (!post.image_key) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
-    const expectedPrefix = `${project.prefix}_guest_posts/${post.id}/`;
+    const expectedPrefix = `_guest_posts/${post.id}/`;
     if (!String(post.image_key).startsWith(expectedPrefix)) {
         throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
     }
-    const object = await env.imgBucket.get(post.image_key);
+    const object = request.method === 'HEAD'
+        ? await env.imgBucket.head(post.image_key)
+        : await env.imgBucket.get(post.image_key);
     if (!object) throw new GuestApiError(404, 'ASSET_NOT_FOUND', '이미지를 찾을 수 없습니다.');
     return objectResponse(object, {
         cacheControl: isAdmin ? 'private, no-store' : undefined,
@@ -571,32 +589,32 @@ async function servePostImage(request, env, project, postId, isAdmin = false) {
     });
 }
 
-async function createPost(request, env, project) {
+async function createPost(request, env) {
     const form = await readPostForm(request);
     const id = crypto.randomUUID();
     const timestamp = nowKstIso();
     let imageKey = null;
     try {
-        imageKey = await putPostImage(env, project, id, form.image);
+        imageKey = await putPostImage(env, id, form.image);
         await env.DB.prepare(`
-            INSERT INTO guest_posts (id, project_id, title, body, image_key, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).bind(id, project.id, form.title, form.body, imageKey, timestamp, timestamp).run();
+            INSERT INTO guest_posts (id, title, body, image_key, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?)
+        `).bind(id, form.title, form.body, imageKey, timestamp, timestamp).run();
     } catch (error) {
         if (imageKey) await env.imgBucket.delete(imageKey).catch(() => {});
         throw error;
     }
-    const row = await getPostForProject(env, project, id);
-    return serializePost(row, project.path, { detail: true, comments: [] });
+    const row = await getPost(env, id);
+    return serializePost(row, { detail: true, comments: [] });
 }
 
-async function updatePost(request, env, project, postId, context) {
-    const existing = await getPostForProject(env, project, postId);
+async function updatePost(request, env, postId, context) {
+    const existing = await getPost(env, postId);
     const form = await readPostForm(request);
     let nextImageKey = existing.image_key;
     let uploadedKey = null;
     if (form.image) {
-        uploadedKey = await putPostImage(env, project, existing.id, form.image);
+        uploadedKey = await putPostImage(env, existing.id, form.image);
         nextImageKey = uploadedKey;
     } else if (form.removeImage) {
         nextImageKey = null;
@@ -606,8 +624,8 @@ async function updatePost(request, env, project, postId, context) {
         await env.DB.prepare(`
             UPDATE guest_posts
             SET title = ?, body = ?, image_key = ?, updated_at = ?
-            WHERE id = ? AND project_id = ?
-        `).bind(form.title, form.body, nextImageKey, nowKstIso(), existing.id, project.id).run();
+            WHERE id = ?
+        `).bind(form.title, form.body, nextImageKey, nowKstIso(), existing.id).run();
     } catch (error) {
         if (uploadedKey && uploadedKey !== existing.image_key) await env.imgBucket.delete(uploadedKey).catch(() => {});
         throw error;
@@ -616,12 +634,12 @@ async function updatePost(request, env, project, postId, context) {
     if (existing.image_key && existing.image_key !== nextImageKey) {
         runCleanup(context, env.imgBucket.delete(existing.image_key), { postId: existing.id, key: existing.image_key });
     }
-    return getGuestPostDetail(env, project, existing.id);
+    return getGuestPostDetail(env, existing.id);
 }
 
-async function deletePost(env, project, postId, context) {
-    const existing = await getPostForProject(env, project, postId);
-    await env.DB.prepare('DELETE FROM guest_posts WHERE id = ? AND project_id = ?').bind(existing.id, project.id).run();
+async function deletePost(env, postId, context) {
+    const existing = await getPost(env, postId);
+    await env.DB.prepare('DELETE FROM guest_posts WHERE id = ?').bind(existing.id).run();
     if (existing.image_key) runCleanup(context, env.imgBucket.delete(existing.image_key), { postId: existing.id, key: existing.image_key });
     return { id: existing.id };
 }
@@ -648,14 +666,14 @@ async function verifyPassword(password, encodedSalt, encodedHash) {
     return difference === 0;
 }
 
-async function hashRateLimitKey(request, projectId) {
+async function hashRateLimitKey(request) {
     const ip = request.headers.get('CF-Connecting-IP') || 'unknown';
-    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`${projectId}:${ip}`));
+    const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(`global-posts:${ip}`));
     return bytesToBase64(new Uint8Array(digest)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/g, '');
 }
 
-async function enforceCommentRateLimit(request, env, projectId) {
-    const bucketKey = await hashRateLimitKey(request, projectId);
+async function enforceCommentRateLimit(request, env) {
+    const bucketKey = await hashRateLimitKey(request);
     const now = new Date();
     const timestamp = nowKstIso(now);
     const cutoff = nowKstIso(new Date(now.getTime() - COMMENT_RATE_WINDOW_MS));
@@ -673,59 +691,74 @@ async function enforceCommentRateLimit(request, env, projectId) {
     }
 }
 
-async function getCommentWithPost(env, commentId, requirePublicProject = false) {
+async function getCommentWithPost(env, commentId) {
     const row = await env.DB.prepare(`
-        SELECT c.*, p.project_id, pr.is_public AS project_is_public
+        SELECT c.*
         FROM guest_comments c
         JOIN guest_posts p ON p.id = c.post_id
-        JOIN v2_projects pr ON pr.id = p.project_id
         WHERE c.id = ?
         LIMIT 1
     `).bind(decodeSegment(commentId)).first();
-    if (!row || (requirePublicProject && Number(row.project_is_public) !== 1)) {
-        throw new GuestApiError(404, 'COMMENT_NOT_FOUND', '댓글을 찾을 수 없습니다.');
-    }
+    if (!row) throw new GuestApiError(404, 'COMMENT_NOT_FOUND', '댓글을 찾을 수 없습니다.');
     return row;
 }
 
-async function createComment(request, env, project, postId) {
-    const post = await getPostForProject(env, project, postId);
+async function createComment(request, env, postId) {
+    const post = await getPost(env, postId);
     const body = await readJson(request);
     const authorName = validateText(body.authorName, '이름', MAX_AUTHOR_LENGTH);
     const commentBody = validateText(body.body, '댓글', MAX_COMMENT_BODY_LENGTH);
     const password = validatePassword(body.password);
     const requestKey = validateText(body.requestId, '요청 식별자', 80);
+    const parentCommentId = body.parentCommentId
+        ? validateText(body.parentCommentId, '부모 댓글', 80)
+        : null;
+
+    if (parentCommentId) {
+        const parent = await env.DB.prepare(`
+            SELECT id, post_id, parent_comment_id
+            FROM guest_comments
+            WHERE id = ?
+            LIMIT 1
+        `).bind(parentCommentId).first();
+        if (!parent || parent.post_id !== post.id) {
+            throw new GuestApiError(404, 'PARENT_COMMENT_NOT_FOUND', '답글을 작성할 댓글을 찾을 수 없습니다.');
+        }
+        if (parent.parent_comment_id) {
+            throw new GuestApiError(400, 'REPLY_DEPTH_EXCEEDED', '대댓글에는 답글을 작성할 수 없습니다.');
+        }
+    }
 
     const duplicate = await env.DB.prepare(`
-        SELECT id, author_name, body, created_at, updated_at
+        SELECT id, parent_comment_id, author_name, body, created_at, updated_at
         FROM guest_comments WHERE post_id = ? AND request_key = ? LIMIT 1
     `).bind(post.id, requestKey).first();
     if (duplicate) return serializeComment(duplicate);
 
-    await enforceCommentRateLimit(request, env, project.id);
+    await enforceCommentRateLimit(request, env);
     const credentials = await hashPassword(password);
     const timestamp = nowKstIso();
     const id = crypto.randomUUID();
     try {
         await env.DB.prepare(`
             INSERT INTO guest_comments (
-                id, post_id, author_name, body, password_hash, password_salt,
+                id, post_id, parent_comment_id, author_name, body, password_hash, password_salt,
                 request_key, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).bind(id, post.id, authorName, commentBody, credentials.hash, credentials.salt, requestKey, timestamp, timestamp).run();
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).bind(id, post.id, parentCommentId, authorName, commentBody, credentials.hash, credentials.salt, requestKey, timestamp, timestamp).run();
     } catch (error) {
         const existing = await env.DB.prepare(`
-            SELECT id, author_name, body, created_at, updated_at
+            SELECT id, parent_comment_id, author_name, body, created_at, updated_at
             FROM guest_comments WHERE post_id = ? AND request_key = ? LIMIT 1
         `).bind(post.id, requestKey).first();
         if (existing) return serializeComment(existing);
         throw error;
     }
-    return serializeComment({ id, author_name: authorName, body: commentBody, created_at: timestamp, updated_at: timestamp });
+    return serializeComment({ id, parent_comment_id: parentCommentId, author_name: authorName, body: commentBody, created_at: timestamp, updated_at: timestamp });
 }
 
 async function updateComment(request, env, commentId) {
-    const existing = await getCommentWithPost(env, commentId, true);
+    const existing = await getCommentWithPost(env, commentId);
     const body = await readJson(request);
     const password = validatePassword(body.password);
     if (!await verifyPassword(password, existing.password_salt, existing.password_hash)) {
@@ -742,7 +775,7 @@ async function updateComment(request, env, commentId) {
 }
 
 async function deleteComment(request, env, commentId, isAdmin) {
-    const existing = await getCommentWithPost(env, commentId, !isAdmin);
+    const existing = await getCommentWithPost(env, commentId);
     if (!isAdmin) {
         const body = await readJson(request);
         const password = validatePassword(body.password);
@@ -752,19 +785,6 @@ async function deleteComment(request, env, commentId, isAdmin) {
     }
     await env.DB.prepare('DELETE FROM guest_comments WHERE id = ? AND post_id = ?').bind(existing.id, existing.post_id).run();
     return { id: existing.id };
-}
-
-async function getAdminPostContext(env, rawPostId) {
-    const row = await env.DB.prepare(`
-        SELECT p.*, pr.name AS project_name, pr.prefix AS project_prefix
-        FROM guest_posts p
-        JOIN v2_projects pr ON pr.id = p.project_id
-        WHERE p.id = ?
-        LIMIT 1
-    `).bind(decodeSegment(rawPostId)).first();
-    if (!row) throw new GuestApiError(404, 'POST_NOT_FOUND', '게시글을 찾을 수 없습니다.');
-    const path = String(row.project_prefix || '').replace(/\/+$/g, '');
-    return { project: { id: row.project_id, name: row.project_name || path, prefix: `${path}/`, path }, post: row };
 }
 
 async function handleGuestProjectRoute(request, env, match) {
@@ -824,63 +844,51 @@ export async function handleGuestApi(request, env, isAdmin, context) {
             return await serveCharacterImage(request, env, project, match[2]);
         }
 
-        match = path.match(/^\/api\/guest\/projects\/([^/]+)\/posts$/);
-        if (match && method === 'GET') {
-            const project = await resolveGuestProject(env, match[1]);
-            if (!project) throw new GuestApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
-            return publicJson(await listPosts(env, project, url.searchParams.get('cursor'), url.searchParams.get('limit')));
+        if (path === '/api/guest/posts' && method === 'GET') {
+            return publicJson(await listPosts(env, url.searchParams.get('cursor'), url.searchParams.get('limit')));
         }
 
-        match = path.match(/^\/api\/guest\/projects\/([^/]+)\/posts\/([^/]+)$/);
-        if (match && method === 'GET') {
-            const project = await resolveGuestProject(env, match[1]);
-            if (!project) throw new GuestApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
-            return publicJson(await getGuestPostDetail(env, project, match[2]));
-        }
+        match = path.match(/^\/api\/guest\/posts\/([^/]+)$/);
+        if (match && method === 'GET') return publicJson(await getGuestPostDetail(env, match[1]));
 
-        match = path.match(/^\/api\/guest\/projects\/([^/]+)\/posts\/([^/]+)\/image$/);
+        match = path.match(/^\/api\/guest\/posts\/([^/]+)\/image$/);
         if (match && (method === 'GET' || method === 'HEAD')) {
-            const project = await resolveGuestProject(env, match[1]);
-            if (!project) throw new GuestApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
-            return await servePostImage(request, env, project, match[2]);
+            return await servePostImage(request, env, match[1]);
         }
 
-        match = path.match(/^\/api\/guest\/projects\/([^/]+)\/posts\/([^/]+)\/comments$/);
+        match = path.match(/^\/api\/guest\/posts\/([^/]+)\/comments$/);
         if (match && method === 'POST') {
-            const project = await resolveGuestProject(env, match[1]);
-            if (!project) throw new GuestApiError(404, 'PROJECT_NOT_FOUND', '프로젝트를 찾을 수 없습니다.');
-            return success(await createComment(request, env, project, match[2]), { status: 201 });
+            return success(await createComment(request, env, match[1]), { status: 201 });
         }
 
         match = path.match(/^\/api\/guest\/comments\/([^/]+)$/);
         if (match && method === 'PATCH') return success(await updateComment(request, env, match[1]));
         if (match && method === 'DELETE') return success(await deleteComment(request, env, match[1], isAdmin));
 
-        match = path.match(/^\/api\/admin\/projects\/([^/]+)\/posts$/);
-        if (match) {
+        if (path === '/api/admin/posts') {
             if (!isAdmin) throw new GuestApiError(403, 'FORBIDDEN', '관리자 권한이 필요합니다.');
-            const project = await ensureAdminProject(env, match[1]);
-            if (method === 'GET') return success(await listPosts(env, project, url.searchParams.get('cursor'), url.searchParams.get('limit')));
-            if (method === 'POST') return success(await createPost(request, env, project), { status: 201 });
+            if (method === 'GET') return success(await listPosts(env, url.searchParams.get('cursor'), url.searchParams.get('limit')));
+            if (method === 'POST') return success(await createPost(request, env), { status: 201 });
         }
 
         match = path.match(/^\/api\/admin\/posts\/([^/]+)\/image$/);
         if (match && (method === 'GET' || method === 'HEAD')) {
             if (!isAdmin) throw new GuestApiError(403, 'FORBIDDEN', '관리자 권한이 필요합니다.');
-            const { project } = await getAdminPostContext(env, match[1]);
-            return await servePostImage(request, env, project, match[1], true);
+            return await servePostImage(request, env, match[1], true);
         }
 
         match = path.match(/^\/api\/admin\/posts\/([^/]+)$/);
         if (match) {
             if (!isAdmin) throw new GuestApiError(403, 'FORBIDDEN', '관리자 권한이 필요합니다.');
-            const { project } = await getAdminPostContext(env, match[1]);
-            if (method === 'GET') return success(await getGuestPostDetail(env, project, match[1]));
-            if (method === 'PATCH') return success(await updatePost(request, env, project, match[1], context));
-            if (method === 'DELETE') return success(await deletePost(env, project, match[1], context));
+            if (method === 'GET') return success(await getGuestPostDetail(env, match[1]));
+            if (method === 'PATCH') return success(await updatePost(request, env, match[1], context));
+            if (method === 'DELETE') return success(await deletePost(env, match[1], context));
         }
 
-        if (path.startsWith('/api/guest/') || /^\/api\/admin\/(?:projects\/[^/]+\/posts|posts(?:\/|$))/.test(path)) {
+        if (
+            path.startsWith('/api/guest/')
+            || /^\/api\/admin\/(?:posts|projects\/[^/]+\/posts)(?:\/|$)/.test(path)
+        ) {
             throw new GuestApiError(404, 'API_NOT_FOUND', '요청한 API를 찾을 수 없습니다.');
         }
         return null;

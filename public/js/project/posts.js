@@ -1,17 +1,18 @@
 import {
     escapeHtml,
     escapeJsString,
-    getActiveProject,
     refreshProjectIcons,
     renderEmptyState,
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js?v=project-visibility-20260830a';
+} from './shared.js?v=global-posts-20261005a';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;
 let adminPostsRefreshNeeded = false;
+let globalPosts = [];
+let globalPostsLoaded = false;
 
 function formatDate(value) {
     if (!value) return '';
@@ -29,8 +30,8 @@ async function readApiResponse(response) {
     return payload.data;
 }
 
-async function fetchProjectPosts(project) {
-    const response = await fetch(`/api/admin/projects/${encodeURIComponent(project.id)}/posts?limit=50`, { cache: 'no-store' });
+async function fetchGlobalPosts() {
+    const response = await fetch('/api/admin/posts?limit=50', { cache: 'no-store' });
     const page = await readApiResponse(response);
     return page.items || [];
 }
@@ -47,28 +48,33 @@ function postRevision(post) {
         post.body,
         post.imageUrl,
         post.updatedAt,
-        (post.comments || []).map(comment => [comment.id, comment.authorName, comment.body, comment.updatedAt])
+        (post.comments || []).map(comment => [
+            comment.id,
+            comment.authorName,
+            comment.body,
+            comment.updatedAt,
+            (comment.replies || []).map(reply => [reply.id, reply.authorName, reply.body, reply.updatedAt])
+        ])
     ]);
 }
 
-export async function loadProjectPosts(project, force = false) {
-    if (!project) return [];
-    if (!force && project.postsLoaded) return Array.isArray(project.posts) ? project.posts : [];
-    project.posts = await fetchProjectPosts(project);
-    project.postsLoaded = true;
-    return project.posts;
+export async function loadGlobalPosts(force = false) {
+    if (!force && globalPostsLoaded) return globalPosts;
+    globalPosts = await fetchGlobalPosts();
+    globalPostsLoaded = true;
+    return globalPosts;
 }
 
-function renderHeader(project) {
+function renderHeader() {
     return `
         <div class="h-14 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between px-4 sm:px-6 bg-white dark:bg-gray-800 flex-shrink-0 gap-3">
             <div class="flex items-center gap-2 min-w-0">
-                <button type="button" onclick="window.openProjectDetail('${escapeJsString(project.id)}', false)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" aria-label="프로젝트로 돌아가기">
+                <button type="button" onclick="window.renderProjectManage(false)" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-gray-100 dark:hover:bg-gray-700 transition" aria-label="프로젝트 목록으로 돌아가기">
                     <i data-lucide="arrow-left" class="w-5 h-5"></i>
                 </button>
                 <div class="min-w-0">
-                    <h1 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">${escapeHtml(project.name)}</h1>
-                    <p class="text-[11px] text-gray-500 dark:text-gray-400">게시글</p>
+                    <h1 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate">전역 게시글</h1>
+                    <p class="text-[11px] text-gray-500 dark:text-gray-400">모든 공개 프로젝트에 공통으로 표시됩니다.</p>
                 </div>
             </div>
             <div class="flex flex-shrink-0 items-center gap-2">
@@ -84,8 +90,8 @@ function renderHeader(project) {
         </div>`;
 }
 
-function renderPostList(project, selectedId, state = {}) {
-    const posts = Array.isArray(project.posts) ? project.posts : [];
+function renderPostList(selectedId, state = {}) {
+    const posts = globalPosts;
     return `
         <aside id="admin-post-list-panel" class="min-h-0 rounded-lg border border-gray-200 bg-white dark:border-gray-700 dark:bg-gray-800 flex flex-col overflow-hidden">
             <div class="flex-shrink-0 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
@@ -118,6 +124,24 @@ function renderEmptyEditor() {
                 <button type="button" onclick="window.openAdminPostEditor()" class="mt-4 rounded-lg bg-indigo-600 px-4 py-2 text-xs font-bold text-white hover:bg-indigo-700">새 게시글</button>
             </div>
         </section>`;
+}
+
+function renderAdminComment(comment, isReply = false) {
+    const replies = isReply ? '' : (comment.replies || []).map(reply => renderAdminComment(reply, true)).join('');
+    return `
+        <div class="${isReply ? 'ml-4 border-l-2 border-indigo-100 pl-3 dark:border-indigo-900/60' : ''}">
+            <article class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
+                <div class="flex items-start justify-between gap-3">
+                    <div class="min-w-0">
+                        <p class="truncate text-xs font-bold text-gray-700 dark:text-gray-200">${isReply ? '<span class="mr-1 text-indigo-500">답글</span>' : ''}${escapeHtml(comment.authorName)}</p>
+                        <p class="mt-0.5 text-[10px] text-gray-400">${escapeHtml(formatDate(comment.updatedAt || comment.createdAt))}${comment.edited ? ' · 수정됨' : ''}</p>
+                    </div>
+                    <button type="button" onclick="window.deleteAdminComment('${escapeJsString(comment.id)}', ${isReply ? 'true' : 'false'})" class="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/20" aria-label="${isReply ? '대댓글' : '댓글'} 삭제"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i></button>
+                </div>
+                <p class="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-gray-600 dark:text-gray-300">${escapeHtml(comment.body)}</p>
+            </article>
+            ${replies ? `<div class="mt-2 space-y-2">${replies}</div>` : ''}
+        </div>`;
 }
 
 function renderEditor(post = null) {
@@ -162,35 +186,23 @@ function renderEditor(post = null) {
                 </form>
                 ${isEdit ? `
                     <div class="mt-6 border-t border-gray-200 pt-5 dark:border-gray-700">
-                        <h3 class="text-xs font-bold text-gray-700 dark:text-gray-200">댓글 ${post.comments?.length || 0}개</h3>
+                        <h3 class="text-xs font-bold text-gray-700 dark:text-gray-200">댓글 ${post.commentCount || 0}개</h3>
                         <div class="mt-3 space-y-2">
-                            ${(post.comments || []).map(comment => `
-                                <article class="rounded-lg bg-gray-50 p-3 dark:bg-gray-900/50">
-                                    <div class="flex items-start justify-between gap-3">
-                                        <div class="min-w-0">
-                                            <p class="truncate text-xs font-bold text-gray-700 dark:text-gray-200">${escapeHtml(comment.authorName)}</p>
-                                            <p class="mt-0.5 text-[10px] text-gray-400">${escapeHtml(formatDate(comment.updatedAt || comment.createdAt))}${comment.edited ? ' · 수정됨' : ''}</p>
-                                        </div>
-                                        <button type="button" onclick="window.deleteAdminComment('${escapeJsString(comment.id)}')" class="rounded p-1.5 text-gray-400 hover:bg-red-50 hover:text-red-500 dark:hover:bg-red-950/20" aria-label="댓글 삭제"><i data-lucide="trash-2" class="h-3.5 w-3.5"></i></button>
-                                    </div>
-                                    <p class="mt-2 whitespace-pre-wrap break-words text-xs leading-5 text-gray-600 dark:text-gray-300">${escapeHtml(comment.body)}</p>
-                                </article>`).join('') || '<p class="py-4 text-center text-xs text-gray-400">등록된 댓글이 없습니다.</p>'}
+                            ${(post.comments || []).map(comment => renderAdminComment(comment)).join('') || '<p class="py-4 text-center text-xs text-gray-400">등록된 댓글이 없습니다.</p>'}
                         </div>
                     </div>` : ''}
             </div>
         </section>`;
 }
 
-export function renderProjectPostsSection(options = {}) {
-    const project = getActiveProject();
-    if (!project) return;
-    const activePost = options.post !== undefined ? options.post : (window.PROJECT_ACTIVE_POST || null);
-    window.PROJECT_ACTIVE_POST = activePost;
+export function renderGlobalPostsSection(options = {}) {
+    const activePost = options.post !== undefined ? options.post : (window.GLOBAL_ACTIVE_POST || null);
+    window.GLOBAL_ACTIVE_POST = activePost;
     renderProjectShell(`
-        ${renderHeader(project)}
+        ${renderHeader()}
         <div class="flex-1 min-h-0 overflow-y-auto p-4 sm:p-6">
             <div class="mx-auto grid min-h-full max-w-6xl grid-cols-1 gap-4 lg:grid-cols-[minmax(240px,2fr)_minmax(0,5fr)]">
-                ${renderPostList(project, activePost?.id, options)}
+                ${renderPostList(activePost?.id, options)}
                 ${options.loadingDetail ? renderEmptyState('게시글 내용을 불러오는 중입니다.') : (activePost !== null ? renderEditor(activePost) : renderEmptyEditor())}
             </div>
         </div>`);
@@ -208,11 +220,11 @@ function isAdminPostEditorBusy(post) {
     return title !== (post.title || '') || body !== (post.body || '') || removeImage || hasImageFile;
 }
 
-function refreshAdminPostListOnly(project, selectedId) {
+function refreshAdminPostListOnly(selectedId) {
     const panel = document.getElementById('admin-post-list-panel');
     if (!panel) return;
     const scrollTop = document.getElementById('admin-post-list-scroll')?.scrollTop || 0;
-    panel.outerHTML = renderPostList(project, selectedId);
+    panel.outerHTML = renderPostList(selectedId);
     const scroll = document.getElementById('admin-post-list-scroll');
     if (scroll) scroll.scrollTop = scrollTop;
     refreshProjectIcons();
@@ -238,14 +250,12 @@ function setAdminPostsRefreshLoading(loading) {
 }
 
 async function detectVisibleAdminPostChanges() {
-    if (document.hidden || window.PROJECT_ACTIVE_SECTION !== 'posts' || postsRefreshInFlight) return;
-    const project = getActiveProject();
-    if (!project) return;
+    if (document.hidden || window.PROJECT_VIEW !== 'global-posts' || postsRefreshInFlight) return;
     postsRefreshInFlight = true;
     try {
-        const nextPosts = await fetchProjectPosts(project);
-        let changed = postsRevision(project.posts) !== postsRevision(nextPosts);
-        const activePost = window.PROJECT_ACTIVE_POST;
+        const nextPosts = await fetchGlobalPosts();
+        let changed = postsRevision(globalPosts) !== postsRevision(nextPosts);
+        const activePost = window.GLOBAL_ACTIVE_POST;
         if (activePost?.id) {
             const response = await fetch(`/api/admin/posts/${encodeURIComponent(activePost.id)}`, { cache: 'no-store' });
             if (response.status === 404) changed = true;
@@ -260,27 +270,24 @@ async function detectVisibleAdminPostChanges() {
 }
 
 export async function refreshAdminPosts() {
-    if (window.PROJECT_ACTIVE_SECTION !== 'posts' || postsRefreshInFlight) return;
-    const project = getActiveProject();
-    if (!project) return;
+    if (window.PROJECT_VIEW !== 'global-posts' || postsRefreshInFlight) return;
     postsRefreshInFlight = true;
     setAdminPostsRefreshLoading(true);
     try {
-        const nextPosts = await fetchProjectPosts(project);
-        project.posts = nextPosts;
-        project.postsLoaded = true;
+        globalPosts = await fetchGlobalPosts();
+        globalPostsLoaded = true;
 
-        const activePost = window.PROJECT_ACTIVE_POST;
+        const activePost = window.GLOBAL_ACTIVE_POST;
         if (!activePost?.id) {
-            refreshAdminPostListOnly(project, activePost?.id);
+            refreshAdminPostListOnly(activePost?.id);
             setAdminPostsRefreshNeeded(false);
             return;
         }
 
         const response = await fetch(`/api/admin/posts/${encodeURIComponent(activePost.id)}`, { cache: 'no-store' });
         if (response.status === 404) {
-            window.PROJECT_ACTIVE_POST = null;
-            renderProjectPostsSection({ post: null });
+            window.GLOBAL_ACTIVE_POST = null;
+            renderGlobalPostsSection({ post: null });
             setAdminPostsRefreshNeeded(false);
             return;
         }
@@ -288,15 +295,15 @@ export async function refreshAdminPosts() {
         const detailChanged = postRevision(activePost) !== postRevision(nextPost);
 
         if (isAdminPostEditorBusy(activePost)) {
-            refreshAdminPostListOnly(project, activePost.id);
+            refreshAdminPostListOnly(activePost.id);
             setAdminPostsRefreshNeeded(detailChanged);
             return;
         }
 
         const listScrollTop = document.getElementById('admin-post-list-scroll')?.scrollTop || 0;
         const editorScrollTop = document.getElementById('admin-post-editor-scroll')?.scrollTop || 0;
-        window.PROJECT_ACTIVE_POST = nextPost;
-        renderProjectPostsSection({ post: nextPost });
+        window.GLOBAL_ACTIVE_POST = nextPost;
+        renderGlobalPostsSection({ post: nextPost });
         const listScroll = document.getElementById('admin-post-list-scroll');
         const editorScroll = document.getElementById('admin-post-editor-scroll');
         if (listScroll) listScroll.scrollTop = listScrollTop;
@@ -320,51 +327,51 @@ function bindAdminPostsChangeDetection() {
     }
 }
 
-export async function openProjectPostsSection(skipHistory = false) {
-    const project = getActiveProject();
-    if (!project) return;
-    window.PROJECT_ACTIVE_POST = null;
-    renderProjectPostsSection({ loading: !project.postsLoaded });
+export async function openGlobalPostsSection(skipHistory = false) {
+    window.PROJECT_VIEW = 'global-posts';
+    window.PROJECT_ACTIVE_SECTION = null;
+    window.GLOBAL_ACTIVE_POST = null;
+    renderGlobalPostsSection({ loading: !globalPostsLoaded });
     try {
-        await loadProjectPosts(project);
-        if (window.PROJECT_ACTIVE_SECTION === 'posts') {
+        await loadGlobalPosts();
+        if (window.PROJECT_VIEW === 'global-posts') {
             setAdminPostsRefreshNeeded(false);
-            renderProjectPostsSection();
+            renderGlobalPostsSection();
         }
     } catch (error) {
-        if (window.PROJECT_ACTIVE_SECTION === 'posts') renderProjectPostsSection({ error: error.message });
+        if (window.PROJECT_VIEW === 'global-posts') renderGlobalPostsSection({ error: error.message });
     }
-    const routeState = { projectView: 'section', projectId: project.id, projectSection: 'posts' };
-    if (!skipHistory) setProjectRoute(routeState, `#project/${project.id}/posts`);
-    else rememberProjectRoute(routeState, `#project/${project.id}/posts`);
+    const routeState = { projectView: 'global-posts' };
+    if (!skipHistory) setProjectRoute(routeState, '#project/posts');
+    else rememberProjectRoute(routeState, '#project/posts');
     bindAdminPostsChangeDetection();
 }
 
 export function openAdminPostEditor() {
-    window.PROJECT_ACTIVE_POST = {};
-    renderProjectPostsSection({ post: {} });
+    window.GLOBAL_ACTIVE_POST = {};
+    renderGlobalPostsSection({ post: {} });
     setTimeout(() => document.getElementById('admin-post-title')?.focus(), 0);
 }
 
 export function closeAdminPostEditor() {
-    window.PROJECT_ACTIVE_POST = null;
-    renderProjectPostsSection({ post: null });
+    window.GLOBAL_ACTIVE_POST = null;
+    renderGlobalPostsSection({ post: null });
 }
 
 export async function openAdminPost(postId, skipHistory = false) {
-    const project = getActiveProject();
-    if (!project) return;
-    renderProjectPostsSection({ loadingDetail: true });
+    window.PROJECT_VIEW = 'global-posts';
+    window.PROJECT_ACTIVE_SECTION = null;
+    renderGlobalPostsSection({ loadingDetail: true });
     try {
         const response = await fetch(`/api/admin/posts/${encodeURIComponent(postId)}`, { cache: 'no-store' });
         const post = await readApiResponse(response);
-        window.PROJECT_ACTIVE_POST = post;
-        renderProjectPostsSection({ post });
-        const routeState = { projectView: 'post-detail', projectId: project.id, projectSection: 'posts', projectPostId: post.id };
-        if (!skipHistory) setProjectRoute(routeState, `#project/${project.id}/posts/${post.id}`);
-        else rememberProjectRoute(routeState, `#project/${project.id}/posts/${post.id}`);
+        window.GLOBAL_ACTIVE_POST = post;
+        renderGlobalPostsSection({ post });
+        const routeState = { projectView: 'global-post-detail', projectPostId: post.id };
+        if (!skipHistory) setProjectRoute(routeState, `#project/posts/${post.id}`);
+        else rememberProjectRoute(routeState, `#project/posts/${post.id}`);
     } catch (error) {
-        renderProjectPostsSection({ error: error.message });
+        renderGlobalPostsSection({ error: error.message });
     }
 }
 
@@ -403,11 +410,10 @@ export function removeAdminPostImage() {
 
 export async function submitAdminPost(event) {
     event?.preventDefault();
-    const project = getActiveProject();
     const id = document.getElementById('admin-post-id')?.value || '';
     const submit = document.getElementById('admin-post-submit');
     const errorElement = document.getElementById('admin-post-error');
-    if (!project || !submit) return;
+    if (!submit) return;
     submit.disabled = true;
     errorElement?.classList.add('hidden');
     try {
@@ -417,16 +423,16 @@ export async function submitAdminPost(event) {
         form.set('removeImage', document.getElementById('admin-post-remove-image')?.value || 'false');
         const file = document.getElementById('admin-post-image')?.files?.[0];
         if (file) form.set('image', file, file.name);
-        const endpoint = id ? `/api/admin/posts/${encodeURIComponent(id)}` : `/api/admin/projects/${encodeURIComponent(project.id)}/posts`;
+        const endpoint = id ? `/api/admin/posts/${encodeURIComponent(id)}` : '/api/admin/posts';
         const response = await fetch(endpoint, { method: id ? 'PATCH' : 'POST', body: form, cache: 'no-store' });
         const post = await readApiResponse(response);
-        await loadProjectPosts(project, true);
-        window.PROJECT_ACTIVE_POST = post;
+        await loadGlobalPosts(true);
+        window.GLOBAL_ACTIVE_POST = post;
         setAdminPostsRefreshNeeded(false);
-        renderProjectPostsSection({ post });
-        const routeState = { projectView: 'post-detail', projectId: project.id, projectSection: 'posts', projectPostId: post.id };
-        rememberProjectRoute(routeState, `#project/${project.id}/posts/${post.id}`);
-        history.replaceState({ tab: 'project', ...routeState }, '', `#project/${project.id}/posts/${post.id}`);
+        renderGlobalPostsSection({ post });
+        const routeState = { projectView: 'global-post-detail', projectPostId: post.id };
+        rememberProjectRoute(routeState, `#project/posts/${post.id}`);
+        history.replaceState({ tab: 'project', ...routeState }, '', `#project/posts/${post.id}`);
     } catch (error) {
         if (errorElement) {
             errorElement.textContent = error.message;
@@ -438,26 +444,28 @@ export async function submitAdminPost(event) {
 }
 
 export async function deleteAdminPost(postId) {
-    const project = getActiveProject();
-    if (!project || !confirm('이 게시글과 첨부 이미지, 댓글을 모두 삭제하시겠습니까?')) return;
+    if (!confirm('이 게시글과 첨부 이미지, 댓글 및 대댓글을 모두 삭제하시겠습니까?')) return;
     try {
         const response = await fetch(`/api/admin/posts/${encodeURIComponent(postId)}`, { method: 'DELETE', cache: 'no-store' });
         await readApiResponse(response);
-        await loadProjectPosts(project, true);
-        window.PROJECT_ACTIVE_POST = null;
+        await loadGlobalPosts(true);
+        window.GLOBAL_ACTIVE_POST = null;
         setAdminPostsRefreshNeeded(false);
-        renderProjectPostsSection();
-        const routeState = { projectView: 'section', projectId: project.id, projectSection: 'posts' };
-        history.replaceState({ tab: 'project', ...routeState }, '', `#project/${project.id}/posts`);
-        rememberProjectRoute(routeState, `#project/${project.id}/posts`);
+        renderGlobalPostsSection();
+        const routeState = { projectView: 'global-posts' };
+        history.replaceState({ tab: 'project', ...routeState }, '', '#project/posts');
+        rememberProjectRoute(routeState, '#project/posts');
     } catch (error) {
         alert(error.message || '게시글을 삭제하지 못했습니다.');
     }
 }
 
-export async function deleteAdminComment(commentId) {
-    const post = window.PROJECT_ACTIVE_POST;
-    if (!post?.id || !confirm('이 댓글을 삭제하시겠습니까?')) return;
+export async function deleteAdminComment(commentId, isReply = false) {
+    const post = window.GLOBAL_ACTIVE_POST;
+    const message = isReply
+        ? '이 대댓글을 삭제하시겠습니까?'
+        : '이 댓글을 삭제하시겠습니까? 하위 대댓글도 함께 삭제됩니다.';
+    if (!post?.id || !confirm(message)) return;
     try {
         const response = await fetch(`/api/guest/comments/${encodeURIComponent(commentId)}`, { method: 'DELETE', cache: 'no-store' });
         await readApiResponse(response);

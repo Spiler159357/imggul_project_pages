@@ -7,6 +7,7 @@
     "check:file-name-sort": "node scripts/check-file-name-sort.mjs",
     "check:guest-image-visibility": "node scripts/check-guest-image-visibility.mjs",
     "check:project-visibility": "node scripts/check-project-visibility.mjs",
+    "check:global-posts": "node scripts/check-global-posts.mjs",
     "check:novelai-v5": "node scripts/check-novelai-v5.mjs",
     "check:planner-background-recovery": "node scripts/check-planner-background-recovery.mjs",
     "postinstall": "npm run build:version",
