@@ -10,9 +10,7 @@ const PAYLOAD_LIMIT_BYTES = 1_500_000;
 const MAX_OPTIMISTIC_RETRIES = 3;
 const CONFIRM_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SLOT_REGENERATION_ATTEMPTS = 3;
-const DEFAULT_STALE_JOB_MS = 3 * 60 * 1000;
 const DEFAULT_STALE_JOB_LIMIT = 25;
-const DEFAULT_QUEUE_DELIVERY_LEASE_MS = 3 * 60 * 1000;
 const PLANNER_TIMING_HISTORY_LIMIT = 100;
 const PLANNER_STATUS_BATCH_LIMIT = 100;
 
@@ -151,20 +149,11 @@ export function evaluatePlannerRunHealth(job = {}, now = Date.now()) {
         };
     }
 
-    const lastDispatchAtMs = Date.parse(asString(job.lastDispatchAt || job.updatedAt));
-    if (Number.isFinite(lastDispatchAtMs) && now - lastDispatchAtMs <= DEFAULT_QUEUE_DELIVERY_LEASE_MS) {
-        return {
-            health: "queued",
-            healthReason: "queue_wait",
-            healthMessage: "Queue에서 Worker 전달을 기다리고 있습니다.",
-            canRecover: false
-        };
-    }
     return {
-        health: "stalled",
-        healthReason: "queue_delivery_timeout",
-        healthMessage: "Queue에 등록된 작업이 제한 시간 안에 시작되지 않았습니다.",
-        canRecover: true
+        health: "queued",
+        healthReason: "queue_wait",
+        healthMessage: "Queue에서 Worker 순서를 기다리고 있습니다. 다른 작업은 계속 생성될 수 있습니다.",
+        canRecover: false
     };
 }
 
@@ -696,6 +685,7 @@ function runStatusFromJob(status) {
 export function plannerCompactRunToClient(record) {
     if (!record) return null;
     const payload = cloneJson(record.payload);
+    if (payload.activeJob) applyJobStatusToItems(payload);
     if (payload.status === "complete") payload.status = "completed";
     payload.items = asArray(payload.items).map(item => {
         const generatedImages = asArray(item.candidates).map(candidate => ({
@@ -1088,17 +1078,31 @@ function recalculateJob(payload, job) {
 function applyJobStatusToItems(payload) {
     const job = payload.activeJob;
     if (!job) return;
-    const targetIds = new Set(enumerateRunSlots(payload, job.targetSituationId, job.generationSequence).map(slot => slot.itemId));
+    const slots = enumerateRunSlots(payload, job.targetSituationId, job.generationSequence);
+    const targetIds = new Set(slots.map(slot => slot.itemId));
+    const executionAssetId = asString(job.execution?.assetId);
+    const executionItemId = slots.find(slot => slot.assetId === executionAssetId)?.itemId || "";
     for (const item of payload.items) {
         if (!targetIds.has(item.itemId)) continue;
         item.completedCount = item.candidates.length;
         item.failedCount = asArray(job.failedSlots).filter(slot => slot.itemId === item.itemId).length;
+        const itemTargetCount = slots.filter(slot => slot.itemId === item.itemId).length;
+        const itemFinished = itemTargetCount > 0
+            && item.completedCount + item.failedCount >= itemTargetCount;
         if (TERMINAL_JOB_STATUSES.has(job.status)) {
             item.status = item.failedCount
                 ? (item.completedCount ? "partial_failed" : "failed")
                 : "complete";
+        } else if (itemFinished) {
+            item.status = item.failedCount ? "partial_failed" : "complete";
+        } else if (job.status === "paused") {
+            item.status = "paused";
+        } else if (job.status === "cancel_requested") {
+            item.status = "cancel_requested";
+        } else if (executionItemId && executionItemId === item.itemId) {
+            item.status = "running";
         } else {
-            item.status = job.status;
+            item.status = "queued";
         }
     }
     payload.status = runStatusFromJob(job.status);
@@ -1755,9 +1759,8 @@ export async function recoverPlannerCompactGeneration(env, lookup = {}, options 
 }
 
 export async function recoverStalledPlannerCompactRuns(env, options = {}) {
-    const staleMs = Math.max(60_000, Number(options.staleMs || DEFAULT_STALE_JOB_MS));
     const limit = Math.max(1, Math.min(100, asNonNegativeInteger(options.limit, DEFAULT_STALE_JOB_LIMIT)));
-    const cutoff = new Date(Date.now() - staleMs).toISOString();
+    const timestamp = nowIso();
     let rows;
     try {
         const result = await env.DB.prepare(`
@@ -1766,10 +1769,11 @@ export async function recoverStalledPlannerCompactRuns(env, options = {}) {
             FROM planner_compact_records
             WHERE record_type = 'run'
               AND status IN ('queued', 'running')
-              AND updated_at < ?
-            ORDER BY updated_at
+              AND json_extract(payload_json, '$.activeJob.execution.claimedAt') IS NOT NULL
+              AND json_extract(payload_json, '$.activeJob.execution.leaseUntil') < ?
+            ORDER BY json_extract(payload_json, '$.activeJob.execution.leaseUntil')
             LIMIT ?
-        `).bind(cutoff, limit).all();
+        `).bind(timestamp, limit).all();
         rows = result.results || [];
     } catch (error) {
         throw translateSchemaError(error);

@@ -631,6 +631,14 @@ function getPlannerQueueSummary(queueMetas = []) {
     );
     const paused = !active && !cancelling && queueMetas.some(entry => isPlannerResumableStatus(entry.meta.status));
     const failed = entries.reduce((sum, entry) => sum + getPlannerItemFailedCount(entry.item), 0);
+    const activeBackgrounds = queueMetas
+        .map(entry => entry.meta?.backgroundStatus)
+        .filter(status => status && ['queued', 'running', 'cancel_requested'].includes(status.status));
+    const healthCounts = activeBackgrounds.reduce((counts, status) => {
+        const health = status.health || 'queued';
+        counts[health] = (counts[health] || 0) + 1;
+        return counts;
+    }, {});
     const recoverableEntry = queueMetas.find(entry => {
         const background = entry.meta?.backgroundStatus || {};
         return ['queued', 'running'].includes(background.status || entry.meta?.status)
@@ -647,8 +655,26 @@ function getPlannerQueueSummary(queueMetas = []) {
         cancelling,
         paused,
         recoverableEntry,
+        healthCounts,
         status: cancelling ? 'cancel_requested' : active ? 'running' : paused ? 'paused' : (queueMetas[0]?.meta?.status || 'draft')
     };
+}
+
+function getPlannerQueueRepresentativeEntry(entries = []) {
+    const healthPriority = { stalled: 5, processing: 4, cooldown: 3, queued: 2, inactive: 0 };
+    return entries
+        .filter(entry => isPlannerActiveStatus(entry.item.status) || isPlannerActiveStatus(entry.meta.status))
+        .sort((left, right) => {
+            const leftStatus = left.meta?.backgroundStatus || left.meta || {};
+            const rightStatus = right.meta?.backgroundStatus || right.meta || {};
+            const healthDifference = (healthPriority[rightStatus.health] || 0) - (healthPriority[leftStatus.health] || 0);
+            if (healthDifference) return healthDifference;
+            const itemDifference = Number(right.item?.status === 'running') - Number(left.item?.status === 'running');
+            if (itemDifference) return itemDifference;
+            const rightProgress = Date.parse(rightStatus.lastProgressAt || rightStatus.updatedAt || '') || 0;
+            const leftProgress = Date.parse(leftStatus.lastProgressAt || leftStatus.updatedAt || '') || 0;
+            return rightProgress - leftProgress;
+        })[0] || null;
 }
 
 function renderPlannerRetryNotice(status = {}) {
@@ -2532,10 +2558,34 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
     const summary = getPlannerQueueSummary(queueMetas);
     if (!summary.totalItems) return '';
     const percent = summary.totalImages ? Math.round((summary.completedImages / summary.totalImages) * 100) : 0;
-    const activeEntry = summary.entries.find(entry => isPlannerActiveStatus(entry.item.status) || isPlannerActiveStatus(entry.meta.status));
-    const statusText = summary.cancelling ? '취소 처리 중' : summary.active ? '생성 진행 중' : summary.paused ? '일시정지됨' : '대기열';
+    const activeEntry = getPlannerQueueRepresentativeEntry(summary.entries);
     const eta = getPlannerQueueEta(queueMetas);
     const activeStatus = activeEntry?.meta?.backgroundStatus || activeEntry?.meta || {};
+    const activeStageLabel = activeStatus.health === 'processing' && activeStatus.execution?.phase
+        ? getPlannerExecutionPhaseLabel(activeStatus.execution.phase)
+        : activeStatus.health === 'queued'
+            ? 'Queue 처리 대기'
+            : activeStatus.health === 'cooldown'
+                ? '자동 재시도 대기'
+                : activeStatus.health === 'stalled'
+                    ? '실행 응답 중단'
+                    : getPlannerStageLabel(activeStatus.stage || activeEntry?.item?.stage)
+    const statusText = summary.cancelling
+        ? '취소 처리 중'
+        : activeStatus.health === 'stalled'
+            ? '작업 복구 필요'
+            : activeStatus.health === 'processing'
+                ? '이미지 생성 중'
+                : activeStatus.health === 'cooldown'
+                    ? '자동 재시도 대기'
+                    : summary.active ? 'Queue 처리 대기' : summary.paused ? '일시정지됨' : '대기열';
+    const healthCounts = summary.healthCounts || {};
+    const pipelineParts = [
+        healthCounts.processing ? `실제 처리 ${healthCounts.processing}` : '',
+        healthCounts.queued ? `Queue 대기 ${healthCounts.queued}` : '',
+        healthCounts.cooldown ? `재시도 대기 ${healthCounts.cooldown}` : '',
+        healthCounts.stalled ? `복구 필요 ${healthCounts.stalled}` : ''
+    ].filter(Boolean);
     return `
         <div class="mb-4 rounded-lg border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
             <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -2545,8 +2595,9 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
                         ${statusText}
                     </p>
                     <p class="mt-1 text-xs text-indigo-700/80 dark:text-indigo-300/80 truncate">
-                        ${activeEntry ? `${escapeHtml(activeEntry.character.name || activeEntry.character.folderName || activeEntry.character.id)} / ${escapeHtml(activeEntry.item.imageNumber)}.webp / ${escapeHtml(activeEntry.item.situationName || activeEntry.item.situationId)} · ${escapeHtml(getPlannerStageLabel(activeStatus.stage || activeEntry.item.stage) || getPlannerStatusLabel(activeEntry.item.status))}` : '캐릭터별 대기열을 확인할 수 있습니다.'}
+                        ${activeEntry ? `${escapeHtml(activeEntry.character.name || activeEntry.character.folderName || activeEntry.character.id)} / ${escapeHtml(activeEntry.item.imageNumber)}.webp / ${escapeHtml(activeEntry.item.situationName || activeEntry.item.situationId)} · ${escapeHtml(activeStageLabel || getPlannerStatusLabel(activeEntry.item.status))}` : '캐릭터별 대기열을 확인할 수 있습니다.'}
                     </p>
+                    ${pipelineParts.length ? `<p class="mt-1 text-[10px] font-bold text-indigo-600/80 dark:text-indigo-300/80">${escapeHtml(pipelineParts.join(' · '))}</p>` : ''}
                 </div>
                 <div class="flex items-center gap-2 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
                     <span>항목 ${summary.totalItems}</span>
@@ -4964,8 +5015,12 @@ function applyPlannerBackgroundStatus(meta, status, statusForStorage) {
             return {
                 ...item,
                 status: incomingStatus || item.status,
-                stage: statusItem.stage || item.stage || '',
-                stageLabel: statusItem.stageLabel || item.stageLabel || '',
+                stage: incomingStatus === 'running'
+                    ? (status.stage || statusItem.stage || '')
+                    : incomingStatus === 'queued' ? 'queue_wait' : (statusItem.stage || item.stage || ''),
+                stageLabel: incomingStatus === 'running'
+                    ? (status.stageLabel || statusItem.stageLabel || '')
+                    : incomingStatus === 'queued' ? 'Queue 처리 대기' : (statusItem.stageLabel || item.stageLabel || ''),
                 generationSequence: incomingGenerationSequence || currentGenerationSequence,
                 images: nextImages,
                 generatedImages: nextGeneratedImages,

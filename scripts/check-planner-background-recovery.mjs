@@ -50,7 +50,11 @@ assert.equal(evaluatePlannerRunHealth({
 assert.equal(evaluatePlannerRunHealth({
     status: 'running',
     lastDispatchAt: '2026-10-05T00:00:00.000Z'
-}, healthNow).healthReason, 'queue_delivery_timeout');
+}, healthNow).health, 'queued');
+assert.equal(evaluatePlannerRunHealth({
+    status: 'running',
+    lastDispatchAt: '2026-10-05T00:00:00.000Z'
+}, healthNow).canRecover, false);
 assert.equal(evaluatePlannerRunHealth({
     status: 'running',
     retryState: {
@@ -70,9 +74,12 @@ assert.equal(compactSource.includes('next && !duplicate && !stale'), false);
 assert.ok(compactSource.includes('export async function deferPlannerCompactQueueSlot'));
 assert.ok(compactSource.includes('export async function recordPlannerCompactSlotFailure'));
 assert.ok(compactSource.includes('export async function recoverStalledPlannerCompactRuns'));
+assert.ok(compactSource.includes("json_extract(payload_json, '$.activeJob.execution.leaseUntil') < ?"));
+assert.equal(compactSource.includes('queue_delivery_timeout'), false);
 assert.ok(compactSource.includes('lastFailureToken'));
 assert.ok(compactSource.includes('job.timingHistory = normalizeTimingHistory'));
 assert.ok(compactSource.includes('export async function getPlannerCompactStatuses'));
+assert.ok(compactSource.includes('if (payload.activeJob) applyJobStatusToItems(payload)'));
 assert.ok(backgroundSource.includes('delaySeconds: rateLimitDelaySeconds'));
 assert.ok(backgroundSource.includes('messageId: message.id'));
 assert.ok(backgroundSource.includes('recoverStalledPlannerCompactRuns(env)'));
@@ -84,6 +91,8 @@ assert.ok(frontendSource.includes('/api/planner/compact/generate/recover'));
 assert.ok(frontendSource.includes('/api/planner/compact/generate/status/batch'));
 assert.ok(frontendSource.includes('PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 4'));
 assert.ok(frontendSource.includes('setTimeout(poll, 2000)'));
+assert.ok(frontendSource.includes('getPlannerQueueRepresentativeEntry'));
+assert.ok(frontendSource.includes('실제 처리'));
 assert.ok(frontendSource.includes("cooldown: 'NovelAI 제한 해제 대기'"));
 assert.ok(frontendSource.includes("background.health === 'stalled'"));
 assert.equal(frontendSource.includes('now - updatedAt >= 12 * 60 * 1000'), false);
