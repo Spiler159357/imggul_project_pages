@@ -3,104 +3,289 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>프롬프트 탭 레이아웃</title>
-    <script src="https://cdn.tailwindcss.com"></script>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="style.css">
+    <title>프로젝트 프롬프트 탭 와이어프레임 v2</title>
+    <style>
+        :root {
+            color-scheme: dark;
+            --bg: #090b0f;
+            --surface: #11151c;
+            --surface-2: #151a23;
+            --surface-3: #0d1117;
+            --border: #2b3442;
+            --border-soft: #202734;
+            --text: #f4f7fb;
+            --muted: #929db0;
+            --muted-2: #68758a;
+            --primary: #6d5dfc;
+            --primary-soft: rgba(109, 93, 252, 0.14);
+            --success: #55d6a9;
+            --danger: #ff667f;
+            --warning: #ffbd5c;
+        }
+
+        * { box-sizing: border-box; }
+        html, body { height: 100%; }
+        body {
+            margin: 0;
+            min-width: 1180px;
+            background: var(--bg);
+            color: var(--text);
+            font-family: "Pretendard", "Noto Sans KR", "Malgun Gothic", sans-serif;
+            font-size: 14px;
+        }
+        button, input, select, textarea { font: inherit; }
+        button { color: inherit; }
+        .app { height: 100vh; display: grid; grid-template-rows: 56px minmax(0, 1fr); }
+        .topbar {
+            display: flex; align-items: center; gap: 14px; padding: 0 22px;
+            border-bottom: 1px solid var(--border); background: #0e1116;
+        }
+        .back {
+            width: 34px; height: 34px; display: grid; place-items: center; border: 0;
+            border-radius: 8px; background: transparent; color: var(--muted); font-size: 22px;
+        }
+        .title { min-width: 0; }
+        .title strong { display: block; font-size: 16px; line-height: 1.2; }
+        .title span { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; }
+        .save-state {
+            margin-left: auto; display: flex; align-items: center; gap: 7px;
+            color: var(--muted); font-size: 12px;
+        }
+        .save-state::before {
+            content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--success);
+            box-shadow: 0 0 0 3px rgba(85, 214, 169, 0.12);
+        }
+        .workspace {
+            min-height: 0; display: grid;
+            grid-template-columns: minmax(680px, 7fr) minmax(400px, 3fr);
+            gap: 16px; padding: 16px;
+        }
+        .card {
+            min-height: 0; border: 1px solid var(--border); border-radius: 13px;
+            background: var(--surface); overflow: hidden;
+        }
+        .main-card { display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; }
+        .card-head {
+            display: flex; align-items: center; justify-content: space-between; gap: 14px;
+            padding: 16px 18px 13px; border-bottom: 1px solid var(--border-soft);
+        }
+        .card-head h2, .compact-head h2 { margin: 0; font-size: 14px; letter-spacing: -0.02em; }
+        .card-head p, .compact-head p { margin: 5px 0 0; color: var(--muted); font-size: 11px; }
+        .tabs {
+            display: flex; gap: 5px; padding: 10px 18px;
+            border-bottom: 1px solid var(--border-soft); background: rgba(255,255,255,0.012);
+        }
+        .tab, .chip-button, .ghost, .primary, .danger {
+            display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+            border-radius: 8px; border: 1px solid var(--border); background: transparent;
+            font-weight: 700; cursor: default;
+        }
+        .tab { padding: 8px 12px; color: #bac3d2; font-size: 12px; }
+        .tab.active { border-color: var(--primary); background: var(--primary); color: white; }
+        .tab .count { color: var(--muted); font-weight: 500; }
+        .tab.active .count { color: #ddd9ff; }
+        .editor-shell {
+            min-height: 0; display: grid; grid-template-rows: auto minmax(0, 1fr) auto;
+            margin: 14px 18px 0; border: 1px solid var(--border); border-radius: 10px;
+            background: var(--surface-3); overflow: hidden;
+        }
+        .editor-toolbar {
+            display: flex; align-items: center; gap: 8px; min-height: 48px;
+            padding: 8px 12px; border-bottom: 1px solid var(--border-soft); background: #121720;
+        }
+        .file-label { font-weight: 800; font-size: 12px; }
+        .file-name { color: var(--muted-2); font-family: ui-monospace, Consolas, monospace; font-size: 11px; }
+        .spacer { flex: 1; }
+        .limit {
+            display: flex; align-items: center; gap: 9px; padding-right: 8px;
+            color: var(--muted); font-size: 11px;
+        }
+        .limit strong { color: var(--text); font-size: 12px; }
+        .limit-bar { width: 64px; height: 4px; border-radius: 99px; background: #2b3340; overflow: hidden; }
+        .limit-bar span { display: block; width: 75%; height: 100%; background: var(--warning); }
+        .chip-button, .ghost, .primary, .danger { padding: 8px 11px; font-size: 11px; }
+        .chip-button { background: var(--surface-2); color: #c7cfdb; }
+        .chip-button.on { border-color: rgba(109,93,252,.75); background: var(--primary-soft); color: #b9b1ff; }
+        .primary { border-color: var(--primary); background: var(--primary); color: white; }
+        .danger { border-color: rgba(255,102,127,.4); color: #ff8296; }
+        .code-area {
+            min-height: 0; padding: 16px 18px; overflow: hidden; color: #dce2ec;
+            font-family: ui-monospace, "SFMono-Regular", Consolas, monospace;
+            font-size: 13px; line-height: 1.68; white-space: pre-wrap;
+        }
+        .code-area .md { color: #8ba7ff; font-weight: 800; }
+        .code-area .variable { color: #63d7c4; }
+        .code-area .rule { color: #ffd178; }
+        .editor-foot {
+            display: flex; align-items: center; gap: 8px; min-height: 39px;
+            padding: 7px 12px; border-top: 1px solid var(--border-soft);
+            color: var(--muted); font-size: 11px;
+        }
+        .editor-foot .ok { color: var(--success); }
+        .main-actions {
+            display: flex; align-items: center; justify-content: flex-end; gap: 10px;
+            padding: 12px 18px 16px;
+        }
+        .main-actions .status { margin-right: auto; color: var(--muted); font-size: 11px; }
+        .side {
+            min-height: 0; display: grid;
+            grid-template-rows: minmax(230px, 0.72fr) minmax(390px, 1.28fr); gap: 16px;
+        }
+        .side-card { display: flex; flex-direction: column; }
+        .compact-head {
+            display: flex; align-items: flex-start; justify-content: space-between; gap: 10px;
+            padding: 14px 15px 12px; border-bottom: 1px solid var(--border-soft);
+        }
+        .tag {
+            display: inline-flex; align-items: center; gap: 5px; border-radius: 99px;
+            padding: 5px 8px; background: rgba(85, 214, 169, 0.09);
+            color: var(--success); font-size: 10px; font-weight: 800;
+        }
+        .prompt-box {
+            flex: 1; min-height: 0; margin: 12px 14px 10px; padding: 12px;
+            border: 1px solid var(--border); border-radius: 9px; background: var(--surface-3);
+            color: #d9dfeb; font-family: ui-monospace, Consolas, monospace;
+            font-size: 12px; line-height: 1.6;
+        }
+        .weight { color: #c2b8ff; background: rgba(109,93,252,.14); border-radius: 4px; padding: 1px 3px; }
+        .weight-number { color: #ffcd76; font-weight: 800; }
+        .card-actions {
+            display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+            padding: 0 14px 13px;
+        }
+        .card-actions .meta { margin-right: auto; color: var(--muted); font-size: 10px; }
+        .background-body {
+            min-height: 0; display: grid; grid-template-columns: 130px minmax(0, 1fr); flex: 1;
+        }
+        .background-list {
+            padding: 10px; border-right: 1px solid var(--border-soft); background: rgba(0,0,0,.08);
+        }
+        .background-list button {
+            width: 100%; margin-bottom: 5px; padding: 9px 10px; border: 1px solid transparent;
+            border-radius: 7px; background: transparent; color: var(--muted); text-align: left;
+            font-size: 11px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .background-list button.active {
+            border-color: rgba(109,93,252,.52); background: var(--primary-soft);
+            color: #d8d4ff; font-weight: 800;
+        }
+        .background-list .add {
+            margin-top: 5px; border: 1px dashed var(--border); color: #b6bfcd; text-align: center;
+        }
+        .background-editor {
+            min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 11px 12px 12px;
+        }
+        .field-label { margin-bottom: 6px; color: var(--muted); font-size: 10px; font-weight: 800; }
+        .name-input {
+            width: 100%; padding: 8px 9px; border: 1px solid var(--border); border-radius: 7px;
+            outline: 0; background: var(--surface-3); color: var(--text); font-size: 12px;
+        }
+        .background-editor .prompt-box { margin: 9px 0 10px; }
+        .hint-row { display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 10px; }
+        .dot { width: 5px; height: 5px; border-radius: 50%; background: var(--success); }
+        @media (max-width: 1280px) {
+            .workspace { grid-template-columns: minmax(650px, 1.7fr) minmax(390px, 1fr); }
+            .background-body { grid-template-columns: 110px minmax(0, 1fr); }
+        }
+    </style>
 </head>
-<body class="h-screen flex flex-col overflow-hidden text-gray-800 bg-white">
-    <header class="flex items-end justify-between px-6 pt-4 border-b border-gray-300">
-        <div class="mb-3">
-            <strong class="text-2xl font-extrabold text-gray-900">ImgGul</strong>
-        </div>
-        <nav class="flex space-x-2 -mb-[1px]">
-            <span class="px-5 py-2.5 cursor-pointer tab-inactive">탐색기</span>
-            <span class="px-5 py-2.5 cursor-pointer tab-inactive">이미지 생성</span>
-            <span class="px-5 py-2.5 cursor-pointer tab-active">프로젝트</span>
-        </nav>
-        <div class="mb-3">
-            <span class="cursor-pointer text-sm font-medium">로그아웃</span>
-        </div>
-    </header>
-
-    <main class="flex-1 flex flex-col p-6 overflow-hidden">
-        <section class="flex items-center mb-6 shrink-0">
-            <div class="flex items-center space-x-3">
-                <button class="text-2xl font-bold focus:outline-none" aria-label="뒤로 가기">&#8592;</button>
-                <h1 class="text-2xl font-bold">프로젝트 이름</h1>
+<body>
+    <div class="app">
+        <header class="topbar">
+            <button class="back" aria-label="뒤로 가기">←</button>
+            <div class="title">
+                <strong>히어로 육성 시설</strong>
+                <span>프로젝트 · 프롬프트</span>
             </div>
-        </section>
-
-        <section class="flex-1 flex gap-6 min-h-0">
-            <div class="w-3/5 flex flex-col border border-gray-300 rounded p-4">
-                <div class="flex items-start justify-between gap-3 mb-4">
+            <div class="save-state">모든 변경사항이 저장됨</div>
+        </header>
+        <main class="workspace">
+            <section class="card main-card" aria-label="텍스트 프롬프트 편집">
+                <div class="card-head">
                     <div>
-                        <h3 class="font-bold">입력 공간</h3>
-                        <p id="project-prompt-load-status" class="mt-1 min-h-4 text-xs text-gray-500"></p>
+                        <h2>프로젝트 텍스트</h2>
+                        <p>챗봇 동작, 시작 상황, 소개 페이지 내용을 각각 관리합니다.</p>
                     </div>
-                    <button id="project-prompt-preview-toggle" type="button" class="px-3 py-1.5 rounded border border-gray-300 text-sm font-bold" aria-pressed="false">마크다운 보기</button>
+                    <button class="chip-button on">◉ 마크다운 미리보기</button>
                 </div>
-                <textarea id="project-prompt-input" class="flex-1 resize-none outline-none auto-resize-textarea" placeholder="" aria-label="프롬프트 입력"></textarea>
-                <div id="project-prompt-preview" class="hidden flex-1 overflow-y-auto text-sm leading-6" aria-label="마크다운 미리보기"></div>
-            </div>
-            
-            <div class="w-2/5 flex flex-col gap-4">
-                <div class="border border-gray-300 rounded p-4 text-center">
-                    <span class="block text-sm font-bold text-gray-500">현재 글자 수</span>
-                    <strong id="project-prompt-count" class="block mt-1 text-2xl font-extrabold text-gray-900">0자</strong>
-                </div>
-                <div class="border border-gray-300 rounded p-4 text-center">
-                    <button class="font-bold">마크다운/요약</button>
-                </div>
-                <div class="border border-gray-300 rounded p-4 flex-1 flex flex-col">
-                    <div>
-                        <p class="font-bold">추가 기능을 위한 공간</p>
-                        <p class="mt-2 text-sm">- 기능 추가 가능성 높음</p>
+                <nav class="tabs" aria-label="프로젝트 프롬프트 종류">
+                    <button class="tab active">▣ 시스템 프롬프트</button>
+                    <button class="tab">▶ 시작 상황 <span class="count">3/3</span></button>
+                    <button class="tab">ⓘ 프로젝트 설명</button>
+                </nav>
+                <div class="editor-shell">
+                    <div class="editor-toolbar">
+                        <span class="file-label">시스템 프롬프트</span>
+                        <span class="file-name">prompt.md</span>
+                        <span class="spacer"></span>
+                        <div class="limit">
+                            <span>현재 글자 수</span>
+                            <strong>6,023자</strong>
+                        </div>
                     </div>
-                    <div class="mt-auto pt-4 flex items-center justify-end gap-3">
-                        <p id="project-prompt-save-status" class="min-h-4 text-xs text-gray-500"></p>
-                        <button id="project-prompt-save-btn" type="button" class="px-4 py-2 rounded bg-indigo-600 text-white text-sm font-bold">저장</button>
+                    <div class="code-area"><span class="md">## 필수 규칙</span>
+<span class="variable">{{user}}</span>는 대화를 시도하고 있는 플레이어, <span class="variable">{{char}}</span>는 대사와 행위를 묘사할 등장인물입니다.
+Answer가 묘사하는 내용의 관점은 모두 <span class="variable">{{char}}</span>의 관점이며, 플레이어의 대사나 감정·행동을 대신 묘사하지 않습니다.
+
+<span class="md">## 출력 규칙</span>
+<span class="rule">- 캐릭터의 말과 행동을 명확히 구분합니다.</span>
+<span class="rule">- 상황에 맞는 이미지 코드만 한 종류 출력합니다.</span>
+
+<span class="md">### 대사</span>
+형식: **{{char}}**: "대사"
+
+<span class="md">### 이미지</span>
+이미지 양식과 코드 규칙을 준수하고, 한 출력 안에서 여러 종류를 혼용하지 않습니다.</div>
+                    <div class="editor-foot">
+                        <span class="ok">● 자동 저장 초안 있음</span><span>·</span><span>마지막 저장 1분 전</span>
+                        <span class="spacer"></span><span>Markdown</span>
                     </div>
                 </div>
-            </div>
-        </section>
-    </main>
-    <script>
-        const promptInput = document.getElementById('project-prompt-input');
-        const promptCount = document.getElementById('project-prompt-count');
-        const promptPreview = document.getElementById('project-prompt-preview');
-        const promptPreviewToggle = document.getElementById('project-prompt-preview-toggle');
-        const promptSaveButton = document.getElementById('project-prompt-save-btn');
-        const promptSaveStatus = document.getElementById('project-prompt-save-status');
-
-        function updatePromptCount() {
-            promptCount.textContent = `${Array.from(promptInput.value).length.toLocaleString()}자`;
-        }
-
-        function renderPreview() {
-            promptPreview.innerHTML = promptInput.value
-                .replaceAll('&', '&amp;')
-                .replaceAll('<', '&lt;')
-                .replaceAll('>', '&gt;')
-                .split(/\n{2,}/)
-                .map(block => `<p>${block.replace(/\n/g, '<br>')}</p>`)
-                .join('');
-        }
-
-        promptInput.addEventListener('input', updatePromptCount);
-        promptInput.addEventListener('input', renderPreview);
-        promptPreviewToggle.addEventListener('click', () => {
-            const enabled = promptPreviewToggle.getAttribute('aria-pressed') !== 'true';
-            promptPreviewToggle.setAttribute('aria-pressed', String(enabled));
-            promptInput.classList.toggle('hidden', enabled);
-            promptPreview.classList.toggle('hidden', !enabled);
-            promptInput.readOnly = enabled;
-            if (enabled) renderPreview();
-        });
-        promptSaveButton.addEventListener('click', () => {
-            promptSaveStatus.textContent = 'prompt.md로 저장됩니다.';
-        });
-        updatePromptCount();
-    </script>
+                <div class="main-actions">
+                    <span class="status">이 영역은 현재 선택한 문서만 독립적으로 저장합니다.</span>
+                    <button class="primary">▣ 시스템 프롬프트 저장</button>
+                </div>
+            </section>
+            <aside class="side" aria-label="이미지 프롬프트 편집">
+                <section class="card side-card">
+                    <div class="compact-head">
+                        <div><h2>그림체 프롬프트</h2><p>프로젝트 이미지의 기본 스타일</p></div>
+                        <span class="tag">● 사용 중</span>
+                    </div>
+                    <div class="prompt-box">masterpiece, cinematic lighting,
+<span class="weight">(<span class="weight-number">1.25</span>::clean line art::)</span>, detailed eyes,
+soft color palette, high detail</div>
+                    <div class="card-actions">
+                        <span class="meta">가중치 강조 표시 켜짐</span>
+                        <button class="ghost">↻ 다시 불러오기</button>
+                        <button class="primary">▣ 그림체 저장</button>
+                    </div>
+                </section>
+                <section class="card side-card">
+                    <div class="compact-head">
+                        <div><h2>배경 프롬프트</h2><p>배경마다 이름과 프롬프트를 개별 관리</p></div>
+                        <button class="chip-button">＋ 신규 배경</button>
+                    </div>
+                    <div class="background-body">
+                        <nav class="background-list" aria-label="배경 목록">
+                            <button class="active">침대</button><button>훈련장</button><button>상담실</button>
+                            <button class="add">＋ 배경 추가</button>
+                        </nav>
+                        <div class="background-editor">
+                            <label class="field-label" for="background-name">배경 이름</label>
+                            <input class="name-input" id="background-name" value="침대" readonly>
+                            <div class="prompt-box"><span class="weight">(<span class="weight-number">2</span>::bed::)</span>, white bed, dark grey background,
+blurry background, <span class="weight">(<span class="weight-number">2</span>::simple background::)</span></div>
+                            <div class="hint-row"><span class="dot"></span> 가중치 강조 표시 켜짐</div>
+                            <div class="card-actions" style="padding: 10px 0 0; margin-top: auto;">
+                                <button class="danger">♲ 삭제</button>
+                                <button class="primary">▣ 배경 저장</button>
+                            </div>
+                        </div>
+                    </div>
+                </section>
+            </aside>
+        </main>
+    </div>
 </body>
 </html>

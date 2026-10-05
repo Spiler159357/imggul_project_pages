@@ -56,16 +56,39 @@ export const PROJECT_PROMPT_FIELDS = [
     {
         key: 'start',
         title: '시작 상황',
-        fileName: 'start_situation.md',
         icon: 'circle-play',
         placeholder: '이 프로젝트의 시작 상황을 입력하세요.'
     },
     {
         key: 'description',
         title: '프로젝트 설명',
-        fileName: 'project_description.md',
         icon: 'info',
         placeholder: '프로젝트 설명, 배경, 목표 등을 입력하세요.'
+    }
+];
+
+export const PROJECT_START_SITUATION_FIELDS = [
+    { key: 'start-1', primaryKey: 'start', title: '시작 상황 1', fileName: 'start_situation.md', format: 'markdown' },
+    { key: 'start-2', primaryKey: 'start', title: '시작 상황 2', fileName: 'start_situation_2.md', format: 'markdown' },
+    { key: 'start-3', primaryKey: 'start', title: '시작 상황 3', fileName: 'start_situation_3.md', format: 'markdown' }
+];
+
+export const PROJECT_DESCRIPTION_FIELDS = [
+    {
+        key: 'description-markdown',
+        primaryKey: 'description',
+        title: '프로젝트 설명 · Markdown',
+        fileName: 'project_description.md',
+        format: 'markdown',
+        placeholder: '마크다운으로 프로젝트 소개 페이지를 작성하세요.'
+    },
+    {
+        key: 'description-html',
+        primaryKey: 'description',
+        title: '프로젝트 설명 · HTML/CSS',
+        fileName: 'project_description.html',
+        format: 'html',
+        placeholder: 'HTML과 CSS로 프로젝트 소개 페이지를 작성하세요.'
     }
 ];
 
@@ -1276,7 +1299,31 @@ export async function loadProjectMarkdownFile(project, fileName, options = {}) {
 }
 
 export function getProjectPromptFieldConfig(fieldKey = window.PROJECT_ACTIVE_PROMPT_FIELD) {
-    return PROJECT_PROMPT_FIELDS.find(field => field.key === fieldKey) || PROJECT_PROMPT_FIELDS[0];
+    const primaryField = PROJECT_PROMPT_FIELDS.find(field => field.key === fieldKey)
+        || PROJECT_PROMPT_FIELDS.find(field => field.key === window.PROJECT_ACTIVE_PROMPT_FIELD)
+        || PROJECT_PROMPT_FIELDS[0];
+
+    if (primaryField.key === 'start') {
+        const index = Math.max(0, Math.min(2, Number(window.PROJECT_ACTIVE_START_SITUATION_INDEX) || 0));
+        return {
+            ...primaryField,
+            ...PROJECT_START_SITUATION_FIELDS[index],
+            placeholder: `시작 상황 ${index + 1}의 내용을 입력하세요.`
+        };
+    }
+
+    if (primaryField.key === 'description') {
+        const mode = window.PROJECT_ACTIVE_DESCRIPTION_FORMAT === 'html' ? 'html' : 'markdown';
+        const descriptionField = PROJECT_DESCRIPTION_FIELDS.find(field => field.format === mode)
+            || PROJECT_DESCRIPTION_FIELDS[0];
+        return { ...primaryField, ...descriptionField };
+    }
+
+    return {
+        ...primaryField,
+        primaryKey: primaryField.key,
+        format: 'markdown'
+    };
 }
 
 export function getProjectPromptFieldValues() {
@@ -1510,7 +1557,14 @@ export function renderMarkdownPreview(markdown) {
 export function syncProjectPromptPreview() {
     const input = document.getElementById('project-prompt-input');
     const preview = document.getElementById('project-prompt-preview');
+    const htmlPreview = document.getElementById('project-prompt-html-preview');
     if (!input || !preview) return;
+
+    const field = getProjectPromptFieldConfig();
+    if (field.format === 'html') {
+        if (htmlPreview) htmlPreview.srcdoc = input.value;
+        return;
+    }
 
     preview.innerHTML = renderMarkdownPreview(input.value);
 }
@@ -1521,7 +1575,7 @@ export function updateProjectPromptFieldTabs() {
         const tab = document.querySelector(`[data-project-prompt-field="${field.key}"]`);
         if (!tab) return;
 
-        const active = field.key === activeField.key;
+        const active = field.key === activeField.primaryKey;
         tab.setAttribute('aria-selected', String(active));
         tab.classList.toggle('bg-indigo-600', active);
         tab.classList.toggle('text-white', active);
@@ -1531,6 +1585,27 @@ export function updateProjectPromptFieldTabs() {
         tab.classList.toggle('text-gray-600', !active);
         tab.classList.toggle('dark:text-gray-300', !active);
     });
+
+    document.getElementById('project-start-situation-tabs')?.classList.toggle('hidden', activeField.primaryKey !== 'start');
+    document.getElementById('project-description-format-tabs')?.classList.toggle('hidden', activeField.primaryKey !== 'description');
+
+    document.querySelectorAll('[data-project-start-situation]').forEach(tab => {
+        const active = Number(tab.dataset.projectStartSituation) === (Number(window.PROJECT_ACTIVE_START_SITUATION_INDEX) || 0);
+        tab.setAttribute('aria-selected', String(active));
+        tab.classList.toggle('bg-indigo-100', active);
+        tab.classList.toggle('dark:bg-indigo-950/50', active);
+        tab.classList.toggle('text-indigo-700', active);
+        tab.classList.toggle('dark:text-indigo-300', active);
+    });
+
+    document.querySelectorAll('[data-project-description-format]').forEach(tab => {
+        const active = tab.dataset.projectDescriptionFormat === activeField.format;
+        tab.setAttribute('aria-selected', String(active));
+        tab.classList.toggle('bg-indigo-100', active);
+        tab.classList.toggle('dark:bg-indigo-950/50', active);
+        tab.classList.toggle('text-indigo-700', active);
+        tab.classList.toggle('dark:text-indigo-300', active);
+    });
 }
 
 export function renderActiveProjectPromptField() {
@@ -1538,6 +1613,9 @@ export function renderActiveProjectPromptField() {
     const title = document.getElementById('project-prompt-field-title');
     const file = document.getElementById('project-prompt-field-file');
     const saveLabel = document.getElementById('project-prompt-save-label');
+    const preview = document.getElementById('project-prompt-preview');
+    const htmlPreview = document.getElementById('project-prompt-html-preview');
+    const toggle = document.getElementById('project-prompt-preview-toggle');
     if (!input) return;
 
     const field = getProjectPromptFieldConfig();
@@ -1548,6 +1626,16 @@ export function renderActiveProjectPromptField() {
     if (title) title.textContent = field.title;
     if (file) file.textContent = field.fileName;
     if (saveLabel) saveLabel.textContent = `${field.title} 저장`;
+    if (toggle) {
+        toggle.querySelector('span')?.replaceChildren(document.createTextNode(field.format === 'html' ? 'HTML/CSS 미리보기' : '마크다운 미리보기'));
+        toggle.setAttribute('aria-pressed', 'false');
+        toggle.classList.remove('bg-indigo-600', 'text-white', 'border-indigo-600');
+        toggle.classList.add('border-gray-200', 'dark:border-gray-700', 'text-gray-600', 'dark:text-gray-300');
+    }
+    input.classList.remove('hidden');
+    input.readOnly = false;
+    preview?.classList.add('hidden');
+    htmlPreview?.classList.add('hidden');
     input.dispatchEvent(new Event('input'));
     syncProjectPromptPreview();
     updateProjectPromptFieldTabs();
@@ -1558,7 +1646,29 @@ export function switchProjectPromptField(fieldKey) {
     const values = getProjectPromptFieldValues();
     if (input) values[getProjectPromptFieldConfig().key] = input.value;
 
-    window.PROJECT_ACTIVE_PROMPT_FIELD = getProjectPromptFieldConfig(fieldKey).key;
+    window.PROJECT_ACTIVE_PROMPT_FIELD = PROJECT_PROMPT_FIELDS.some(field => field.key === fieldKey)
+        ? fieldKey
+        : 'system';
+    renderActiveProjectPromptField();
+}
+
+export function switchProjectStartSituation(index) {
+    const input = document.getElementById('project-prompt-input');
+    const values = getProjectPromptFieldValues();
+    if (input) values[getProjectPromptFieldConfig().key] = input.value;
+
+    window.PROJECT_ACTIVE_START_SITUATION_INDEX = Math.max(0, Math.min(2, Number(index) || 0));
+    window.PROJECT_ACTIVE_PROMPT_FIELD = 'start';
+    renderActiveProjectPromptField();
+}
+
+export function switchProjectDescriptionFormat(format) {
+    const input = document.getElementById('project-prompt-input');
+    const values = getProjectPromptFieldValues();
+    if (input) values[getProjectPromptFieldConfig().key] = input.value;
+
+    window.PROJECT_ACTIVE_DESCRIPTION_FORMAT = format === 'html' ? 'html' : 'markdown';
+    window.PROJECT_ACTIVE_PROMPT_FIELD = 'description';
     renderActiveProjectPromptField();
 }
 
@@ -1566,14 +1676,23 @@ export async function hydrateProjectPromptInput() {
     const project = getActiveProject();
     const input = document.getElementById('project-prompt-input');
     const status = document.getElementById('project-prompt-load-status');
-    window.PROJECT_ACTIVE_PROMPT_FIELD = getProjectPromptFieldConfig(window.PROJECT_ACTIVE_PROMPT_FIELD).key;
+    window.PROJECT_ACTIVE_PROMPT_FIELD = PROJECT_PROMPT_FIELDS.some(field => field.key === window.PROJECT_ACTIVE_PROMPT_FIELD)
+        ? window.PROJECT_ACTIVE_PROMPT_FIELD
+        : 'system';
+    window.PROJECT_ACTIVE_START_SITUATION_INDEX = Math.max(0, Math.min(2, Number(window.PROJECT_ACTIVE_START_SITUATION_INDEX) || 0));
+    window.PROJECT_ACTIVE_DESCRIPTION_FORMAT = window.PROJECT_ACTIVE_DESCRIPTION_FORMAT === 'html' ? 'html' : 'markdown';
     window.PROJECT_PROMPT_FIELD_VALUES = {};
     if (!project || !input) return;
 
     if (status) status.textContent = '프로젝트 프롬프트를 불러오는 중입니다.';
 
     try {
-        const entries = await Promise.all(PROJECT_PROMPT_FIELDS.map(async field => {
+        const storedFields = [
+            { ...PROJECT_PROMPT_FIELDS[0], primaryKey: 'system', format: 'markdown' },
+            ...PROJECT_START_SITUATION_FIELDS,
+            ...PROJECT_DESCRIPTION_FIELDS
+        ];
+        const entries = await Promise.all(storedFields.map(async field => {
             const value = await loadProjectMarkdownFile(project, field.fileName);
             return [field.key, value];
         }));
@@ -1605,6 +1724,7 @@ export async function hydrateProjectStylePromptInput() {
 
         currentInput.value = value;
         if (currentStatus) currentStatus.textContent = value ? 'style_prompt.md를 불러왔습니다.' : '';
+        window.refreshNaiPromptWeightPreviews?.();
     } catch (err) {
         if (hydrationId !== projectStylePromptHydrationId || getActiveProject()?.prefix !== projectPrefix) return;
         const currentStatus = document.getElementById('project-style-prompt-status');
@@ -1615,12 +1735,15 @@ export async function hydrateProjectStylePromptInput() {
 export function initProjectPromptMarkdownToggle() {
     const input = document.getElementById('project-prompt-input');
     const preview = document.getElementById('project-prompt-preview');
+    const htmlPreview = document.getElementById('project-prompt-html-preview');
     const toggle = document.getElementById('project-prompt-preview-toggle');
     if (!input || !preview || !toggle) return;
 
     const setPreviewMode = (enabled) => {
+        const field = getProjectPromptFieldConfig();
         input.classList.toggle('hidden', enabled);
-        preview.classList.toggle('hidden', !enabled);
+        preview.classList.toggle('hidden', !enabled || field.format === 'html');
+        htmlPreview?.classList.toggle('hidden', !enabled || field.format !== 'html');
         input.readOnly = enabled;
         toggle.setAttribute('aria-pressed', String(enabled));
         toggle.classList.toggle('bg-indigo-600', enabled);
@@ -1630,6 +1753,8 @@ export function initProjectPromptMarkdownToggle() {
         toggle.classList.toggle('dark:border-gray-700', !enabled);
         toggle.classList.toggle('text-gray-600', !enabled);
         toggle.classList.toggle('dark:text-gray-300', !enabled);
+        const label = toggle.querySelector('span');
+        if (label) label.textContent = enabled ? '편집으로 돌아가기' : (field.format === 'html' ? 'HTML/CSS 미리보기' : '마크다운 미리보기');
         if (enabled) syncProjectPromptPreview();
     };
 
@@ -1690,14 +1815,17 @@ export async function uploadProjectMarkdownFile(project, fileName, content) {
     if (!project?.prefix) throw new Error('프로젝트 경로를 찾을 수 없습니다.');
 
     const key = `${project.prefix}${fileName}`;
+    const contentType = fileName.toLowerCase().endsWith('.html')
+        ? 'text/html; charset=utf-8'
+        : 'text/markdown; charset=utf-8';
     const res = await fetch('/api/upload?_t=' + Date.now(), {
         method: 'PUT',
         headers: {
-            'Content-Type': 'text/markdown; charset=utf-8',
+            'Content-Type': contentType,
             'X-File-Name': encodeURIComponent(fileName),
             'X-Absolute-Path': encodeURIComponent(key)
         },
-        body: new Blob([content], { type: 'text/markdown; charset=utf-8' }),
+        body: new Blob([content], { type: contentType }),
         cache: 'no-store'
     });
 

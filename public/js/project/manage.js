@@ -1,4 +1,4 @@
-import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=global-posts-20261005a';
+import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=prompt-tab-20261005a';
 import { renderCharacterSection } from './character.js?v=global-posts-20261005a';
 import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=project-dashboard-20261005g';
 import { renderSituationSection } from './situation.js?v=global-posts-20261005a';
@@ -794,91 +794,122 @@ export function renderPromptSection(section) {
     renderProjectShell(`
         ${renderSectionHeader(section.title)}
         <div class="flex-1 overflow-y-auto p-4 sm:p-6">
-            <section class="grid grid-cols-1 lg:grid-cols-[minmax(0,3fr)_minmax(260px,2fr)] gap-4 sm:gap-6 min-h-full">
-                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex flex-col min-h-[360px]">
-                    <div class="flex items-start justify-between gap-3 mb-3">
+            <section class="grid grid-cols-1 xl:grid-cols-[minmax(0,7fr)_minmax(360px,3fr)] gap-4 sm:gap-5 min-h-full">
+                <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl flex flex-col min-h-[660px] overflow-hidden">
+                    <div class="flex items-start justify-between gap-3 px-4 sm:px-5 py-4 border-b border-gray-200 dark:border-gray-700">
                         <div>
-                            <h3 id="project-prompt-field-title" class="font-bold text-sm text-gray-900 dark:text-white">시스템 프롬프트</h3>
-                            <p id="project-prompt-field-file" class="mt-0.5 text-[11px] font-mono text-gray-400 dark:text-gray-500">prompt.md</p>
-                            <p id="project-prompt-load-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                            <h2 class="font-bold text-sm text-gray-900 dark:text-white">프로젝트 텍스트</h2>
+                            <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">챗봇 동작, 시작 상황, 소개 페이지 내용을 각각 관리합니다.</p>
                         </div>
-                        <button id="project-prompt-preview-toggle" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition" aria-pressed="false">
+                        <button id="project-prompt-preview-toggle" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition" aria-pressed="false">
                             <i data-lucide="eye" class="w-4 h-4"></i>
-                            <span>마크다운 보기</span>
+                            <span>마크다운 미리보기</span>
                         </button>
                     </div>
-                    <div class="mb-3 flex flex-wrap gap-2" role="tablist" aria-label="프로젝트 프롬프트 입력 종류">
+
+                    <div class="px-4 sm:px-5 py-3 flex flex-wrap gap-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/30" role="tablist" aria-label="프로젝트 프롬프트 입력 종류">
                         ${PROJECT_PROMPT_FIELDS.map(field => `
                             <button type="button" role="tab" data-project-prompt-field="${escapeHtml(field.key)}" onclick="window.switchProjectPromptField('${escapeJsString(field.key)}')" class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 transition" aria-selected="false">
                                 <i data-lucide="${field.icon}" class="w-4 h-4"></i>
                                 <span>${escapeHtml(field.title)}</span>
+                                ${field.key === 'start' ? '<span class="font-normal opacity-70">최대 3개</span>' : ''}
                             </button>
                         `).join('')}
                     </div>
-                    <textarea id="project-prompt-input" class="flex-1 resize-none outline-none bg-transparent text-sm leading-6 text-gray-700 dark:text-gray-200" aria-label="시스템 프롬프트 입력"></textarea>
-                    <div id="project-prompt-preview" class="hidden flex-1 overflow-y-auto text-sm leading-6 text-gray-700 dark:text-gray-200 prose-like" aria-label="마크다운 미리보기"></div>
-                </div>
 
-                <div class="flex flex-col gap-3">
-                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-center">
-                        <span class="block text-[11px] font-bold text-gray-500 dark:text-gray-400">현재 글자 수</span>
-                        <strong id="project-prompt-count" class="block mt-1 text-2xl font-extrabold text-gray-900 dark:text-white">0자</strong>
+                    <div id="project-start-situation-tabs" class="hidden px-4 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-200 dark:border-gray-700" role="tablist" aria-label="시작 상황 선택">
+                        ${[0, 1, 2].map(index => `
+                            <button type="button" role="tab" data-project-start-situation="${index}" onclick="window.switchProjectStartSituation(${index})" class="px-3 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[11px] font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 transition" aria-selected="false">상황 ${index + 1}</button>
+                        `).join('')}
+                        <span class="ml-auto text-[10px] text-gray-400 dark:text-gray-500">최대 3개</span>
                     </div>
-                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 text-center text-sm text-gray-700 dark:text-gray-200">
-                        <button type="button" class="inline-flex items-center justify-center gap-1.5 font-bold hover:text-indigo-600 dark:hover:text-indigo-400 transition">
-                            <i data-lucide="sparkles" class="w-4 h-4"></i>
-                            <span>마크다운/요약</span>
+
+                    <div id="project-description-format-tabs" class="hidden px-4 sm:px-5 py-2.5 flex flex-wrap items-center gap-2 border-b border-gray-200 dark:border-gray-700" role="tablist" aria-label="프로젝트 설명 편집 형식">
+                        <span class="text-[10px] font-bold text-gray-400 dark:text-gray-500 mr-1">편집 형식</span>
+                        <button type="button" role="tab" data-project-description-format="markdown" onclick="window.switchProjectDescriptionFormat('markdown')" class="px-3 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[11px] font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 transition" aria-selected="false">Markdown</button>
+                        <button type="button" role="tab" data-project-description-format="html" onclick="window.switchProjectDescriptionFormat('html')" class="px-3 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[11px] font-bold text-gray-600 dark:text-gray-300 hover:border-indigo-300 dark:hover:border-indigo-600 transition" aria-selected="false">HTML · CSS</button>
+                    </div>
+
+                    <div class="m-4 sm:m-5 mt-4 flex-1 min-h-[430px] flex flex-col rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50/40 dark:bg-gray-900/30 overflow-hidden">
+                        <div class="flex items-center gap-2 px-3.5 py-3 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                            <h3 id="project-prompt-field-title" class="font-bold text-xs text-gray-900 dark:text-white">시스템 프롬프트</h3>
+                            <span id="project-prompt-field-file" class="text-[10px] font-mono text-gray-400 dark:text-gray-500">prompt.md</span>
+                            <span class="ml-auto text-[10px] font-bold text-gray-500 dark:text-gray-400">현재 <strong id="project-prompt-count" class="text-xs text-gray-900 dark:text-white">0자</strong></span>
+                        </div>
+                        <textarea id="project-prompt-input" class="flex-1 min-h-[360px] resize-none outline-none bg-transparent p-4 text-sm leading-6 text-gray-700 dark:text-gray-200 font-mono" aria-label="시스템 프롬프트 입력"></textarea>
+                        <div id="project-prompt-preview" class="hidden flex-1 min-h-[360px] overflow-y-auto p-4 text-sm leading-6 text-gray-700 dark:text-gray-200 prose-like" aria-label="마크다운 미리보기"></div>
+                        <iframe id="project-prompt-html-preview" class="hidden flex-1 min-h-[360px] w-full border-0 bg-white" sandbox="" title="HTML/CSS 미리보기"></iframe>
+                        <div class="min-h-9 px-3.5 py-2 flex items-center gap-2 border-t border-gray-200 dark:border-gray-700 text-[10px] text-gray-400 dark:text-gray-500">
+                            <p id="project-prompt-load-status" class="min-h-4"></p>
+                            <span class="ml-auto">현재 문서만 독립적으로 저장됩니다.</span>
+                        </div>
+                    </div>
+
+                    <div class="px-4 sm:px-5 pb-4 flex flex-wrap items-center justify-end gap-3">
+                        <p id="project-prompt-save-status" class="mr-auto min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
+                        <button id="project-prompt-save-btn" type="button" onclick="window.saveProjectPromptMarkdown()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
+                            <i data-lucide="save" class="w-4 h-4"></i>
+                            <span id="project-prompt-save-label">시스템 프롬프트 저장</span>
                         </button>
                     </div>
-                    <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 flex-1 min-h-[180px] flex flex-col">
-                        <div>
-                            <p class="font-bold text-sm text-gray-900 dark:text-white">추가 기능을 위한 공간</p>
-                            <p class="mt-2 text-xs text-gray-500 dark:text-gray-400">기능 추가 가능성 높음</p>
+                </div>
+
+                <div class="flex flex-col gap-4 min-h-[660px]">
+                    <section class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl flex flex-col min-h-[250px] overflow-hidden">
+                        <div class="px-4 py-3.5 flex items-start justify-between gap-3 border-b border-gray-200 dark:border-gray-700">
+                            <div>
+                                <h3 class="font-bold text-sm text-gray-900 dark:text-white">그림체 프롬프트</h3>
+                                <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">프로젝트 이미지의 기본 스타일</p>
+                            </div>
+                            <span class="inline-flex items-center gap-1 px-2 py-1 rounded-full bg-emerald-50 dark:bg-emerald-950/30 text-[10px] font-bold text-emerald-600 dark:text-emerald-400"><span class="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>사용 중</span>
                         </div>
-                        <label class="mt-4 block flex-1 min-h-[120px]">
-                            <span class="block mb-1 text-xs font-bold text-gray-700 dark:text-gray-300">그림체 프롬프트</span>
-                            <textarea id="project-style-prompt-input" class="w-full min-h-[120px] resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="플래너의 그림체 항목으로 가져올 프롬프트"></textarea>
+                        <label class="m-3 mb-2 block flex-1 min-h-[120px]">
+                            <span class="sr-only">그림체 프롬프트</span>
+                            <textarea id="project-style-prompt-input" class="w-full min-h-[120px] resize-y p-3 text-xs leading-5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="플래너의 그림체 항목으로 가져올 프롬프트"></textarea>
                         </label>
-                        <div class="mt-3 flex items-center justify-end gap-3">
-                            <p id="project-style-prompt-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
-                            <button id="project-style-prompt-save-btn" type="button" onclick="window.saveProjectStylePrompt()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400 transition">
+                        <div class="px-3 pb-3 flex flex-wrap items-center justify-end gap-2">
+                            <p id="project-style-prompt-status" class="mr-auto min-h-4 text-[10px] text-gray-400 dark:text-gray-500"></p>
+                            <button id="project-style-prompt-save-btn" type="button" onclick="window.saveProjectStylePrompt()" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition">
                                 <i data-lucide="save" class="w-4 h-4"></i>
                                 <span>그림체 저장</span>
                             </button>
                         </div>
-                        <div class="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                            <div class="flex items-center justify-between gap-2 mb-2">
-                                <span class="block text-xs font-bold text-gray-700 dark:text-gray-300">배경 프롬프트</span>
-                                <button type="button" onclick="window.addProjectBackgroundPrompt()" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
-                                    <i data-lucide="plus" class="w-3.5 h-3.5"></i>
-                                    신규 배경
-                                </button>
+                    </section>
+
+                    <section class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl flex-1 min-h-[390px] flex flex-col overflow-hidden">
+                        <div class="px-4 py-3.5 flex items-start justify-between gap-3 border-b border-gray-200 dark:border-gray-700">
+                            <div>
+                                <h3 class="font-bold text-sm text-gray-900 dark:text-white">배경 프롬프트</h3>
+                                <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">배경마다 이름과 프롬프트를 개별 관리합니다.</p>
                             </div>
-                            <select id="project-background-prompt-select" onchange="window.selectProjectBackgroundPrompt(this.value)" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100">
-                                <option value="">배경을 불러오는 중입니다.</option>
-                            </select>
-                            <input id="project-background-prompt-name" class="mt-2 w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100" placeholder="배경 이름">
-                            <textarea id="project-background-prompt-input" class="mt-2 w-full min-h-[100px] resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="플래너의 배경 항목으로 가져올 프롬프트"></textarea>
-                            <div class="mt-3 flex flex-wrap items-center justify-end gap-2">
-                                <p id="project-background-prompt-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
-                                <button id="project-background-prompt-delete-btn" type="button" onclick="window.deleteProjectBackgroundPrompt()" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20 transition">
-                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
-                                    <span>삭제</span>
-                                </button>
-                                <button id="project-background-prompt-save-btn" type="button" onclick="window.saveProjectBackgroundPrompt()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400 transition">
-                                    <i data-lucide="save" class="w-4 h-4"></i>
-                                    <span>배경 저장</span>
-                                </button>
-                            </div>
-                        </div>
-                        <div class="mt-auto pt-4 flex items-center justify-end gap-3">
-                            <p id="project-prompt-save-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
-                            <button id="project-prompt-save-btn" type="button" onclick="window.saveProjectPromptMarkdown()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">
-                                <i data-lucide="save" class="w-4 h-4"></i>
-                                <span id="project-prompt-save-label">시스템 프롬프트 저장</span>
+                            <button type="button" onclick="window.addProjectBackgroundPrompt()" class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">
+                                <i data-lucide="plus" class="w-3.5 h-3.5"></i>신규 배경
                             </button>
                         </div>
-                    </div>
+                        <div class="grid grid-cols-[110px_minmax(0,1fr)] flex-1 min-h-0">
+                            <div id="project-background-prompt-list" class="p-2 space-y-1 border-r border-gray-200 dark:border-gray-700 bg-gray-50/70 dark:bg-gray-900/30" role="tablist" aria-label="배경 프롬프트 목록"></div>
+                            <div class="min-w-0 p-3 flex flex-col">
+                                <select id="project-background-prompt-select" onchange="window.selectProjectBackgroundPrompt(this.value)" class="hidden" aria-hidden="true"><option value="">배경을 불러오는 중입니다.</option></select>
+                                <label class="block">
+                                    <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">배경 이름</span>
+                                    <input id="project-background-prompt-name" class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100" placeholder="배경 이름">
+                                </label>
+                                <label class="mt-2 block flex-1 min-h-[150px]">
+                                    <span class="sr-only">배경 프롬프트</span>
+                                    <textarea id="project-background-prompt-input" class="w-full min-h-[150px] resize-y p-3 text-xs leading-5 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500" placeholder="플래너의 배경 항목으로 가져올 프롬프트"></textarea>
+                                </label>
+                                <div class="mt-2 flex flex-wrap items-center justify-end gap-2">
+                                    <p id="project-background-prompt-status" class="mr-auto min-h-4 text-[10px] text-gray-400 dark:text-gray-500"></p>
+                                    <button id="project-background-prompt-delete-btn" type="button" onclick="window.deleteProjectBackgroundPrompt()" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20 transition disabled:opacity-40">
+                                        <i data-lucide="trash-2" class="w-4 h-4"></i><span>삭제</span>
+                                    </button>
+                                    <button id="project-background-prompt-save-btn" type="button" onclick="window.saveProjectBackgroundPrompt()" class="inline-flex items-center justify-center gap-1.5 px-3.5 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition">
+                                        <i data-lucide="save" class="w-4 h-4"></i><span>배경 저장</span>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </section>
                 </div>
             </section>
         </div>
@@ -954,6 +985,7 @@ export async function saveProjectStylePrompt() {
 
 export function renderProjectBackgroundPromptInputs(data = {}) {
     const select = document.getElementById('project-background-prompt-select');
+    const list = document.getElementById('project-background-prompt-list');
     const nameInput = document.getElementById('project-background-prompt-name');
     const promptInput = document.getElementById('project-background-prompt-input');
     const deleteButton = document.getElementById('project-background-prompt-delete-btn');
@@ -967,12 +999,27 @@ export function renderProjectBackgroundPromptInputs(data = {}) {
     select.innerHTML = normalized.backgrounds.length
         ? normalized.backgrounds.map(background => `<option value="${escapeHtml(background.id)}" ${background.id === activeBackground?.id ? 'selected' : ''}>${escapeHtml(background.name)}</option>`).join('')
         : '<option value="">등록된 배경이 없습니다.</option>';
+    if (list) {
+        list.innerHTML = normalized.backgrounds.length
+            ? normalized.backgrounds.map(background => {
+                const active = background.id === activeBackground?.id;
+                return `
+                    <button type="button" role="tab" aria-selected="${active}" onclick="window.selectProjectBackgroundPrompt('${escapeJsString(background.id)}')" class="w-full px-2.5 py-2 rounded-md border text-left text-[11px] font-bold truncate transition ${active
+                        ? 'border-indigo-300 dark:border-indigo-700 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300'
+                        : 'border-transparent text-gray-500 dark:text-gray-400 hover:border-gray-200 dark:hover:border-gray-700'}">
+                        ${escapeHtml(background.name)}
+                    </button>
+                `;
+            }).join('')
+            : '<p class="px-2 py-3 text-[10px] leading-4 text-gray-400 dark:text-gray-500">등록된 배경이 없습니다.</p>';
+    }
     select.disabled = !normalized.backgrounds.length;
     nameInput.value = activeBackground?.name || '';
     promptInput.value = activeBackground?.prompt || '';
     nameInput.disabled = !activeBackground;
     promptInput.disabled = !activeBackground;
     if (deleteButton) deleteButton.disabled = normalized.backgrounds.length <= 1;
+    window.refreshNaiPromptWeightPreviews?.();
 }
 
 export async function hydrateProjectBackgroundPromptInputs() {
@@ -1014,7 +1061,7 @@ export function readProjectBackgroundPromptInputs() {
 export async function selectProjectBackgroundPrompt(backgroundId) {
     const project = getActiveProject();
     if (!project) return;
-    const currentData = getProjectBackgroundPromptData(project);
+    const currentData = readProjectBackgroundPromptInputs();
     const nextData = normalizeProjectBackgroundPrompts({
         backgrounds: currentData.backgrounds,
         activeBackgroundId: backgroundId

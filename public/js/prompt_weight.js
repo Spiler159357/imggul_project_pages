@@ -3,6 +3,7 @@ const PROMPT_WEIGHT_SELECTOR = [
     '.prompt-input',
     '#nai-negative',
     '#project-style-prompt-input',
+    '#project-background-prompt-input',
     '#character-prompt-character-input',
     '#character-prompt-clothing-input',
     '#character-prompt-negative-input',
