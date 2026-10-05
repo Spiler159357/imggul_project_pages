@@ -11,6 +11,7 @@ import {
     deferPlannerCompactQueueSlot,
     failPlannerCompactGeneration,
     getPlannerCompactRateLimit,
+    markPlannerCompactQueueExecution,
     preparePlannerCompactQueueSlot,
     putPlannerCompactRateLimit,
     recordPlannerCompactSlotFailure,
@@ -34,6 +35,9 @@ const R2_PUT_MAX_ATTEMPTS = 4;
 const PLANNER_COMPACT_MAX_ATTEMPTS = 3;
 const PLANNER_SLOT_REGENERATION_ATTEMPTS = 3;
 const NOVELAI_REQUEST_TIMEOUT_MS = 8 * 60 * 1000;
+const PLANNER_EXECUTION_LEASE_MS = NOVELAI_REQUEST_TIMEOUT_MS + (2 * 60 * 1000);
+const PLANNER_MAX_SLOTS_PER_INVOCATION = 2;
+const PLANNER_CONTINUATION_START_LIMIT_MS = 3 * 60 * 1000;
 
 export function jsonResponse(data, init = {}) {
     const headers = new Headers(init.headers || {});
@@ -518,11 +522,39 @@ async function getPlannerCompactCooldown(env) {
 
 export async function processPlannerCompactQueueMessage(env, body = {}, options = {}) {
     requireWorkerBindings(env);
+    const cycleStartedAt = Date.now();
+    const queueReceivedAt = new Date().toISOString();
     const prepared = await preparePlannerCompactQueueSlot(env, body);
     if (prepared.disposition !== "process") return prepared;
 
-    const attempt = Math.max(1, Number(options.attempts || body.attempt || 1));
+    const attempt = Math.max(1, Number(options.attempts || 1), Number(body.attempt || 1));
     const slot = prepared.slot;
+    const queuePublishedAtMs = Date.parse(String(body.queuePublishedAt || ""));
+    const timing = {
+        assetId: slot.assetId,
+        globalImageIndex: slot.globalImageIndex,
+        queueWaitMs: Number.isFinite(queuePublishedAtMs) ? Math.max(0, Date.now() - queuePublishedAtMs) : 0,
+        novelAiMs: 0,
+        imageProcessingMs: 0,
+        storageMs: 0,
+        cycleMs: 0,
+        measuredAt: ""
+    };
+    const executionBase = {
+        assetId: slot.assetId,
+        globalImageIndex: slot.globalImageIndex,
+        traceId: body.traceId || options.messageId || crypto.randomUUID(),
+        queuePublishedAt: body.queuePublishedAt || "",
+        queueReceivedAt,
+        leaseUntil: new Date(Date.now() + PLANNER_EXECUTION_LEASE_MS).toISOString(),
+        deliveryAttempt: attempt
+    };
+    const claimed = await markPlannerCompactQueueExecution(env, body, {
+        ...executionBase,
+        phase: "preparing",
+        stageLabel: "Preparing image generation"
+    });
+    if (claimed.stale) return { disposition: "ack", reason: "state_changed" };
     const request = buildNovelAiPayload(
         prepared.generation,
         makePlannerCompactSeed(prepared.generation, slot.globalImageIndex)
@@ -559,7 +591,14 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                 return { disposition: "ack", status: deferred.status };
             }
 
+            await markPlannerCompactQueueExecution(env, body, {
+                ...executionBase,
+                phase: "novelai_request",
+                stageLabel: "Waiting for NovelAI"
+            });
+            const novelAiStartedAt = Date.now();
             const zipBuffer = await callNovelAi(env, request.payload);
+            timing.novelAiMs = Date.now() - novelAiStartedAt;
             if (Number(cooldown.rate?.strikeCount || 0) > 0 || Number(cooldown.rate?.availableAt || 0) > 0) {
                 await putPlannerCompactRateLimit(env, {
                     key: "novelai",
@@ -570,8 +609,21 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                     reason: ""
                 });
             }
+            await markPlannerCompactQueueExecution(env, body, {
+                ...executionBase,
+                phase: "image_processing",
+                stageLabel: "Processing generated image"
+            });
+            const imageProcessingStartedAt = Date.now();
             const extracted = await extractFirstZipFile(zipBuffer);
             const webpBuffer = await encodeWebP(env, extracted.data);
+            timing.imageProcessingMs = Date.now() - imageProcessingStartedAt;
+            await markPlannerCompactQueueExecution(env, body, {
+                ...executionBase,
+                phase: "storage",
+                stageLabel: "Saving generated image"
+            });
+            const storageStartedAt = Date.now();
             await putR2WithRetry(env.imgBucket, slot.r2Key, webpBuffer, {
                 httpMetadata: { contentType: "image/webp" },
                 customMetadata: {
@@ -585,6 +637,7 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                     height: String(request.height || 0)
                 }
             });
+            timing.storageMs = Date.now() - storageStartedAt;
             object = {
                 size: webpBuffer.byteLength,
                 httpMetadata: { contentType: "image/webp" },
@@ -597,6 +650,9 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             };
         }
 
+        timing.cycleMs = Date.now() - cycleStartedAt;
+        timing.measuredAt = new Date().toISOString();
+        const commitStartedAt = Date.now();
         const committed = await commitPlannerCompactQueueSlot(env, {
             runKey: prepared.runKey,
             jobId: prepared.jobId,
@@ -607,13 +663,33 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             width: Number(object.customMetadata?.width || request.width || 0),
             height: Number(object.customMetadata?.height || request.height || 0),
             byteSize: Number(object.size || 0),
-            mimeType: object.httpMetadata?.contentType || "image/webp"
+            mimeType: object.httpMetadata?.contentType || "image/webp",
+            timing
         });
         slotCommitted = true;
-        if (committed.nextMessage && env.GENERATION_QUEUE) {
+        const completedTiming = {
+            ...timing,
+            commitMs: Date.now() - commitStartedAt,
+            cycleMs: Date.now() - cycleStartedAt
+        };
+        console.log(JSON.stringify({
+            event: "planner_slot_completed",
+            jobId: prepared.jobId,
+            traceId: executionBase.traceId,
+            deliveryAttempt: attempt,
+            directContinuation: Boolean(options.directContinuation),
+            ...completedTiming
+        }));
+        if (committed.nextMessage && env.GENERATION_QUEUE && options.dispatchNext !== false) {
             await env.GENERATION_QUEUE.send(committed.nextMessage);
         }
-        return { disposition: "ack", status: committed.status };
+        return {
+            disposition: "ack",
+            status: committed.status,
+            nextMessage: committed.nextMessage,
+            terminal: committed.terminal,
+            timing: completedTiming
+        };
     } catch (error) {
         if (slotCommitted) throw error;
         const message = error?.message || String(error);
@@ -700,7 +776,23 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             return { disposition: "ack", status: failed.status };
         }
         if (attempt < PLANNER_COMPACT_MAX_ATTEMPTS) {
-            return { disposition: "retry", delaySeconds: retryDelaySeconds };
+            const deferred = await deferPlannerCompactQueueSlot(env, {
+                runKey: prepared.runKey,
+                jobId: prepared.jobId,
+                assetId: slot.assetId,
+                generationSequence: slot.generationSequence
+            }, {
+                kind: errorKind,
+                errorMessage: message,
+                nextRetryAt: new Date(Date.now() + retryDelaySeconds * 1000).toISOString()
+            });
+            if (deferred.nextMessage && env.GENERATION_QUEUE) {
+                await env.GENERATION_QUEUE.send({
+                    ...deferred.nextMessage,
+                    attempt: attempt + 1
+                }, { delaySeconds: retryDelaySeconds });
+            }
+            return { disposition: "ack", status: deferred.status };
         }
         const nextRetryDelaySeconds = errorKind === "storage" ? 120 : 60;
         const failed = await recordPlannerCompactSlotFailure(env, {
@@ -725,6 +817,60 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
     }
 }
 
+export async function processPlannerCompactQueueBurst(env, initialBody = {}, options = {}) {
+    const invocationStartedAt = Date.now();
+    let body = initialBody;
+    let lastResult = null;
+
+    for (let slotCount = 0; slotCount < PLANNER_MAX_SLOTS_PER_INVOCATION; slotCount += 1) {
+        try {
+            lastResult = await processPlannerCompactQueueMessage(env, body, {
+                ...options,
+                attempts: slotCount === 0 ? options.attempts : Math.max(1, Number(body.attempt || 1)),
+                messageId: slotCount === 0 ? options.messageId : body.traceId,
+                dispatchNext: false,
+                directContinuation: slotCount > 0
+            });
+        } catch (error) {
+            if (slotCount === 0) throw error;
+            await env.GENERATION_QUEUE.send({
+                ...body,
+                attempt: Math.max(1, Number(body.attempt || 1)) + 1
+            }, { delaySeconds: 30 });
+            console.error(JSON.stringify({
+                event: "planner_direct_continuation_requeued",
+                jobId: body.jobId,
+                traceId: body.traceId,
+                reason: error?.message || String(error)
+            }));
+            return { disposition: "ack", continuationRequeued: true };
+        }
+        if (lastResult?.disposition === "retry" && slotCount > 0) {
+            await env.GENERATION_QUEUE.send({
+                ...body,
+                attempt: Math.max(1, Number(body.attempt || 1)) + 1
+            }, { delaySeconds: lastResult.delaySeconds || 15 });
+            return { disposition: "ack", continuationRequeued: true };
+        }
+        if (lastResult?.disposition !== "ack" || lastResult?.terminal || !lastResult?.nextMessage) {
+            return lastResult;
+        }
+
+        const canContinue = slotCount + 1 < PLANNER_MAX_SLOTS_PER_INVOCATION
+            && Date.now() - invocationStartedAt < PLANNER_CONTINUATION_START_LIMIT_MS;
+        if (!canContinue) {
+            await env.GENERATION_QUEUE.send(lastResult.nextMessage);
+            return { ...lastResult, nextMessage: null };
+        }
+        body = {
+            ...lastResult.nextMessage,
+            directContinuation: true,
+            queuePublishedAt: new Date().toISOString()
+        };
+    }
+    return lastResult;
+}
+
 export default {
     async scheduled(event, env) {
         if (event?.cron === "*/2 * * * *") {
@@ -741,10 +887,15 @@ export default {
     async queue(batch, env) {
         for (const message of batch.messages) {
             try {
-                const result = await processPlannerQueueMessage(env, message.body, {
-                    attempts: message.attempts,
-                    messageId: message.id
-                });
+                const result = message.body?.plannerCompact
+                    ? await processPlannerCompactQueueBurst(env, message.body, {
+                        attempts: message.attempts,
+                        messageId: message.id
+                    })
+                    : await processPlannerQueueMessage(env, message.body, {
+                        attempts: message.attempts,
+                        messageId: message.id
+                    });
                 if (result?.disposition === "retry") {
                     message.retry({ delaySeconds: result.delaySeconds || 15 });
                 } else {

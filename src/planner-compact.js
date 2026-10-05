@@ -10,8 +10,9 @@ const PAYLOAD_LIMIT_BYTES = 1_500_000;
 const MAX_OPTIMISTIC_RETRIES = 3;
 const CONFIRM_RETENTION_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_SLOT_REGENERATION_ATTEMPTS = 3;
-const DEFAULT_STALE_JOB_MS = 12 * 60 * 1000;
+const DEFAULT_STALE_JOB_MS = 3 * 60 * 1000;
 const DEFAULT_STALE_JOB_LIMIT = 25;
+const DEFAULT_QUEUE_DELIVERY_LEASE_MS = 3 * 60 * 1000;
 
 function plannerError(code, status, message) {
     const error = new Error(message);
@@ -56,6 +57,92 @@ function normalizeRetryState(value = {}) {
         lastErrorMessage: asString(source.lastErrorMessage),
         nextRetryAt: asString(source.nextRetryAt),
         lastFailureToken: asString(source.lastFailureToken)
+    };
+}
+
+function normalizeExecutionState(value = {}) {
+    const source = value && typeof value === "object" ? value : {};
+    return {
+        assetId: asString(source.assetId),
+        globalImageIndex: asNonNegativeInteger(source.globalImageIndex, 0),
+        phase: asString(source.phase),
+        traceId: asString(source.traceId),
+        queuePublishedAt: asString(source.queuePublishedAt),
+        queueReceivedAt: asString(source.queueReceivedAt),
+        claimedAt: asString(source.claimedAt),
+        phaseStartedAt: asString(source.phaseStartedAt),
+        leaseUntil: asString(source.leaseUntil),
+        deliveryAttempt: Math.max(1, asNonNegativeInteger(source.deliveryAttempt, 1))
+    };
+}
+
+function normalizeTiming(value = {}) {
+    const source = value && typeof value === "object" ? value : {};
+    const duration = key => Math.max(0, Number(source[key]) || 0);
+    return {
+        assetId: asString(source.assetId),
+        globalImageIndex: asNonNegativeInteger(source.globalImageIndex, 0),
+        queueWaitMs: duration("queueWaitMs"),
+        novelAiMs: duration("novelAiMs"),
+        imageProcessingMs: duration("imageProcessingMs"),
+        storageMs: duration("storageMs"),
+        cycleMs: duration("cycleMs"),
+        measuredAt: asString(source.measuredAt)
+    };
+}
+
+export function evaluatePlannerRunHealth(job = {}, now = Date.now()) {
+    const status = asString(job.status, "draft");
+    if (!["queued", "running"].includes(status)) {
+        return { health: "inactive", healthReason: "", canRecover: false };
+    }
+
+    const retryState = normalizeRetryState(job.retryState);
+    const nextRetryAtMs = Date.parse(retryState.nextRetryAt);
+    if (Number.isFinite(nextRetryAtMs) && nextRetryAtMs > now) {
+        return {
+            health: "cooldown",
+            healthReason: retryState.lastErrorKind || "retry_wait",
+            healthMessage: retryState.lastErrorKind === "rate_limit"
+                ? "NovelAI 생성 제한 해제를 기다리고 있습니다."
+                : "실패한 이미지의 자동 재시도를 기다리고 있습니다.",
+            canRecover: false
+        };
+    }
+
+    const execution = normalizeExecutionState(job.execution);
+    if (execution.claimedAt) {
+        const leaseUntilMs = Date.parse(execution.leaseUntil);
+        if (Number.isFinite(leaseUntilMs) && leaseUntilMs > now) {
+            return {
+                health: "processing",
+                healthReason: execution.phase || "processing",
+                healthMessage: "이미지를 정상적으로 처리하고 있습니다.",
+                canRecover: false
+            };
+        }
+        return {
+            health: "stalled",
+            healthReason: "execution_lease_expired",
+            healthMessage: "이미지 처리 제한 시간이 지났지만 완료 신호가 없습니다.",
+            canRecover: true
+        };
+    }
+
+    const lastDispatchAtMs = Date.parse(asString(job.lastDispatchAt || job.updatedAt));
+    if (Number.isFinite(lastDispatchAtMs) && now - lastDispatchAtMs <= DEFAULT_QUEUE_DELIVERY_LEASE_MS) {
+        return {
+            health: "queued",
+            healthReason: "queue_wait",
+            healthMessage: "Queue에서 Worker 전달을 기다리고 있습니다.",
+            canRecover: false
+        };
+    }
+    return {
+        health: "stalled",
+        healthReason: "queue_delivery_timeout",
+        healthMessage: "Queue에 등록된 작업이 제한 시간 안에 시작되지 않았습니다.",
+        canRecover: true
     };
 }
 
@@ -538,6 +625,11 @@ function assertRunEditable(currentPayload, nextPayload) {
 function compactStatusFromRun(payload) {
     const job = payload.activeJob;
     const retryState = normalizeRetryState(job?.retryState);
+    const execution = normalizeExecutionState(job?.execution);
+    const latestTiming = normalizeTiming(job?.latestTiming);
+    const health = evaluatePlannerRunHealth(job || {});
+    const serverNow = nowIso();
+    const phaseStartedAtMs = Date.parse(execution.phaseStartedAt);
     return {
         runId: payload.runId,
         jobId: job?.jobId || "",
@@ -559,7 +651,17 @@ function compactStatusFromRun(payload) {
         lastDispatchAt: asString(job?.lastDispatchAt),
         lastRecoveryAt: asString(job?.lastRecoveryAt),
         recoveryCount: asNonNegativeInteger(job?.recoveryCount, 0),
-        updatedAt: asString(job?.updatedAt || payload.updatedAt)
+        updatedAt: asString(job?.updatedAt || payload.updatedAt),
+        serverNow,
+        health: health.health,
+        healthReason: health.healthReason,
+        healthMessage: health.healthMessage || "",
+        canRecover: health.canRecover,
+        execution: execution.claimedAt ? {
+            ...execution,
+            elapsedMs: Number.isFinite(phaseStartedAtMs) ? Math.max(0, Date.now() - phaseStartedAtMs) : 0
+        } : null,
+        latestTiming: latestTiming.measuredAt ? latestTiming : null
     };
 }
 
@@ -905,6 +1007,8 @@ function makePlannerCompactQueueMessage(recordKey, job, slot, extra = {}) {
         jobId: job.jobId,
         generationSequence: job.generationSequence,
         expectedGlobalImageIndex: slot.globalImageIndex,
+        traceId: crypto.randomUUID(),
+        queuePublishedAt: nowIso(),
         ...extra
     };
 }
@@ -1107,20 +1211,24 @@ async function controlPlannerCompactGeneration(env, lookup, action) {
         job.status = nextStatus;
         job.stage = nextStatus;
         job.stageLabel = nextStatus.replace(/_/g, " ");
+        job.execution = null;
         job.updatedAt = nowIso();
+        if (["resume", "cancel"].includes(action)) job.lastDispatchAt = job.updatedAt;
         payload.status = nextStatus;
         applyJobStatusToItems(payload);
         return payload;
     }, `run:generation:${action}`);
     const record = updated.record;
     if (action === "resume" && record.payload.activeJob?.status === "queued" && record.payload.activeJob.mode === "background" && env.GENERATION_QUEUE) {
-        await env.GENERATION_QUEUE.send({
-            plannerCompact: true,
-            runKey: record.recordKey,
-            jobId: record.payload.activeJob.jobId,
-            generationSequence: record.payload.activeJob.generationSequence,
-            expectedGlobalImageIndex: record.payload.activeJob.next?.globalImageIndex || 0
-        });
+        const slot = nextRunnableSlot(record.payload, record.payload.activeJob);
+        if (slot) {
+            await env.GENERATION_QUEUE.send(makePlannerCompactQueueMessage(
+                record.recordKey,
+                record.payload.activeJob,
+                slot,
+                { resumed: true }
+            ));
+        }
     }
     if (action === "cancel" && record.payload.activeJob?.status === "cancel_requested" && record.payload.activeJob.mode === "background" && env.GENERATION_QUEUE) {
         await env.GENERATION_QUEUE.send({
@@ -1195,6 +1303,44 @@ export async function preparePlannerCompactQueueSlot(env, message = {}) {
     };
 }
 
+export async function markPlannerCompactQueueExecution(env, message = {}, input = {}) {
+    const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
+        const job = payload.activeJob;
+        if (!job || job.jobId !== message.jobId || !["queued", "running"].includes(job.status)) {
+            return { noWrite: true, stale: true };
+        }
+        if (asNonNegativeInteger(message.generationSequence, job.generationSequence)
+            !== asNonNegativeInteger(job.generationSequence, 0)) {
+            return { noWrite: true, stale: true };
+        }
+        const timestamp = nowIso();
+        const previous = normalizeExecutionState(job.execution);
+        job.execution = {
+            assetId: asString(input.assetId || previous.assetId),
+            globalImageIndex: asNonNegativeInteger(input.globalImageIndex, previous.globalImageIndex),
+            phase: asString(input.phase, previous.phase || "preparing"),
+            traceId: asString(input.traceId || previous.traceId || message.traceId),
+            queuePublishedAt: asString(input.queuePublishedAt || previous.queuePublishedAt || message.queuePublishedAt),
+            queueReceivedAt: asString(input.queueReceivedAt || previous.queueReceivedAt),
+            claimedAt: asString(previous.claimedAt, timestamp),
+            phaseStartedAt: timestamp,
+            leaseUntil: asString(input.leaseUntil, previous.leaseUntil),
+            deliveryAttempt: Math.max(1, asNonNegativeInteger(input.deliveryAttempt, previous.deliveryAttempt || 1))
+        };
+        job.status = "running";
+        job.stage = job.execution.phase;
+        job.stageLabel = asString(input.stageLabel, job.execution.phase.replace(/_/g, " "));
+        job.updatedAt = timestamp;
+        payload.status = "running";
+        applyJobStatusToItems(payload);
+        return payload;
+    }, `run:generation:${asString(input.phase, "processing")}`);
+    return {
+        stale: Boolean(updated.result?.stale),
+        status: { ...compactStatusFromRun(updated.record.payload), runKey: updated.record.recordKey }
+    };
+}
+
 export async function commitPlannerCompactQueueSlot(env, message = {}, outcome = {}) {
     const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
         const job = payload.activeJob;
@@ -1256,7 +1402,11 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
             job.retryState = null;
             job.lastError = "";
             job.lastProgressAt = nowIso();
+            job.latestTiming = normalizeTiming(outcome.timing);
         }
+        job.execution = null;
+        job.lastDispatchAt = nowIso();
+        job.updatedAt = nowIso();
         job.status = "running";
         job.stage = "generating";
         job.stageLabel = "Generating image";
@@ -1314,6 +1464,8 @@ export async function deferPlannerCompactQueueSlot(env, message = {}, input = {}
             ? "Waiting for NovelAI rate limit"
             : "Retrying image generation";
         job.lastError = job.retryState.lastErrorMessage;
+        job.execution = null;
+        job.lastDispatchAt = nowIso();
         job.updatedAt = nowIso();
         payload.status = "running";
         applyJobStatusToItems(payload);
@@ -1392,6 +1544,9 @@ export async function recordPlannerCompactSlotFailure(env, message = {}, failure
             job.retryState = null;
             job.lastError = errorMessage;
         }
+        job.execution = null;
+        job.lastDispatchAt = nowIso();
+        job.updatedAt = nowIso();
         payload.activeJob = recalculateJob(payload, job);
         payload.status = runStatusFromJob(payload.activeJob.status);
         applyJobStatusToItems(payload);
@@ -1442,6 +1597,8 @@ export async function failPlannerCompactGeneration(env, message = {}, failure = 
         job.failedSlots = [...previousByAssetId.values()];
         job.retryState = null;
         job.lastError = errorMessage;
+        job.execution = null;
+        job.updatedAt = nowIso();
         payload.activeJob = recalculateJob(payload, job);
         payload.status = runStatusFromJob(payload.activeJob.status);
         applyJobStatusToItems(payload);
@@ -1469,12 +1626,11 @@ export async function recoverPlannerCompactGeneration(env, lookup = {}, options 
             runKey: record.recordKey
         };
     }
-    const retryState = normalizeRetryState(job.retryState);
-    const nextRetryAt = Date.parse(retryState.nextRetryAt);
-    if (!options.force && Number.isFinite(nextRetryAt) && nextRetryAt > Date.now()) {
+    const health = evaluatePlannerRunHealth(job);
+    if (!options.force && !health.canRecover) {
         return {
             requeued: false,
-            reason: "cooldown",
+            reason: health.health,
             ...compactStatusFromRun(record.payload),
             runKey: record.recordKey
         };
@@ -1544,9 +1700,9 @@ export async function recoverStalledPlannerCompactRuns(env, options = {}) {
     const results = [];
     for (const row of rows) {
         const record = parsePlannerCompactRow(row, "run");
-        const retryAt = Date.parse(normalizeRetryState(record.payload.activeJob?.retryState).nextRetryAt);
-        if (Number.isFinite(retryAt) && retryAt > Date.now()) {
-            results.push({ runKey: record.recordKey, requeued: false, reason: "cooldown" });
+        const health = evaluatePlannerRunHealth(record.payload.activeJob || {});
+        if (!health.canRecover) {
+            results.push({ runKey: record.recordKey, requeued: false, reason: health.health });
             continue;
         }
         try {

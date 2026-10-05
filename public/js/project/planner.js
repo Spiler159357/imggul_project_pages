@@ -630,15 +630,11 @@ function getPlannerQueueSummary(queueMetas = []) {
     );
     const paused = !active && !cancelling && queueMetas.some(entry => isPlannerResumableStatus(entry.meta.status));
     const failed = entries.reduce((sum, entry) => sum + getPlannerItemFailedCount(entry.item), 0);
-    const now = Date.now();
     const recoverableEntry = queueMetas.find(entry => {
         const background = entry.meta?.backgroundStatus || {};
-        if (!['queued', 'running'].includes(background.status || entry.meta?.status)) return false;
-        const updatedAt = Date.parse(background.updatedAt || entry.meta?.updatedAt || '');
-        const nextRetryAt = Date.parse(background.nextRetryAt || '');
-        return Number.isFinite(updatedAt)
-            && now - updatedAt >= 12 * 60 * 1000
-            && (!Number.isFinite(nextRetryAt) || nextRetryAt <= now);
+        return ['queued', 'running'].includes(background.status || entry.meta?.status)
+            && background.health === 'stalled'
+            && background.canRecover === true;
     }) || null;
     return {
         entries,
@@ -656,7 +652,9 @@ function getPlannerQueueSummary(queueMetas = []) {
 
 function renderPlannerRetryNotice(status = {}) {
     if (!status?.nextRetryAt) return '';
-    const remainingMs = Math.max(0, Date.parse(status.nextRetryAt) - Date.now());
+    const serverNowMs = Date.parse(status.serverNow || '');
+    const referenceNow = Number.isFinite(serverNowMs) ? serverNowMs : Date.now();
+    const remainingMs = Math.max(0, Date.parse(status.nextRetryAt) - referenceNow);
     const retryLabel = status.retryKind === 'rate_limit'
         ? 'NovelAI 생성 제한으로 대기 중'
         : '실패한 이미지를 다시 생성할 예정';
@@ -666,6 +664,54 @@ function renderPlannerRetryNotice(status = {}) {
             <span class="font-bold">${escapeHtml(retryLabel)}</span>
             · ${escapeHtml(formatPlannerDuration(remainingMs))} 후 재시도
             ${attempt > 0 ? ` · 재생성 ${attempt}회` : ''}
+        </div>
+    `;
+}
+
+function getPlannerExecutionPhaseLabel(phase = '') {
+    return ({
+        queue_wait: 'Queue 전달 대기',
+        preparing: '생성 준비',
+        novelai_request: 'NovelAI 응답 대기',
+        image_processing: '이미지 변환',
+        storage: '이미지 저장',
+        committing: '완료 상태 반영'
+    })[phase] || String(phase || '').replace(/_/g, ' ');
+}
+
+function renderPlannerExecutionNotice(status = {}) {
+    const health = status?.health || '';
+    const execution = status?.execution || null;
+    const timing = status?.latestTiming || null;
+    if (!health && !execution && !timing) return '';
+
+    const tone = health === 'stalled'
+        ? 'border-red-200 dark:border-red-900/70 bg-red-50 dark:bg-red-950/30 text-red-800 dark:text-red-200'
+        : health === 'cooldown'
+            ? 'border-amber-200 dark:border-amber-900/70 bg-amber-50 dark:bg-amber-950/30 text-amber-800 dark:text-amber-200'
+            : 'border-sky-200 dark:border-sky-900/70 bg-sky-50 dark:bg-sky-950/30 text-sky-800 dark:text-sky-200';
+    const title = health === 'stalled'
+        ? '작업 정지 확인'
+        : health === 'cooldown'
+            ? '자동 재시도 대기'
+            : health === 'queued'
+                ? 'Queue 전달 대기'
+                : '정상 처리 중';
+    const phaseText = execution?.phase
+        ? `${getPlannerExecutionPhaseLabel(execution.phase)} · ${formatPlannerDuration(execution.elapsedMs || 0)} 경과`
+        : '';
+    const timingParts = timing ? [
+        timing.queueWaitMs > 0 ? `Queue ${formatPlannerDuration(timing.queueWaitMs)}` : '',
+        timing.novelAiMs > 0 ? `NovelAI ${formatPlannerDuration(timing.novelAiMs)}` : '',
+        timing.imageProcessingMs > 0 ? `변환 ${formatPlannerDuration(timing.imageProcessingMs)}` : '',
+        timing.storageMs > 0 ? `저장 ${formatPlannerDuration(timing.storageMs)}` : ''
+    ].filter(Boolean) : [];
+    return `
+        <div class="mt-3 rounded-lg border ${tone} px-3 py-2 text-[11px]">
+            <p class="font-bold">${escapeHtml(title)}</p>
+            <p class="mt-0.5">${escapeHtml(phaseText || status.healthMessage || '')}</p>
+            ${timingParts.length ? `<p class="mt-1 opacity-80">최근 완료 · ${escapeHtml(timingParts.join(' · '))}</p>` : ''}
+            ${health === 'stalled' && status.healthMessage ? `<p class="mt-1 font-medium">${escapeHtml(status.healthMessage)}</p>` : ''}
         </div>
     `;
 }
@@ -681,7 +727,7 @@ function getPlannerQueueEta(queueMetas = []) {
     const sampleCount = analysis.acceptedCount;
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'global_candidate_completed_intervals',
+        source: 'per_job_candidate_completed_intervals',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
@@ -698,7 +744,7 @@ function getPlannerQueueEta(queueMetas = []) {
 function renderPlannerEtaBadge(eta) {
     if (!eta?.remainingText) return '';
     const basisLabel = eta.basis === 'server_completed_average'
-        ? `전체 완료 간격 최근 ${eta.sampleCount || 0}장 기준`
+        ? `작업별 완료 간격 최근 ${eta.sampleCount || 0}장 기준`
         : '기본 추정';
     return `
         <span class="inline-flex items-center gap-1 rounded-full border border-indigo-200 dark:border-indigo-800 bg-white/80 dark:bg-indigo-950/40 px-2 py-1 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
@@ -723,7 +769,7 @@ function readPlannerBackgroundEtaStore() {
             localStorage.removeItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY);
             return {
                 version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-                source: 'global_candidate_completed_intervals',
+                source: 'per_job_candidate_completed_intervals',
                 samples: [],
                 events: [],
                 epoch: 0,
@@ -738,7 +784,7 @@ function readPlannerBackgroundEtaStore() {
         } catch {}
         return {
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-            source: 'global_candidate_completed_intervals',
+            source: 'per_job_candidate_completed_intervals',
             samples: [],
             events: [],
             epoch: 0,
@@ -753,7 +799,7 @@ function writePlannerBackgroundEtaStore(store) {
         localStorage.setItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY, JSON.stringify({
             ...(store || {}),
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-            source: 'global_candidate_completed_intervals'
+            source: 'per_job_candidate_completed_intervals'
         }));
         syncPlannerBackgroundHealthDisplays();
     } catch {}
@@ -881,6 +927,11 @@ function getPlannerBackgroundHealthBadgeState() {
     const analysis = getPlannerBackgroundEtaAnalysis(getPlannerBackgroundEtaSamples(store), store.averageMs);
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
     const activeMeta = window.PROJECT_PLANNER_META || null;
+    const serverStatus = queueMetas
+        .map(entry => entry?.meta?.backgroundStatus)
+        .find(status => status?.health)
+        || activeMeta?.backgroundStatus
+        || null;
     const isActive = queueMetas.some(entry => isPlannerActiveStatus(entry?.meta?.status))
         || isPlannerActiveStatus(activeMeta?.status);
     const completionEvents = getPlannerBackgroundEtaCompletionEvents(store);
@@ -894,7 +945,16 @@ function getPlannerBackgroundHealthBadgeState() {
     const criticalStallMs = Math.max(180000, analysis.averageMs * 8);
     let displayHealth = analysis.health;
     let displayLabel = analysis.healthLabel;
-    if (isActive && elapsedMs >= criticalStallMs) {
+    if (serverStatus?.health === 'stalled') {
+        displayHealth = 'red';
+        displayLabel = '작업 정지';
+    } else if (serverStatus?.health === 'cooldown') {
+        displayHealth = 'orange';
+        displayLabel = '재시도 대기';
+    } else if (['processing', 'queued'].includes(serverStatus?.health)) {
+        displayHealth = 'green';
+        displayLabel = serverStatus.health === 'processing' ? '정상 처리 중' : '대기열 정상';
+    } else if (isActive && elapsedMs >= criticalStallMs) {
         displayHealth = 'red';
         displayLabel = '응답 지연';
     } else if (isActive && elapsedMs >= warningStallMs) {
@@ -945,23 +1005,27 @@ function getPlannerBackgroundEtaCompletionEvents(store) {
         .map(event => ({
             key: String(event?.key || '').trim(),
             createdAtMs: Number(event?.createdAtMs),
-            epoch: Math.max(0, Number.parseInt(event?.epoch, 10) || 0)
+            epoch: Math.max(0, Number.parseInt(event?.epoch, 10) || 0),
+            jobId: String(event?.jobId || '').trim()
         }))
-        .filter(event => event.key && Number.isFinite(event.createdAtMs));
+        .filter(event => event.key && event.jobId && Number.isFinite(event.createdAtMs));
     return [...new Map(events.map(event => [event.key, event])).values()]
         .sort((a, b) => a.createdAtMs - b.createdAtMs || a.key.localeCompare(b.key))
         .slice(-PLANNER_BACKGROUND_ETA_EVENT_LIMIT);
 }
 
 function getPlannerBackgroundEtaGlobalSamples(events = []) {
-    const samples = [];
-    for (let index = 1; index < events.length; index += 1) {
-        const from = events[index - 1];
-        const to = events[index];
-        if (from.epoch !== to.epoch) continue;
-        const durationMs = Math.round(to.createdAtMs - from.createdAtMs);
-        if (Number.isFinite(durationMs) && durationMs > 0) samples.push(durationMs);
+    const groups = new Map();
+    for (const event of events) {
+        const groupKey = `${event.epoch}:${event.jobId}`;
+        if (!groups.has(groupKey)) groups.set(groupKey, []);
+        groups.get(groupKey).push(event);
     }
+    const samples = [...groups.values()].flatMap(group => group
+        .sort((a, b) => a.createdAtMs - b.createdAtMs)
+        .slice(1)
+        .map((event, index) => Math.round(event.createdAtMs - group[index].createdAtMs))
+        .filter(durationMs => Number.isFinite(durationMs) && durationMs > 0));
     return samples.slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
 }
 
@@ -1055,7 +1119,8 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
             ...newEvents.map(event => ({
                 key: event.key,
                 createdAtMs: event.createdAtMs,
-                epoch
+                epoch,
+                jobId
             }))
         ]
     });
@@ -1088,7 +1153,7 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
 
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'global_candidate_completed_intervals',
+        source: 'per_job_candidate_completed_intervals',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
@@ -2403,6 +2468,7 @@ export function renderPlannerProgressPanel(meta) {
             </div>
             ${eta ? `<div class="mt-3 flex flex-wrap gap-2">${renderPlannerEtaBadge(eta)}</div>` : ''}
             ${renderPlannerRetryNotice(retryStatus)}
+            ${renderPlannerExecutionNotice(retryStatus)}
             <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
                 <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
             </div>
@@ -2451,6 +2517,7 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
             </div>
             ${eta ? `<div class="mt-3 flex flex-wrap gap-2">${renderPlannerEtaBadge(eta)}</div>` : ''}
             ${renderPlannerRetryNotice(activeStatus)}
+            ${renderPlannerExecutionNotice(activeStatus)}
             <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
                 <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
             </div>

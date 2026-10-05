@@ -8,6 +8,10 @@ PLANNER_D1_METRICS = "0"
 [limits]
 cpu_ms = 300_000
 
+[observability]
+enabled = true
+head_sampling_rate = 1
+
 [[d1_databases]]
 binding = "DB"
 database_name = "imggul_db"
