@@ -4,13 +4,14 @@ import { renderSectionHeader } from './manage.js?v=project-dashboard-20261005g';
 import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=global-posts-20261005a';
 import { combinePromptParts, getSituationById } from './situation.js?v=global-posts-20261005a';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
+import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
 const PLANNER_DEFAULT_IMAGE_COUNT = 20;
 const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
 const PLANNER_META_CACHE_TTL_MS = 3000;
 const PLANNER_BACKGROUND_ETA_STORAGE_KEY = 'imggul_planner_background_eta';
-const PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 4;
+const PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 5;
 const PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS = 10000;
 const PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT = 100;
 const PLANNER_BACKGROUND_ETA_EVENT_LIMIT = PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT * 2 + 1;
@@ -759,17 +760,18 @@ function getPlannerQueueEta(queueMetas = []) {
     if (!summary.totalItems || !summary.active) return null;
     const remainingCount = Math.max(0, summary.totalImages - summary.completedImages - summary.failed);
     const store = readPlannerBackgroundEtaStore();
+    const completionEvents = getPlannerBackgroundEtaCompletionEvents(store);
     const samples = getPlannerBackgroundEtaSamples(store);
     const analysis = getPlannerBackgroundEtaAnalysis(samples, store.averageMs);
     const averageMs = analysis.averageMs;
     const sampleCount = analysis.acceptedCount;
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'server_image_timing_records',
+        source: 'global_completion_intervals',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
-        recordCount: samples.length,
+        recordCount: completionEvents.length,
         rawSampleCount: analysis.rawSampleCount,
         outlierCount: analysis.outlierCount,
         health: analysis.health,
@@ -808,7 +810,7 @@ function readPlannerBackgroundEtaStore() {
             localStorage.removeItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY);
             return {
                 version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-                source: 'server_image_timing_records',
+                source: 'global_completion_intervals',
                 samples: [],
                 events: [],
                 epoch: 0,
@@ -823,7 +825,7 @@ function readPlannerBackgroundEtaStore() {
         } catch {}
         return {
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-            source: 'server_image_timing_records',
+            source: 'global_completion_intervals',
             samples: [],
             events: [],
             epoch: 0,
@@ -838,7 +840,7 @@ function writePlannerBackgroundEtaStore(store) {
         localStorage.setItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY, JSON.stringify({
             ...(store || {}),
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-            source: 'server_image_timing_records'
+            source: 'global_completion_intervals'
         }));
         syncPlannerBackgroundHealthDisplays();
     } catch (error) {
@@ -1049,8 +1051,7 @@ function getPlannerBackgroundEtaCompletionEvents(store) {
             key: String(event?.key || '').trim(),
             createdAtMs: Number(event?.createdAtMs),
             epoch: Math.max(0, Number.parseInt(event?.epoch, 10) || 0),
-            jobId: String(event?.jobId || '').trim(),
-            durationMs: Math.max(0, Number(event?.durationMs || 0))
+            jobId: String(event?.jobId || '').trim()
         }))
         .filter(event => event.key && event.jobId && Number.isFinite(event.createdAtMs));
     return [...new Map(events.map(event => [event.key, event])).values()]
@@ -1059,10 +1060,7 @@ function getPlannerBackgroundEtaCompletionEvents(store) {
 }
 
 function getPlannerBackgroundEtaGlobalSamples(events = []) {
-    const samples = events
-        .map(event => Math.round(Number(event.durationMs || 0)))
-        .filter(durationMs => Number.isFinite(durationMs) && durationMs > 0);
-    return samples.slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
+    return getPlannerGlobalCompletionIntervalSamples(events, PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
 }
 
 function getPlannerServerTimingEvents(status = {}) {
@@ -1072,17 +1070,12 @@ function getPlannerServerTimingEvents(status = {}) {
             const generationSequence = Math.max(0, Number.parseInt(timing?.generationSequence, 10) || 0);
             const completedAt = String(timing?.completedAt || timing?.measuredAt || '').trim();
             const createdAtMs = Date.parse(completedAt);
-            const durationMs = Math.max(0,
-                Number(timing?.totalQueueWaitMs || timing?.queueWaitMs || 0)
-                + Number(timing?.cycleMs || 0)
-            );
-            if (!assetId || !Number.isFinite(createdAtMs) || durationMs <= 0) return null;
+            if (!assetId || !Number.isFinite(createdAtMs)) return null;
             return {
                 assetId,
                 createdAt: completedAt,
                 createdAtMs,
                 globalImageIndex: Number(timing?.globalImageIndex ?? index),
-                durationMs,
                 key: String(timing?.timingId || `${assetId}@${generationSequence}`)
             };
         })
@@ -1182,8 +1175,7 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
                 key: event.key,
                 createdAtMs: event.createdAtMs,
                 epoch,
-                jobId,
-                durationMs: event.durationMs || 0
+                jobId
             }))
         ]
     });
@@ -1217,11 +1209,11 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
 
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'server_image_timing_records',
+        source: 'global_completion_intervals',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
-        recordCount: samples.length,
+        recordCount: completionEvents.length,
         rawSampleCount: analysis.rawSampleCount,
         outlierCount: analysis.outlierCount,
         health: analysis.health,

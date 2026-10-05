@@ -6,6 +6,7 @@ import {
     isNovelAiRateLimitError
 } from '../src/planner-retry-policy.js';
 import { evaluatePlannerRunHealth } from '../src/planner-compact.js';
+import { getPlannerGlobalCompletionIntervalSamples } from '../public/js/project/planner-eta.js';
 
 const rateLimit = Object.assign(new Error('[NovelAI 429] Too Many Requests'), { status: 429 });
 assert.equal(isNovelAiRateLimitError(rateLimit), true);
@@ -24,6 +25,17 @@ assert.equal(classifyPlannerGenerationError({ status: 503 }), 'transient');
 assert.equal(classifyPlannerGenerationError({ code: 'NOVELAI_REQUEST_TIMEOUT' }), 'transient');
 assert.equal(classifyPlannerGenerationError({ code: 'R2_PUT_RETRY_EXHAUSTED' }), 'storage');
 assert.equal(classifyPlannerGenerationError(new Error('Invalid zip: EOCD not found')), 'generation');
+
+assert.deepEqual(getPlannerGlobalCompletionIntervalSamples([
+    { key: 'job-a:first', jobId: 'job-a', epoch: 1, createdAtMs: 1_000 },
+    { key: 'job-b:first', jobId: 'job-b', epoch: 1, createdAtMs: 18_000, totalQueueWaitMs: 90_000 },
+    { key: 'job-a:second', jobId: 'job-a', epoch: 1, createdAtMs: 36_000, totalQueueWaitMs: 120_000 }
+]), [17_000, 18_000]);
+assert.deepEqual(getPlannerGlobalCompletionIntervalSamples([
+    { key: 'old:last', epoch: 1, createdAtMs: 10_000 },
+    { key: 'new:first', epoch: 2, createdAtMs: 90_000 },
+    { key: 'new:second', epoch: 2, createdAtMs: 107_000 }
+]), [17_000]);
 
 const healthNow = Date.parse('2026-10-05T00:10:00.000Z');
 assert.deepEqual(
@@ -89,7 +101,10 @@ assert.ok(backgroundSource.includes('eligibleQueueWaitMs'));
 assert.ok(backgroundSource.includes('dispatchReason: "direct_continuation"'));
 assert.ok(frontendSource.includes('/api/planner/compact/generate/recover'));
 assert.ok(frontendSource.includes('/api/planner/compact/generate/status/batch'));
-assert.ok(frontendSource.includes('PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 4'));
+assert.ok(frontendSource.includes('PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 5'));
+assert.ok(frontendSource.includes("source: 'global_completion_intervals'"));
+assert.ok(frontendSource.includes('getPlannerGlobalCompletionIntervalSamples'));
+assert.equal(frontendSource.includes('Number(timing?.totalQueueWaitMs || timing?.queueWaitMs || 0)'), false);
 assert.ok(frontendSource.includes('setTimeout(poll, 2000)'));
 assert.ok(frontendSource.includes('getPlannerQueueRepresentativeEntry'));
 assert.ok(frontendSource.includes('실제 처리'));
