@@ -13,6 +13,8 @@ const DEFAULT_SLOT_REGENERATION_ATTEMPTS = 3;
 const DEFAULT_STALE_JOB_MS = 3 * 60 * 1000;
 const DEFAULT_STALE_JOB_LIMIT = 25;
 const DEFAULT_QUEUE_DELIVERY_LEASE_MS = 3 * 60 * 1000;
+const PLANNER_TIMING_HISTORY_LIMIT = 100;
+const PLANNER_STATUS_BATCH_LIMIT = 100;
 
 function plannerError(code, status, message) {
     const error = new Error(message);
@@ -80,15 +82,35 @@ function normalizeTiming(value = {}) {
     const source = value && typeof value === "object" ? value : {};
     const duration = key => Math.max(0, Number(source[key]) || 0);
     return {
+        timingId: asString(source.timingId),
         assetId: asString(source.assetId),
         globalImageIndex: asNonNegativeInteger(source.globalImageIndex, 0),
-        queueWaitMs: duration("queueWaitMs"),
+        generationSequence: asNonNegativeInteger(source.generationSequence, 0),
+        dispatchReason: asString(source.dispatchReason, "queue"),
+        scheduledDelayMs: duration("scheduledDelayMs"),
+        eligibleQueueWaitMs: duration("eligibleQueueWaitMs"),
+        totalQueueWaitMs: duration("totalQueueWaitMs") || duration("queueWaitMs"),
+        queueWaitMs: duration("eligibleQueueWaitMs") || duration("queueWaitMs"),
         novelAiMs: duration("novelAiMs"),
         imageProcessingMs: duration("imageProcessingMs"),
         storageMs: duration("storageMs"),
         cycleMs: duration("cycleMs"),
-        measuredAt: asString(source.measuredAt)
+        measuredAt: asString(source.measuredAt || source.completedAt),
+        completedAt: asString(source.completedAt || source.measuredAt)
     };
+}
+
+function normalizeTimingHistory(value = []) {
+    const unique = new Map();
+    for (const entry of asArray(value)) {
+        const timing = normalizeTiming(entry);
+        if (!timing.assetId || !timing.completedAt) continue;
+        timing.timingId = timing.timingId || `${timing.assetId}@${timing.generationSequence}`;
+        unique.set(timing.timingId, timing);
+    }
+    return [...unique.values()]
+        .sort((a, b) => Date.parse(a.completedAt) - Date.parse(b.completedAt) || a.timingId.localeCompare(b.timingId))
+        .slice(-PLANNER_TIMING_HISTORY_LIMIT);
 }
 
 export function evaluatePlannerRunHealth(job = {}, now = Date.now()) {
@@ -627,6 +649,7 @@ function compactStatusFromRun(payload) {
     const retryState = normalizeRetryState(job?.retryState);
     const execution = normalizeExecutionState(job?.execution);
     const latestTiming = normalizeTiming(job?.latestTiming);
+    const timingHistory = normalizeTimingHistory(job?.timingHistory);
     const health = evaluatePlannerRunHealth(job || {});
     const serverNow = nowIso();
     const phaseStartedAtMs = Date.parse(execution.phaseStartedAt);
@@ -661,7 +684,8 @@ function compactStatusFromRun(payload) {
             ...execution,
             elapsedMs: Number.isFinite(phaseStartedAtMs) ? Math.max(0, Date.now() - phaseStartedAtMs) : 0
         } : null,
-        latestTiming: latestTiming.measuredAt ? latestTiming : null
+        latestTiming: latestTiming.measuredAt ? latestTiming : null,
+        timingHistory
     };
 }
 
@@ -1001,6 +1025,8 @@ function pointerFromSlot(slot, fallbackGlobalIndex = 0) {
 
 function makePlannerCompactQueueMessage(recordKey, job, slot, extra = {}) {
     if (!recordKey || !job || !slot) return null;
+    const publishedAtMs = Date.now();
+    const scheduledDelayMs = Math.max(0, Number(extra.scheduledDelayMs || 0));
     return {
         plannerCompact: true,
         runKey: recordKey,
@@ -1008,8 +1034,11 @@ function makePlannerCompactQueueMessage(recordKey, job, slot, extra = {}) {
         generationSequence: job.generationSequence,
         expectedGlobalImageIndex: slot.globalImageIndex,
         traceId: crypto.randomUUID(),
-        queuePublishedAt: nowIso(),
-        ...extra
+        ...extra,
+        queuePublishedAt: new Date(publishedAtMs).toISOString(),
+        queueEligibleAt: new Date(publishedAtMs + scheduledDelayMs).toISOString(),
+        scheduledDelayMs,
+        dispatchReason: asString(extra.dispatchReason, "queue")
     };
 }
 
@@ -1193,6 +1222,43 @@ export async function getPlannerCompactStatus(env, lookup = {}) {
         runKey: record.recordKey,
         revision: record.revision,
         items: client.items
+    };
+}
+
+export async function getPlannerCompactStatuses(env, input = {}) {
+    const runKeys = [...new Set(asArray(input.runKeys).map(asString).filter(Boolean))]
+        .slice(0, PLANNER_STATUS_BATCH_LIMIT);
+    if (!runKeys.length) return { serverNow: nowIso(), runs: [] };
+    const placeholders = runKeys.map(() => "?").join(", ");
+    let rows;
+    try {
+        const result = await env.DB.prepare(`
+            SELECT record_key, record_type, project_id, character_id, status,
+                   payload_json, revision, created_at, updated_at, expires_at
+            FROM planner_compact_records
+            WHERE record_type = 'run' AND record_key IN (${placeholders})
+        `).bind(...runKeys).all();
+        rows = asArray(result?.results);
+    } catch (error) {
+        throw translateSchemaError(error);
+    }
+    const records = new Map(rows.map(row => {
+        const record = parsePlannerCompactRow(row, "run");
+        return [record.recordKey, record];
+    }));
+    return {
+        serverNow: nowIso(),
+        runs: runKeys.map(runKey => {
+            const record = records.get(runKey);
+            if (!record) return { runKey, status: "expired", expired: true };
+            const client = plannerCompactRunToClient(record);
+            return {
+                ...compactStatusFromRun(record.payload),
+                runKey: record.recordKey,
+                revision: record.revision,
+                items: client.items
+            };
+        })
     };
 }
 
@@ -1402,7 +1468,18 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
             job.retryState = null;
             job.lastError = "";
             job.lastProgressAt = nowIso();
-            job.latestTiming = normalizeTiming(outcome.timing);
+            const timing = normalizeTiming({
+                ...outcome.timing,
+                assetId: slot.assetId,
+                globalImageIndex: slot.globalImageIndex,
+                generationSequence: slot.generationSequence
+            });
+            timing.timingId = timing.timingId || `${slot.assetId}@${slot.generationSequence}`;
+            job.latestTiming = timing;
+            job.timingHistory = normalizeTimingHistory([
+                ...asArray(job.timingHistory),
+                timing
+            ]);
         }
         job.execution = null;
         job.lastDispatchAt = nowIso();

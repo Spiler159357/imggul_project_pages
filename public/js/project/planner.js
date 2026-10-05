@@ -10,7 +10,7 @@ const PLANNER_MIN_IMAGE_COUNT = 1;
 const PLANNER_MAX_IMAGE_COUNT = 100;
 const PLANNER_META_CACHE_TTL_MS = 3000;
 const PLANNER_BACKGROUND_ETA_STORAGE_KEY = 'imggul_planner_background_eta';
-const PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 3;
+const PLANNER_BACKGROUND_ETA_STORAGE_VERSION = 4;
 const PLANNER_BACKGROUND_FALLBACK_AVERAGE_MS = 10000;
 const PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT = 100;
 const PLANNER_BACKGROUND_ETA_EVENT_LIMIT = PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT * 2 + 1;
@@ -26,6 +26,7 @@ const plannerRefreshState = {
 };
 const plannerPollingState = {
     timerId: null,
+    displayTimerId: null,
     generation: 0,
     trackedJobIds: new Set(),
     running: false
@@ -697,11 +698,22 @@ function renderPlannerExecutionNotice(status = {}) {
             : health === 'queued'
                 ? 'Queue 전달 대기'
                 : '정상 처리 중';
-    const phaseText = execution?.phase
-        ? `${getPlannerExecutionPhaseLabel(execution.phase)} · ${formatPlannerDuration(execution.elapsedMs || 0)} 경과`
+    const serverNowMs = Date.parse(status.serverNow || '');
+    const queueStartedAtMs = Date.parse(status.lastDispatchAt || '');
+    const liveElapsedMs = execution?.phase
+        ? Number(execution.elapsedMs || 0)
+        : health === 'queued' && Number.isFinite(serverNowMs) && Number.isFinite(queueStartedAtMs)
+            ? Math.max(0, serverNowMs - queueStartedAtMs)
+            : 0;
+    const livePhaseLabel = execution?.phase
+        ? getPlannerExecutionPhaseLabel(execution.phase)
+        : health === 'queued' ? getPlannerExecutionPhaseLabel('queue_wait') : '';
+    const phaseText = livePhaseLabel
+        ? `${escapeHtml(livePhaseLabel)} · <span data-planner-live-elapsed data-elapsed-ms="${Math.max(0, liveElapsedMs)}" data-rendered-at="${Date.now()}">${escapeHtml(formatPlannerDuration(liveElapsedMs))}</span> 경과`
         : '';
     const timingParts = timing ? [
-        timing.queueWaitMs > 0 ? `Queue ${formatPlannerDuration(timing.queueWaitMs)}` : '',
+        timing.eligibleQueueWaitMs > 0 ? `Queue 초과 ${formatPlannerDuration(timing.eligibleQueueWaitMs)}` : '',
+        timing.scheduledDelayMs > 0 ? `예약 대기 ${formatPlannerDuration(timing.scheduledDelayMs)}` : '',
         timing.novelAiMs > 0 ? `NovelAI ${formatPlannerDuration(timing.novelAiMs)}` : '',
         timing.imageProcessingMs > 0 ? `변환 ${formatPlannerDuration(timing.imageProcessingMs)}` : '',
         timing.storageMs > 0 ? `저장 ${formatPlannerDuration(timing.storageMs)}` : ''
@@ -709,7 +721,7 @@ function renderPlannerExecutionNotice(status = {}) {
     return `
         <div class="mt-3 rounded-lg border ${tone} px-3 py-2 text-[11px]">
             <p class="font-bold">${escapeHtml(title)}</p>
-            <p class="mt-0.5">${escapeHtml(phaseText || status.healthMessage || '')}</p>
+            <p class="mt-0.5">${phaseText || escapeHtml(status.healthMessage || '')}</p>
             ${timingParts.length ? `<p class="mt-1 opacity-80">최근 완료 · ${escapeHtml(timingParts.join(' · '))}</p>` : ''}
             ${health === 'stalled' && status.healthMessage ? `<p class="mt-1 font-medium">${escapeHtml(status.healthMessage)}</p>` : ''}
         </div>
@@ -727,10 +739,11 @@ function getPlannerQueueEta(queueMetas = []) {
     const sampleCount = analysis.acceptedCount;
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'per_job_candidate_completed_intervals',
+        source: 'server_image_timing_records',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
+        recordCount: samples.length,
         rawSampleCount: analysis.rawSampleCount,
         outlierCount: analysis.outlierCount,
         health: analysis.health,
@@ -744,7 +757,7 @@ function getPlannerQueueEta(queueMetas = []) {
 function renderPlannerEtaBadge(eta) {
     if (!eta?.remainingText) return '';
     const basisLabel = eta.basis === 'server_completed_average'
-        ? `작업별 완료 간격 최근 ${eta.sampleCount || 0}장 기준`
+        ? `완료 기록 ${eta.recordCount || 0}건 · 최근 ${eta.rawSampleCount || 0}건 중 ${eta.sampleCount || 0}건 반영 · ${eta.outlierCount || 0}건 제외`
         : '기본 추정';
     return `
         <span class="inline-flex items-center gap-1 rounded-full border border-indigo-200 dark:border-indigo-800 bg-white/80 dark:bg-indigo-950/40 px-2 py-1 text-[10px] font-bold text-indigo-700 dark:text-indigo-300">
@@ -769,7 +782,7 @@ function readPlannerBackgroundEtaStore() {
             localStorage.removeItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY);
             return {
                 version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-                source: 'per_job_candidate_completed_intervals',
+                source: 'server_image_timing_records',
                 samples: [],
                 events: [],
                 epoch: 0,
@@ -784,7 +797,7 @@ function readPlannerBackgroundEtaStore() {
         } catch {}
         return {
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-            source: 'per_job_candidate_completed_intervals',
+            source: 'server_image_timing_records',
             samples: [],
             events: [],
             epoch: 0,
@@ -799,10 +812,12 @@ function writePlannerBackgroundEtaStore(store) {
         localStorage.setItem(PLANNER_BACKGROUND_ETA_STORAGE_KEY, JSON.stringify({
             ...(store || {}),
             version: PLANNER_BACKGROUND_ETA_STORAGE_VERSION,
-            source: 'per_job_candidate_completed_intervals'
+            source: 'server_image_timing_records'
         }));
         syncPlannerBackgroundHealthDisplays();
-    } catch {}
+    } catch (error) {
+        console.warn('[planner-background-eta] 로컬 측정 기록 저장 실패', error);
+    }
 }
 
 function getPlannerBackgroundEtaSamples(store) {
@@ -927,10 +942,12 @@ function getPlannerBackgroundHealthBadgeState() {
     const analysis = getPlannerBackgroundEtaAnalysis(getPlannerBackgroundEtaSamples(store), store.averageMs);
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
     const activeMeta = window.PROJECT_PLANNER_META || null;
-    const serverStatus = queueMetas
-        .map(entry => entry?.meta?.backgroundStatus)
-        .find(status => status?.health)
-        || activeMeta?.backgroundStatus
+    const healthPriority = { stalled: 4, cooldown: 3, processing: 2, queued: 1, inactive: 0 };
+    const serverStatus = [
+        ...queueMetas.map(entry => entry?.meta?.backgroundStatus),
+        activeMeta?.backgroundStatus
+    ].filter(status => status?.health)
+        .sort((a, b) => (healthPriority[b.health] || 0) - (healthPriority[a.health] || 0))[0]
         || null;
     const isActive = queueMetas.some(entry => isPlannerActiveStatus(entry?.meta?.status))
         || isPlannerActiveStatus(activeMeta?.status);
@@ -1006,7 +1023,8 @@ function getPlannerBackgroundEtaCompletionEvents(store) {
             key: String(event?.key || '').trim(),
             createdAtMs: Number(event?.createdAtMs),
             epoch: Math.max(0, Number.parseInt(event?.epoch, 10) || 0),
-            jobId: String(event?.jobId || '').trim()
+            jobId: String(event?.jobId || '').trim(),
+            durationMs: Math.max(0, Number(event?.durationMs || 0))
         }))
         .filter(event => event.key && event.jobId && Number.isFinite(event.createdAtMs));
     return [...new Map(events.map(event => [event.key, event])).values()]
@@ -1015,18 +1033,35 @@ function getPlannerBackgroundEtaCompletionEvents(store) {
 }
 
 function getPlannerBackgroundEtaGlobalSamples(events = []) {
-    const groups = new Map();
-    for (const event of events) {
-        const groupKey = `${event.epoch}:${event.jobId}`;
-        if (!groups.has(groupKey)) groups.set(groupKey, []);
-        groups.get(groupKey).push(event);
-    }
-    const samples = [...groups.values()].flatMap(group => group
-        .sort((a, b) => a.createdAtMs - b.createdAtMs)
-        .slice(1)
-        .map((event, index) => Math.round(event.createdAtMs - group[index].createdAtMs))
-        .filter(durationMs => Number.isFinite(durationMs) && durationMs > 0));
+    const samples = events
+        .map(event => Math.round(Number(event.durationMs || 0)))
+        .filter(durationMs => Number.isFinite(durationMs) && durationMs > 0);
     return samples.slice(-PLANNER_BACKGROUND_ETA_SAMPLE_LIMIT);
+}
+
+function getPlannerServerTimingEvents(status = {}) {
+    return (Array.isArray(status.timingHistory) ? status.timingHistory : [])
+        .map((timing, index) => {
+            const assetId = String(timing?.assetId || '').trim();
+            const generationSequence = Math.max(0, Number.parseInt(timing?.generationSequence, 10) || 0);
+            const completedAt = String(timing?.completedAt || timing?.measuredAt || '').trim();
+            const createdAtMs = Date.parse(completedAt);
+            const durationMs = Math.max(0,
+                Number(timing?.totalQueueWaitMs || timing?.queueWaitMs || 0)
+                + Number(timing?.cycleMs || 0)
+            );
+            if (!assetId || !Number.isFinite(createdAtMs) || durationMs <= 0) return null;
+            return {
+                assetId,
+                createdAt: completedAt,
+                createdAtMs,
+                globalImageIndex: Number(timing?.globalImageIndex ?? index),
+                durationMs,
+                key: String(timing?.timingId || `${assetId}@${generationSequence}`)
+            };
+        })
+        .filter(Boolean)
+        .sort((a, b) => a.createdAtMs - b.createdAtMs || a.key.localeCompare(b.key));
 }
 
 function getPlannerCandidateTimingEvents(source = {}) {
@@ -1097,7 +1132,7 @@ function prunePlannerBackgroundEtaJobs(jobs = {}) {
 }
 
 function updatePlannerBackgroundEta(jobId, status = {}) {
-    if (!jobId || status.mode !== 'background' || !isPlannerActiveStatus(status.status)) return null;
+    if (!jobId || status.mode !== 'background') return null;
     const now = Date.now();
     const completed = Number(status.completedCount || 0);
     const failed = Number(status.failedCount || 0);
@@ -1106,12 +1141,13 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
     const store = readPlannerBackgroundEtaStore();
     const jobs = store.jobs || {};
     const previous = jobs[jobId] || {};
-    const events = getPlannerCandidateTimingEvents(status);
+    const serverEvents = getPlannerServerTimingEvents(status);
+    const events = serverEvents.length ? serverEvents : getPlannerCandidateTimingEvents(status);
     const previousEventKeys = new Set(Array.isArray(previous.eventKeys) ? previous.eventKeys : []);
     const initialized = Array.isArray(previous.eventKeys);
     const newEvents = initialized
         ? events.filter(event => !previousEventKeys.has(event.key))
-        : [];
+        : serverEvents.length ? events : [];
     const epoch = Math.max(0, Number.parseInt(store.epoch, 10) || 0);
     const completionEvents = getPlannerBackgroundEtaCompletionEvents({
         events: [
@@ -1120,7 +1156,8 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
                 key: event.key,
                 createdAtMs: event.createdAtMs,
                 epoch,
-                jobId
+                jobId,
+                durationMs: event.durationMs || 0
             }))
         ]
     });
@@ -1141,7 +1178,8 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
         writePlannerBackgroundEtaStore({
             ...store,
             averageMs,
-            sampleCount,
+            sampleCount: samples.length,
+            acceptedSampleCount: sampleCount,
             samples,
             events: completionEvents,
             epoch,
@@ -1153,10 +1191,11 @@ function updatePlannerBackgroundEta(jobId, status = {}) {
 
     const remainingMs = Math.round(remainingCount * averageMs);
     return {
-        source: 'per_job_candidate_completed_intervals',
+        source: 'server_image_timing_records',
         basis: sampleCount ? 'server_completed_average' : 'fallback',
         averageMs,
         sampleCount,
+        recordCount: samples.length,
         rawSampleCount: analysis.rawSampleCount,
         outlierCount: analysis.outlierCount,
         health: analysis.health,
@@ -2549,7 +2588,7 @@ function renderPlannerRunControls(summary) {
         ` : ''}
         ${summary.recoverableEntry ? `
             <button type="button" onclick="window.recoverPlannerBackgroundGeneration('${escapeJsString(summary.recoverableEntry.meta?.runKey || '')}')" ${pendingAttrs} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-indigo-200 dark:border-indigo-800 text-indigo-700 dark:text-indigo-300 text-xs font-bold hover:bg-indigo-50 dark:hover:bg-indigo-900/20 ${pendingClass}">
-                <i data-lucide="refresh-cw" class="w-4 h-4"></i> 작업 복구
+                <i data-lucide="refresh-cw" class="w-4 h-4"></i> ${escapeHtml(summary.recoverableEntry.character?.name || '선택 작업')} 복구
             </button>
         ` : ''}
         ${summary.cancelling ? `
@@ -4700,6 +4739,22 @@ function suspendPlannerBackgroundPolling() {
     plannerPollingState.running = false;
     if (plannerPollingState.timerId) clearTimeout(plannerPollingState.timerId);
     plannerPollingState.timerId = null;
+    if (plannerPollingState.displayTimerId) clearInterval(plannerPollingState.displayTimerId);
+    plannerPollingState.displayTimerId = null;
+}
+
+function refreshPlannerLiveElapsedDisplays() {
+    const now = Date.now();
+    document.querySelectorAll('[data-planner-live-elapsed]').forEach(element => {
+        const elapsedMs = Math.max(0, Number(element.dataset.elapsedMs || 0));
+        const renderedAt = Number(element.dataset.renderedAt || now);
+        element.textContent = formatPlannerDuration(elapsedMs + Math.max(0, now - renderedAt));
+    });
+}
+
+function startPlannerLiveElapsedTicker() {
+    if (plannerPollingState.displayTimerId) clearInterval(plannerPollingState.displayTimerId);
+    plannerPollingState.displayTimerId = setInterval(refreshPlannerLiveElapsedDisplays, 1000);
 }
 
 function trackPlannerBackgroundJobs(jobIds = []) {
@@ -4741,6 +4796,7 @@ function startPlannerPollingLoop() {
     if (!shouldAutoRefreshPlanner() || !plannerPollingState.trackedJobIds.size) return;
     const generation = ++plannerPollingState.generation;
     plannerPollingState.running = true;
+    startPlannerLiveElapsedTicker();
     const poll = async () => {
         if (generation !== plannerPollingState.generation || !plannerPollingState.running) return;
         if (!shouldAutoRefreshPlanner()) {
@@ -4752,9 +4808,7 @@ function startPlannerPollingLoop() {
             stopPlannerBackgroundPolling();
             return;
         }
-        await Promise.allSettled(activeJobIds.map(activeJobId =>
-            refreshPlannerBackgroundStatus(activeJobId, { render: false })
-        ));
+        await refreshPlannerBackgroundStatusesBatch(activeJobIds).catch(() => null);
         if (
             generation !== plannerPollingState.generation
             || !plannerPollingState.running
@@ -4763,9 +4817,9 @@ function startPlannerPollingLoop() {
             return;
         }
         renderPlannerIfVisible();
-        plannerPollingState.timerId = setTimeout(poll, 5000);
+        plannerPollingState.timerId = setTimeout(poll, 2000);
     };
-    plannerPollingState.timerId = setTimeout(poll, 5000);
+    void poll();
 }
 
 async function activatePlannerRunView() {
@@ -4775,10 +4829,6 @@ async function activatePlannerRunView() {
         stopPlannerBackgroundPolling();
         return;
     }
-    await Promise.allSettled(jobIds.map(jobId =>
-        refreshPlannerBackgroundStatus(jobId, { render: false })
-    ));
-    renderPlannerIfVisible();
     startPlannerPollingLoop();
 }
 
@@ -4939,20 +4989,10 @@ function applyPlannerBackgroundStatus(meta, status, statusForStorage) {
     return nextMeta;
 }
 
-async function refreshPlannerBackgroundStatusInternal(jobId = null) {
-    const project = getActiveProject();
-    const currentMeta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    const targetJobId = resolvePlannerRunKey(jobId, currentMeta);
-    if (!project || !targetJobId) return null;
-
-    const res = await fetch(`/api/planner/compact/generate/status?runKey=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
-    if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        setPlannerStatus(data.error || '백그라운드 상태 조회에 실패했습니다.');
-        return null;
-    }
-
-    const status = await res.json();
+async function applyPlannerBackgroundStatusResponse(targetJobId, status, context = {}) {
+    const project = context.project || getActiveProject();
+    const currentMeta = context.currentMeta || window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    if (!project || !targetJobId || !status) return null;
     const eta = updatePlannerBackgroundEta(targetJobId, status);
     const statusForView = eta ? { ...status, eta } : status;
     const statusForStorage = withoutPlannerVolatileEta(statusForView);
@@ -4980,11 +5020,50 @@ async function refreshPlannerBackgroundStatusInternal(jobId = null) {
         setPlannerActiveMetaIfSelected(project, nextMeta);
         updatePlannerQueueMetaCache(project, nextMeta);
     }
-    if (status.status === 'cancelled') {
-        setPlannerStatus('취소되었습니다. 다시 실행할 수 있습니다.');
-    }
+    if (status.status === 'cancelled') setPlannerStatus('취소되었습니다. 다시 실행할 수 있습니다.');
     if (!['queued', 'running', 'cancel_requested'].includes(status.status)) removePlannerBackgroundPollingJob(targetJobId);
     return statusForView;
+}
+
+async function refreshPlannerBackgroundStatusesBatch(jobIds = []) {
+    const runKeys = [...new Set(jobIds.map(jobId => resolvePlannerRunKey(jobId)).filter(Boolean))];
+    const project = getActiveProject();
+    if (!project || !runKeys.length) return [];
+    const res = await fetch('/api/planner/compact/generate/status/batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ runKeys })
+    });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPlannerStatus(data.error || '백그라운드 상태 일괄 조회에 실패했습니다.');
+        return [];
+    }
+    const data = await res.json();
+    const statuses = Array.isArray(data.runs) ? data.runs : [];
+    const currentMeta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const applied = await Promise.all(statuses.map(status =>
+        applyPlannerBackgroundStatusResponse(status.runKey, status, { project, currentMeta })
+    ));
+    return applied;
+}
+
+async function refreshPlannerBackgroundStatusInternal(jobId = null) {
+    const project = getActiveProject();
+    const currentMeta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
+    const targetJobId = resolvePlannerRunKey(jobId, currentMeta);
+    if (!project || !targetJobId) return null;
+
+    const res = await fetch(`/api/planner/compact/generate/status?runKey=${encodeURIComponent(targetJobId)}&_t=${Date.now()}`, { cache: 'no-store' });
+    if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setPlannerStatus(data.error || '백그라운드 상태 조회에 실패했습니다.');
+        return null;
+    }
+
+    const status = await res.json();
+    return await applyPlannerBackgroundStatusResponse(targetJobId, status, { project, currentMeta });
 }
 
 export function refreshPlannerBackgroundStatus(jobId = null, options = {}) {

@@ -39,6 +39,25 @@ const PLANNER_EXECUTION_LEASE_MS = NOVELAI_REQUEST_TIMEOUT_MS + (2 * 60 * 1000);
 const PLANNER_MAX_SLOTS_PER_INVOCATION = 2;
 const PLANNER_CONTINUATION_START_LIMIT_MS = 3 * 60 * 1000;
 
+function stampPlannerQueueMessage(message = {}, options = {}) {
+    const publishedAtMs = Date.now();
+    const scheduledDelayMs = Math.max(0, Number(options.delaySeconds || 0) * 1000);
+    return {
+        ...message,
+        queuePublishedAt: new Date(publishedAtMs).toISOString(),
+        queueEligibleAt: new Date(publishedAtMs + scheduledDelayMs).toISOString(),
+        scheduledDelayMs,
+        dispatchReason: String(options.dispatchReason || (scheduledDelayMs > 0 ? "retry_delay" : "queue"))
+    };
+}
+
+async function sendPlannerQueueMessage(env, message, options = {}) {
+    const stamped = stampPlannerQueueMessage(message, options);
+    const delaySeconds = Math.max(0, Number(options.delaySeconds || 0));
+    await env.GENERATION_QUEUE.send(stamped, delaySeconds > 0 ? { delaySeconds } : undefined);
+    return stamped;
+}
+
 export function jsonResponse(data, init = {}) {
     const headers = new Headers(init.headers || {});
     headers.set("Content-Type", "application/json; charset=utf-8");
@@ -530,15 +549,23 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
     const attempt = Math.max(1, Number(options.attempts || 1), Number(body.attempt || 1));
     const slot = prepared.slot;
     const queuePublishedAtMs = Date.parse(String(body.queuePublishedAt || ""));
+    const queueEligibleAtMs = Date.parse(String(body.queueEligibleAt || body.queuePublishedAt || ""));
+    const queueReceivedAtMs = Date.parse(queueReceivedAt);
     const timing = {
         assetId: slot.assetId,
         globalImageIndex: slot.globalImageIndex,
-        queueWaitMs: Number.isFinite(queuePublishedAtMs) ? Math.max(0, Date.now() - queuePublishedAtMs) : 0,
+        generationSequence: slot.generationSequence,
+        dispatchReason: String(body.dispatchReason || (options.directContinuation ? "direct_continuation" : "queue")),
+        scheduledDelayMs: Math.max(0, Number(body.scheduledDelayMs || 0)),
+        totalQueueWaitMs: Number.isFinite(queuePublishedAtMs) ? Math.max(0, queueReceivedAtMs - queuePublishedAtMs) : 0,
+        eligibleQueueWaitMs: Number.isFinite(queueEligibleAtMs) ? Math.max(0, queueReceivedAtMs - queueEligibleAtMs) : 0,
+        queueWaitMs: Number.isFinite(queueEligibleAtMs) ? Math.max(0, queueReceivedAtMs - queueEligibleAtMs) : 0,
         novelAiMs: 0,
         imageProcessingMs: 0,
         storageMs: 0,
         cycleMs: 0,
-        measuredAt: ""
+        measuredAt: "",
+        completedAt: ""
     };
     const executionBase = {
         assetId: slot.assetId,
@@ -584,8 +611,9 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                     nextRetryAt: new Date(Date.now() + cooldown.delaySeconds * 1000).toISOString()
                 });
                 if (deferred.nextMessage && env.GENERATION_QUEUE) {
-                    await env.GENERATION_QUEUE.send(deferred.nextMessage, {
-                        delaySeconds: cooldown.delaySeconds
+                    await sendPlannerQueueMessage(env, deferred.nextMessage, {
+                        delaySeconds: cooldown.delaySeconds,
+                        dispatchReason: "rate_limit_cooldown"
                     });
                 }
                 return { disposition: "ack", status: deferred.status };
@@ -652,6 +680,7 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
 
         timing.cycleMs = Date.now() - cycleStartedAt;
         timing.measuredAt = new Date().toISOString();
+        timing.completedAt = timing.measuredAt;
         const commitStartedAt = Date.now();
         const committed = await commitPlannerCompactQueueSlot(env, {
             runKey: prepared.runKey,
@@ -681,7 +710,7 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             ...completedTiming
         }));
         if (committed.nextMessage && env.GENERATION_QUEUE && options.dispatchNext !== false) {
-            await env.GENERATION_QUEUE.send(committed.nextMessage);
+            await sendPlannerQueueMessage(env, committed.nextMessage, { dispatchReason: "next_slot" });
         }
         return {
             disposition: "ack",
@@ -746,8 +775,9 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                 nextRetryAt: new Date(Date.now() + rateLimitDelaySeconds * 1000).toISOString()
             });
             if (deferred.nextMessage && env.GENERATION_QUEUE) {
-                await env.GENERATION_QUEUE.send(deferred.nextMessage, {
-                    delaySeconds: rateLimitDelaySeconds
+                await sendPlannerQueueMessage(env, deferred.nextMessage, {
+                    delaySeconds: rateLimitDelaySeconds,
+                    dispatchReason: "rate_limit_retry"
                 });
             }
             return { disposition: "ack", status: deferred.status };
@@ -787,10 +817,10 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                 nextRetryAt: new Date(Date.now() + retryDelaySeconds * 1000).toISOString()
             });
             if (deferred.nextMessage && env.GENERATION_QUEUE) {
-                await env.GENERATION_QUEUE.send({
+                await sendPlannerQueueMessage(env, {
                     ...deferred.nextMessage,
                     attempt: attempt + 1
-                }, { delaySeconds: retryDelaySeconds });
+                }, { delaySeconds: retryDelaySeconds, dispatchReason: "transient_retry" });
             }
             return { disposition: "ack", status: deferred.status };
         }
@@ -808,9 +838,11 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             nextRetryAt: new Date(Date.now() + nextRetryDelaySeconds * 1000).toISOString()
         });
         if (failed.nextMessage && env.GENERATION_QUEUE) {
-            await env.GENERATION_QUEUE.send(
+            await sendPlannerQueueMessage(env,
                 failed.nextMessage,
-                failed.retrying ? { delaySeconds: nextRetryDelaySeconds } : undefined
+                failed.retrying
+                    ? { delaySeconds: nextRetryDelaySeconds, dispatchReason: "slot_regeneration" }
+                    : { dispatchReason: "next_slot_after_failure" }
             );
         }
         return { disposition: "ack", status: failed.status };
@@ -833,10 +865,10 @@ export async function processPlannerCompactQueueBurst(env, initialBody = {}, opt
             });
         } catch (error) {
             if (slotCount === 0) throw error;
-            await env.GENERATION_QUEUE.send({
+            await sendPlannerQueueMessage(env, {
                 ...body,
                 attempt: Math.max(1, Number(body.attempt || 1)) + 1
-            }, { delaySeconds: 30 });
+            }, { delaySeconds: 30, dispatchReason: "continuation_error_retry" });
             console.error(JSON.stringify({
                 event: "planner_direct_continuation_requeued",
                 jobId: body.jobId,
@@ -846,10 +878,13 @@ export async function processPlannerCompactQueueBurst(env, initialBody = {}, opt
             return { disposition: "ack", continuationRequeued: true };
         }
         if (lastResult?.disposition === "retry" && slotCount > 0) {
-            await env.GENERATION_QUEUE.send({
+            await sendPlannerQueueMessage(env, {
                 ...body,
                 attempt: Math.max(1, Number(body.attempt || 1)) + 1
-            }, { delaySeconds: lastResult.delaySeconds || 15 });
+            }, {
+                delaySeconds: lastResult.delaySeconds || 15,
+                dispatchReason: "continuation_state_retry"
+            });
             return { disposition: "ack", continuationRequeued: true };
         }
         if (lastResult?.disposition !== "ack" || lastResult?.terminal || !lastResult?.nextMessage) {
@@ -859,13 +894,12 @@ export async function processPlannerCompactQueueBurst(env, initialBody = {}, opt
         const canContinue = slotCount + 1 < PLANNER_MAX_SLOTS_PER_INVOCATION
             && Date.now() - invocationStartedAt < PLANNER_CONTINUATION_START_LIMIT_MS;
         if (!canContinue) {
-            await env.GENERATION_QUEUE.send(lastResult.nextMessage);
+            await sendPlannerQueueMessage(env, lastResult.nextMessage, { dispatchReason: "burst_boundary" });
             return { ...lastResult, nextMessage: null };
         }
         body = {
-            ...lastResult.nextMessage,
-            directContinuation: true,
-            queuePublishedAt: new Date().toISOString()
+            ...stampPlannerQueueMessage(lastResult.nextMessage, { dispatchReason: "direct_continuation" }),
+            directContinuation: true
         };
     }
     return lastResult;

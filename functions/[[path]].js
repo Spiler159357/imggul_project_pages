@@ -27,6 +27,7 @@ import {
     getPlannerCompactRun,
     getPlannerCompactSettings,
     getPlannerCompactStatus,
+    getPlannerCompactStatuses,
     pausePlannerCompactGeneration,
     prepareSituationDeletePlannerMigration,
     putPlannerCompactItemFromMeta,
@@ -2514,6 +2515,17 @@ export async function onRequest(context) {
             const characterId = url.searchParams.get('characterId') || '';
             if (!runKey && (!projectId || !characterId)) return jsonResponse({ error: 'runKey is required' }, { status: 400 });
             const data = await getPlannerCompactStatus(env, { runKey, projectId, characterId });
+            return jsonResponse(data);
+        } catch (e) {
+            return plannerApiErrorResponse(e);
+        }
+    }
+
+    if (path === "/api/planner/compact/generate/status/batch" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const body = await request.json();
+            const data = await getPlannerCompactStatuses(env, body || {});
             return jsonResponse(data);
         } catch (e) {
             return plannerApiErrorResponse(e);
