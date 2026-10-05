@@ -1,6 +1,6 @@
 import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=global-posts-20261005a';
 import { renderCharacterSection } from './character.js?v=global-posts-20261005a';
-import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=project-dashboard-20261005f';
+import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=project-dashboard-20261005g';
 import { renderSituationSection } from './situation.js?v=global-posts-20261005a';
 import { renderImageEditor } from '../image_editor.js';
 
@@ -353,6 +353,10 @@ function renderPlannerDashboard(project) {
     const completedStatuses = new Set(['done', 'complete', 'completed', 'confirmed']);
     const activeCount = entries.filter(entry => activeStatuses.has(entry.progress.displayStatus)).length;
     const completedCount = entries.filter(entry => completedStatuses.has(entry.progress.displayStatus)).length;
+    const totalImageCount = entries.reduce((sum, entry) => sum + entry.progress.targetCount, 0);
+    const completedImageCount = entries.reduce((sum, entry) => (
+        sum + Math.min(entry.progress.generatedCount, entry.progress.targetCount)
+    ), 0);
 
     return `
         <section id="project-planner-dashboard" role="button" tabindex="0" aria-label="플래너 열기" onclick="window.openProjectSection('planner')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openProjectSection('planner'); }" class="group flex h-[68dvh] min-h-[380px] max-h-[620px] cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600 lg:h-full lg:min-h-0 lg:max-h-none">
@@ -361,10 +365,15 @@ function renderPlannerDashboard(project) {
                     <i data-lucide="calendar-check" class="h-5 w-5 text-indigo-600 dark:text-indigo-400"></i>
                     <h2 class="text-lg font-bold text-gray-900 dark:text-white">플래너</h2>
                 </div>
-                <div class="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs font-bold text-gray-500 dark:text-gray-400">
+                <div class="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-xs font-bold text-gray-500 dark:text-gray-400">
+                    <span class="text-[10px] font-extrabold uppercase tracking-wide text-gray-400 dark:text-gray-500">플랜</span>
                     <span>전체 <strong class="ml-1 text-gray-900 dark:text-white">${entries.length}</strong></span>
                     <span>진행 중 <strong class="ml-1 text-emerald-600 dark:text-emerald-400">${activeCount}</strong></span>
                     <span>완료 <strong class="ml-1 text-indigo-600 dark:text-indigo-400">${completedCount}</strong></span>
+                    <span class="hidden h-4 w-px bg-gray-200 dark:bg-gray-700 sm:block"></span>
+                    <span class="text-[10px] font-extrabold uppercase tracking-wide text-gray-400 dark:text-gray-500">이미지</span>
+                    <span>전체 <strong class="ml-1 text-gray-900 dark:text-white">${totalImageCount}</strong></span>
+                    <span>완료 <strong class="ml-1 text-indigo-600 dark:text-indigo-400">${completedImageCount}</strong></span>
                     <i data-lucide="chevron-right" class="h-4 w-4 text-gray-400 transition group-hover:translate-x-0.5 group-hover:text-indigo-500"></i>
                 </div>
             </div>
@@ -390,7 +399,7 @@ function renderPlannerDashboard(project) {
                             </span>
                             <span class="inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-bold ${getPlannerDashboardStatusClass(status.tone)}">${escapeHtml(status.label)}</span>
                             <span class="min-w-0">
-                                <span class="block text-xs font-bold text-gray-600 dark:text-gray-300">${generatedCount} / ${targetCount}장 생성</span>
+                                <span class="block text-xs font-bold text-gray-600 dark:text-gray-300">${generatedCount} / ${targetCount}</span>
                                 <span class="mt-1 block h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
                                     <span class="block h-full rounded-full bg-indigo-500" style="width:${percent}%"></span>
                                 </span>
