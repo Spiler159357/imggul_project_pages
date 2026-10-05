@@ -1,6 +1,6 @@
 import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=global-posts-20261005a';
 import { renderCharacterSection } from './character.js?v=global-posts-20261005a';
-import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=project-dashboard-20261005e';
+import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=project-dashboard-20261005f';
 import { renderSituationSection } from './situation.js?v=global-posts-20261005a';
 import { renderImageEditor } from '../image_editor.js';
 
@@ -262,6 +262,7 @@ function getPlannerDashboardStatus(status) {
         paused: { label: '중지됨', tone: 'neutral' },
         cancel_requested: { label: '취소 중', tone: 'active' },
         done: { label: '완료', tone: 'complete' },
+        complete: { label: '완료', tone: 'complete' },
         completed: { label: '완료', tone: 'complete' },
         confirmed: { label: '확정 완료', tone: 'complete' },
         partial_failed: { label: '일부 실패', tone: 'error' },
@@ -283,6 +284,31 @@ function isPlannerDashboardMetaActive(meta) {
     return activeStatuses.has(meta?.status) || activeStatuses.has(meta?.backgroundStatus?.status);
 }
 
+function getPlannerDashboardItemProgress(item = {}) {
+    const variantTargetCount = Array.isArray(item.variantGenerations)
+        ? item.variantGenerations.reduce((sum, variant) => {
+            const count = Number(variant?.count);
+            return sum + (Number.isFinite(count) && count > 0 ? count : 0);
+        }, 0)
+        : 0;
+    const targetCount = Math.max(1, variantTargetCount || Number(item.count) || 1);
+    const generatedCount = Math.max(
+        Array.isArray(item.images) ? item.images.length : 0,
+        Number(item.completedCount) || 0
+    );
+    const failedCount = Math.max(0, Number(item.failedCount) || 0);
+    const displayStatus = generatedCount >= targetCount && failedCount === 0
+        ? 'done'
+        : (item.status || 'pending');
+
+    return {
+        displayStatus,
+        generatedCount,
+        targetCount,
+        percent: Math.min(100, Math.round((generatedCount / targetCount) * 100))
+    };
+}
+
 function getPlannerDashboardEntries(project) {
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS)
         ? window.PROJECT_PLANNER_QUEUE_METAS
@@ -297,7 +323,7 @@ function getPlannerDashboardEntries(project) {
     const statusRank = status => {
         if (['queued', 'running', 'cancel_requested'].includes(status)) return 0;
         if (['paused', 'partial_failed', 'failed'].includes(status)) return 1;
-        if (['done', 'completed', 'confirmed'].includes(status)) return 3;
+        if (['done', 'complete', 'completed', 'confirmed'].includes(status)) return 3;
         return 2;
     };
 
@@ -311,10 +337,11 @@ function getPlannerDashboardEntries(project) {
             characterIndex,
             itemIndex,
             characterName,
-            item
+            item,
+            progress: getPlannerDashboardItemProgress(item)
         }));
     }).sort((a, b) => (
-        statusRank(a.item?.status) - statusRank(b.item?.status)
+        statusRank(a.progress.displayStatus) - statusRank(b.progress.displayStatus)
         || a.characterIndex - b.characterIndex
         || a.itemIndex - b.itemIndex
     ));
@@ -323,9 +350,9 @@ function getPlannerDashboardEntries(project) {
 function renderPlannerDashboard(project) {
     const entries = getPlannerDashboardEntries(project);
     const activeStatuses = new Set(['queued', 'running', 'cancel_requested']);
-    const completedStatuses = new Set(['done', 'completed', 'confirmed']);
-    const activeCount = entries.filter(entry => activeStatuses.has(entry.item?.status)).length;
-    const completedCount = entries.filter(entry => completedStatuses.has(entry.item?.status)).length;
+    const completedStatuses = new Set(['done', 'complete', 'completed', 'confirmed']);
+    const activeCount = entries.filter(entry => activeStatuses.has(entry.progress.displayStatus)).length;
+    const completedCount = entries.filter(entry => completedStatuses.has(entry.progress.displayStatus)).length;
 
     return `
         <section id="project-planner-dashboard" role="button" tabindex="0" aria-label="플래너 열기" onclick="window.openProjectSection('planner')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openProjectSection('planner'); }" class="group flex h-[68dvh] min-h-[380px] max-h-[620px] cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600 lg:h-full lg:min-h-0 lg:max-h-none">
@@ -350,13 +377,8 @@ function renderPlannerDashboard(project) {
             <div id="project-planner-dashboard-scroll" class="min-h-0 flex-1 overflow-y-auto overscroll-contain px-2 py-1 sm:px-3">
                 ${entries.length ? entries.map((entry, index) => {
                     const item = entry.item;
-                    const status = getPlannerDashboardStatus(item?.status);
-                    const generatedCount = Math.max(
-                        Array.isArray(item?.images) ? item.images.length : 0,
-                        Number(item?.completedCount) || 0
-                    );
-                    const targetCount = Math.max(1, Number(item?.count) || 1);
-                    const percent = Math.min(100, Math.round((generatedCount / targetCount) * 100));
+                    const { displayStatus, generatedCount, targetCount, percent } = entry.progress;
+                    const status = getPlannerDashboardStatus(displayStatus);
                     const itemNumber = item?.imageNumber ?? index + 1;
                     const itemName = item?.situationName || item?.situationId || `장면 ${index + 1}`;
                     return `
@@ -368,7 +390,7 @@ function renderPlannerDashboard(project) {
                             </span>
                             <span class="inline-flex w-fit items-center rounded-full border px-2.5 py-1 text-[11px] font-bold ${getPlannerDashboardStatusClass(status.tone)}">${escapeHtml(status.label)}</span>
                             <span class="min-w-0">
-                                <span class="block text-xs font-bold text-gray-600 dark:text-gray-300">${generatedCount} / ${targetCount}</span>
+                                <span class="block text-xs font-bold text-gray-600 dark:text-gray-300">${generatedCount} / ${targetCount}장 생성</span>
                                 <span class="mt-1 block h-1.5 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
                                     <span class="block h-full rounded-full bg-indigo-500" style="width:${percent}%"></span>
                                 </span>
