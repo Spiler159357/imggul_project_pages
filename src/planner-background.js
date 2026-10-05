@@ -739,31 +739,18 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
             throw error;
         }
         if (isNovelAiRateLimitError(error)) {
-            const currentRate = await getPlannerCompactRateLimit(env, "novelai");
+            const currentRateResult = await Promise.allSettled([
+                getPlannerCompactRateLimit(env, "novelai")
+            ]);
+            const currentRate = currentRateResult[0].status === "fulfilled"
+                ? currentRateResult[0].value
+                : null;
             const messageId = String(options.messageId || "");
             const duplicateDelivery = Boolean(messageId && currentRate?.lastMessageId === messageId);
             const strikeCount = duplicateDelivery
                 ? Math.max(1, Number(currentRate?.strikeCount || 1))
                 : Math.max(1, Number(currentRate?.strikeCount || 0) + 1);
             const rateLimitDelaySeconds = getPlannerRetryDelaySeconds(error, strikeCount);
-            await putPlannerCompactRateLimit(env, {
-                key: "novelai",
-                availableAt: Date.now() + rateLimitDelaySeconds * 1000,
-                strikeCount,
-                lastLimitedAt: new Date().toISOString(),
-                lastMessageId: messageId,
-                reason: "rate_limit"
-            });
-            await writeBackgroundErrorLog(env, error, {
-                runKey: prepared.runKey,
-                jobId: prepared.jobId,
-                itemId: slot.itemId,
-                assetId: slot.assetId,
-                imageIndex: slot.globalImageIndex,
-                attempt,
-                strikeCount,
-                stage: "planner_compact_rate_limit"
-            });
             const deferred = await deferPlannerCompactQueueSlot(env, {
                 runKey: prepared.runKey,
                 jobId: prepared.jobId,
@@ -774,6 +761,26 @@ export async function processPlannerCompactQueueMessage(env, body = {}, options 
                 errorMessage: message,
                 nextRetryAt: new Date(Date.now() + rateLimitDelaySeconds * 1000).toISOString()
             });
+            await Promise.allSettled([
+                putPlannerCompactRateLimit(env, {
+                    key: "novelai",
+                    availableAt: Date.now() + rateLimitDelaySeconds * 1000,
+                    strikeCount,
+                    lastLimitedAt: new Date().toISOString(),
+                    lastMessageId: messageId,
+                    reason: "rate_limit"
+                }),
+                writeBackgroundErrorLog(env, error, {
+                    runKey: prepared.runKey,
+                    jobId: prepared.jobId,
+                    itemId: slot.itemId,
+                    assetId: slot.assetId,
+                    imageIndex: slot.globalImageIndex,
+                    attempt,
+                    strikeCount,
+                    stage: "planner_compact_rate_limit"
+                })
+            ]);
             if (deferred.nextMessage && env.GENERATION_QUEUE) {
                 await sendPlannerQueueMessage(env, deferred.nextMessage, {
                     delaySeconds: rateLimitDelaySeconds,

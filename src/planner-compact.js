@@ -1348,6 +1348,15 @@ export async function preparePlannerCompactQueueSlot(env, message = {}) {
         return { disposition: "ack", reason: "cancelled", status: compactStatusFromRun(updated.record.payload) };
     }
     if (!new Set(["queued", "running"]).has(job.status)) return { disposition: "ack", reason: "terminal" };
+    const retryState = normalizeRetryState(job.retryState);
+    const nextRetryAtMs = Date.parse(retryState.nextRetryAt);
+    if (Number.isFinite(nextRetryAtMs) && nextRetryAtMs > Date.now()) {
+        return {
+            disposition: "retry",
+            delaySeconds: Math.max(1, Math.ceil((nextRetryAtMs - Date.now()) / 1000)),
+            reason: "retry_cooldown"
+        };
+    }
     const slot = nextRunnableSlot(payload, job);
     if (!slot) return { disposition: "ack", reason: "complete" };
     const expected = asNonNegativeInteger(message.expectedGlobalImageIndex, slot.globalImageIndex);
@@ -1733,6 +1742,7 @@ export async function recoverPlannerCompactGeneration(env, lookup = {}, options 
         };
     }
     if (!env.GENERATION_QUEUE) throw plannerError("PLANNER_QUEUE_UNAVAILABLE", 503, "Generation queue is unavailable.");
+    const expiredExecution = normalizeExecutionState(job.execution);
     await env.GENERATION_QUEUE.send(makePlannerCompactQueueMessage(record.recordKey, job, slot, {
         recovered: true,
         recoveryReason: asString(options.reason, "manual")
@@ -1743,10 +1753,21 @@ export async function recoverPlannerCompactGeneration(env, lookup = {}, options 
         if (!latestJob || latestJob.jobId !== job.jobId || !["queued", "running"].includes(latestJob.status)) {
             return { noWrite: true, stale: true };
         }
+        const latestExecution = normalizeExecutionState(latestJob.execution);
+        const executionChanged = latestExecution.claimedAt && (
+            latestExecution.traceId !== expiredExecution.traceId
+            || latestExecution.assetId !== expiredExecution.assetId
+            || latestExecution.claimedAt !== expiredExecution.claimedAt
+        );
+        if (executionChanged) return { noWrite: true, stale: true };
+        latestJob.execution = null;
+        latestJob.stage = "recovery_queued";
+        latestJob.stageLabel = "Waiting for recovered queue delivery";
         latestJob.lastDispatchAt = dispatchedAt;
         latestJob.lastRecoveryAt = dispatchedAt;
         latestJob.recoveryCount = asNonNegativeInteger(latestJob.recoveryCount, 0) + 1;
         latestJob.updatedAt = dispatchedAt;
+        applyJobStatusToItems(payload);
         return payload;
     }, "run:generation:recover-dispatch");
     return {

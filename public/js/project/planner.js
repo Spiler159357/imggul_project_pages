@@ -662,7 +662,7 @@ function getPlannerQueueSummary(queueMetas = []) {
 }
 
 function getPlannerQueueRepresentativeEntry(entries = []) {
-    const healthPriority = { stalled: 5, processing: 4, cooldown: 3, queued: 2, inactive: 0 };
+    const healthPriority = { processing: 5, stalled: 4, cooldown: 3, queued: 2, inactive: 0 };
     return entries
         .filter(entry => isPlannerActiveStatus(entry.item.status) || isPlannerActiveStatus(entry.meta.status))
         .sort((left, right) => {
@@ -970,13 +970,16 @@ function getPlannerBackgroundHealthBadgeState() {
     const analysis = getPlannerBackgroundEtaAnalysis(getPlannerBackgroundEtaSamples(store), store.averageMs);
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
     const activeMeta = window.PROJECT_PLANNER_META || null;
-    const healthPriority = { stalled: 4, cooldown: 3, processing: 2, queued: 1, inactive: 0 };
-    const serverStatus = [
+    const serverStatuses = [
         ...queueMetas.map(entry => entry?.meta?.backgroundStatus),
         activeMeta?.backgroundStatus
     ].filter(status => status?.health)
-        .sort((a, b) => (healthPriority[b.health] || 0) - (healthPriority[a.health] || 0))[0]
-        || null;
+        .filter((status, index, statuses) => !status.jobId
+            || statuses.findIndex(candidate => candidate.jobId === status.jobId) === index);
+    const serverHealthCounts = serverStatuses.reduce((counts, status) => {
+        counts[status.health] = (counts[status.health] || 0) + 1;
+        return counts;
+    }, {});
     const isActive = queueMetas.some(entry => isPlannerActiveStatus(entry?.meta?.status))
         || isPlannerActiveStatus(activeMeta?.status);
     const completionEvents = getPlannerBackgroundEtaCompletionEvents(store);
@@ -990,15 +993,21 @@ function getPlannerBackgroundHealthBadgeState() {
     const criticalStallMs = Math.max(180000, analysis.averageMs * 8);
     let displayHealth = analysis.health;
     let displayLabel = analysis.healthLabel;
-    if (serverStatus?.health === 'stalled') {
+    if (serverHealthCounts.processing > 0 && serverHealthCounts.stalled > 0) {
+        displayHealth = 'orange';
+        displayLabel = `생성 중 · 복구 필요 ${serverHealthCounts.stalled}`;
+    } else if (serverHealthCounts.processing > 0) {
+        displayHealth = 'green';
+        displayLabel = '정상 처리 중';
+    } else if (serverHealthCounts.stalled > 0) {
         displayHealth = 'red';
         displayLabel = '작업 정지';
-    } else if (serverStatus?.health === 'cooldown') {
+    } else if (serverHealthCounts.cooldown > 0) {
         displayHealth = 'orange';
         displayLabel = '재시도 대기';
-    } else if (['processing', 'queued'].includes(serverStatus?.health)) {
+    } else if (serverHealthCounts.queued > 0) {
         displayHealth = 'green';
-        displayLabel = serverStatus.health === 'processing' ? '정상 처리 중' : '대기열 정상';
+        displayLabel = '대기열 정상';
     } else if (isActive && elapsedMs >= criticalStallMs) {
         displayHealth = 'red';
         displayLabel = '응답 지연';
@@ -2562,16 +2571,18 @@ function renderPlannerQueueProgressPanel(queueMetas = []) {
                 : activeStatus.health === 'stalled'
                     ? '실행 응답 중단'
                     : getPlannerStageLabel(activeStatus.stage || activeEntry?.item?.stage)
+    const healthCounts = summary.healthCounts || {};
     const statusText = summary.cancelling
         ? '취소 처리 중'
-        : activeStatus.health === 'stalled'
-            ? '작업 복구 필요'
-            : activeStatus.health === 'processing'
-                ? '이미지 생성 중'
-                : activeStatus.health === 'cooldown'
-                    ? '자동 재시도 대기'
-                    : summary.active ? 'Queue 처리 대기' : summary.paused ? '일시정지됨' : '대기열';
-    const healthCounts = summary.healthCounts || {};
+        : healthCounts.processing && healthCounts.stalled
+            ? '이미지 생성 중 · 일부 복구 필요'
+            : activeStatus.health === 'stalled'
+                ? '작업 복구 필요'
+                : activeStatus.health === 'processing'
+                    ? '이미지 생성 중'
+                    : activeStatus.health === 'cooldown'
+                        ? '자동 재시도 대기'
+                        : summary.active ? 'Queue 처리 대기' : summary.paused ? '일시정지됨' : '대기열';
     const pipelineParts = [
         healthCounts.processing ? `실제 처리 ${healthCounts.processing}` : '',
         healthCounts.queued ? `Queue 대기 ${healthCounts.queued}` : '',
