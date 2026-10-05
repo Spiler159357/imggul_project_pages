@@ -1,6 +1,6 @@
 import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=global-posts-20261005a';
 import { renderCharacterSection } from './character.js?v=global-posts-20261005a';
-import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=project-dashboard-20261005d';
+import { loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=project-dashboard-20261005e';
 import { renderSituationSection } from './situation.js?v=global-posts-20261005a';
 import { renderImageEditor } from '../image_editor.js';
 
@@ -190,6 +190,8 @@ export async function openProjectDetail(projectId = getDefaultProjectId(), skipH
     }
 
     window.stopPlannerBackgroundPolling?.();
+    window.PROJECT_VIEW = 'detail-loading';
+    window.PROJECT_ACTIVE_SECTION = null;
     window.PROJECT_ACTIVE_PROJECT_ID = project.id;
     const [characters] = await Promise.all([
         loadProjectCharacters(project).catch(() => []),
@@ -326,7 +328,7 @@ function renderPlannerDashboard(project) {
     const completedCount = entries.filter(entry => completedStatuses.has(entry.item?.status)).length;
 
     return `
-        <section id="project-planner-dashboard" role="button" tabindex="0" aria-label="플래너 열기" onclick="window.openProjectSection('planner')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openProjectSection('planner'); }" class="group flex min-h-[560px] cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600 lg:min-h-0">
+        <section id="project-planner-dashboard" role="button" tabindex="0" aria-label="플래너 열기" onclick="window.openProjectSection('planner')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openProjectSection('planner'); }" class="group flex h-[68dvh] min-h-[380px] max-h-[620px] cursor-pointer flex-col overflow-hidden rounded-xl border border-gray-200 bg-white text-left shadow-sm transition hover:border-indigo-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-500 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600 lg:h-full lg:min-h-0 lg:max-h-none">
             <div class="flex flex-col gap-3 border-b border-gray-200 px-4 py-4 dark:border-gray-700 sm:flex-row sm:items-center sm:justify-between sm:px-5">
                 <div class="flex items-center gap-3">
                     <i data-lucide="calendar-check" class="h-5 w-5 text-indigo-600 dark:text-indigo-400"></i>
