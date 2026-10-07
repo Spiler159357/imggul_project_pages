@@ -938,7 +938,17 @@ export async function deletePlannerCompactRun(env, lookup = {}) {
             .flatMap(item => asArray(item.candidates))
             .map(candidate => asString(candidate.r2Key))
             .filter(Boolean);
-        if (await deletePlannerCompactRecord(env, current.recordKey, current.revision)) {
+        const payload = {
+            ...cloneJson(current.payload),
+            items: [],
+            status: "draft",
+            activeJob: null,
+            updatedAt: nowIso()
+        };
+        if (await updatePlannerCompactRecord(env, current, payload, {
+            status: payload.status,
+            label: "run:delete:tombstone"
+        })) {
             const cleanup = candidateKeys.length
                 ? await cleanupPlannerCompactAssets(env, { keys: candidateKeys })
                 : { scanned: 0, deletedCount: 0, failedCount: 0, failedKeys: [] };
@@ -946,6 +956,29 @@ export async function deletePlannerCompactRun(env, lookup = {}) {
         }
     }
     throw plannerError("PLANNER_REVISION_CONFLICT", 409, "Planner revision conflict.");
+}
+
+async function getPlannerCompactConfirmGenerationFloor(env, record) {
+    const projectId = asString(record?.projectId || record?.payload?.projectId);
+    const characterId = asString(record?.characterId || record?.payload?.characterId);
+    if (!projectId || !characterId) return 0;
+    const row = await env.DB.prepare(`
+        SELECT MAX(
+            CAST(COALESCE(json_extract(payload_json, '$.generationSequence'), 0) AS INTEGER)
+        ) AS generation_sequence
+        FROM planner_compact_records
+        WHERE record_type = 'confirm' AND project_id = ? AND character_id = ?
+    `).bind(projectId, characterId).first();
+    return asNonNegativeInteger(row?.generation_sequence, 0);
+}
+
+export function resolvePlannerGenerationSequence(input = {}) {
+    const reusableGenerationSequence = asNonNegativeInteger(input.reusableGenerationSequence, 0);
+    if (reusableGenerationSequence) return reusableGenerationSequence;
+    return Math.max(
+        asNonNegativeInteger(input.runRevision, 0) + 1,
+        asNonNegativeInteger(input.confirmedGenerationFloor, 0) + 1
+    );
 }
 
 function enumerateRunSlots(payload, targetSituationId = "", generationSequence = 0) {
@@ -1144,7 +1177,7 @@ export async function startPlannerCompactGeneration(env, body = {}) {
 
     const mode = body.mode === "browser" ? "browser" : "background";
     const targetSituationId = asString(body.targetSituationId);
-    const updated = await mutateRunWithRetry(env, { runKey: record.recordKey }, (payload, current) => {
+    const updated = await mutateRunWithRetry(env, { runKey: record.recordKey }, async (payload, current) => {
         if (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status)) return { noWrite: true };
         const targetItems = payload.items.filter(item =>
             !targetSituationId || item.situationId === targetSituationId || item.itemId === targetSituationId
@@ -1156,7 +1189,14 @@ export async function startPlannerCompactGeneration(env, body = {}) {
         const reusableGenerationSequence = body.clearExisting !== true && candidateSequences.size === 1
             ? [...candidateSequences][0]
             : 0;
-        const generationSequence = reusableGenerationSequence || (current.revision + 1);
+        const confirmedGenerationFloor = reusableGenerationSequence
+            ? 0
+            : await getPlannerCompactConfirmGenerationFloor(env, current);
+        const generationSequence = resolvePlannerGenerationSequence({
+            reusableGenerationSequence,
+            runRevision: current.revision,
+            confirmedGenerationFloor
+        });
         const startsNewGeneration = reusableGenerationSequence === 0;
         if (body.clearExisting === true || startsNewGeneration) {
             for (const item of payload.items) {
@@ -2646,31 +2686,24 @@ export async function deletePlannerCompactItemsBySituation(env, input = {}) {
                 ELSE json_extract('planner_revision_conflict')
             END AS revision_guard
         `).bind(record.recordKey, record.revision));
-        if (remainingItems.length) {
-            const nextPayload = {
-                ...cloneJson(record.payload),
-                items: remainingItems,
-                status: 'draft',
-                activeJob: null,
-                updatedAt: timestamp
-            };
-            statements.push(env.DB.prepare(`
-                UPDATE planner_compact_records
-                SET status = 'draft', payload_json = ?, revision = revision + 1, updated_at = ?
-                WHERE record_key = ? AND record_type = 'run' AND revision = ?
-            `).bind(
-                serializePayload(nextPayload, record.recordKey),
-                timestamp,
-                record.recordKey,
-                record.revision
-            ));
-        } else {
-            statements.push(env.DB.prepare(`
-                DELETE FROM planner_compact_records
-                WHERE record_key = ? AND record_type = 'run' AND revision = ?
-            `).bind(record.recordKey, record.revision));
-            deletedRunCharacterIds.push(record.characterId);
-        }
+        const nextPayload = {
+            ...cloneJson(record.payload),
+            items: remainingItems,
+            status: 'draft',
+            activeJob: null,
+            updatedAt: timestamp
+        };
+        statements.push(env.DB.prepare(`
+            UPDATE planner_compact_records
+            SET status = 'draft', payload_json = ?, revision = revision + 1, updated_at = ?
+            WHERE record_key = ? AND record_type = 'run' AND revision = ?
+        `).bind(
+            serializePayload(nextPayload, record.recordKey),
+            timestamp,
+            record.recordKey,
+            record.revision
+        ));
+        if (!remainingItems.length) deletedRunCharacterIds.push(record.characterId);
     }
 
     for (const record of targetConfirms) {

@@ -5,7 +5,10 @@ import {
     getPlannerRetryDelaySeconds,
     isNovelAiRateLimitError
 } from '../src/planner-retry-policy.js';
-import { evaluatePlannerRunHealth } from '../src/planner-compact.js';
+import {
+    evaluatePlannerRunHealth,
+    resolvePlannerGenerationSequence
+} from '../src/planner-compact.js';
 import { getPlannerGlobalCompletionIntervalSamples } from '../public/js/project/planner-eta.js';
 
 const rateLimit = Object.assign(new Error('[NovelAI 429] Too Many Requests'), { status: 429 });
@@ -75,6 +78,14 @@ assert.equal(evaluatePlannerRunHealth({
     }
 }, healthNow).health, 'cooldown');
 
+assert.equal(resolvePlannerGenerationSequence({ runRevision: 5 }), 6);
+assert.equal(resolvePlannerGenerationSequence({ runRevision: 1, confirmedGenerationFloor: 15 }), 16);
+assert.equal(resolvePlannerGenerationSequence({
+    reusableGenerationSequence: 7,
+    runRevision: 20,
+    confirmedGenerationFloor: 30
+}), 7);
+
 const compactSource = readFileSync(new URL('../src/planner-compact.js', import.meta.url), 'utf8');
 const backgroundSource = readFileSync(new URL('../src/planner-background.js', import.meta.url), 'utf8');
 const frontendSource = readFileSync(new URL('../public/js/project/planner.js', import.meta.url), 'utf8');
@@ -94,6 +105,7 @@ assert.ok(compactSource.includes('lastFailureToken'));
 assert.ok(compactSource.includes('job.timingHistory = normalizeTimingHistory'));
 assert.ok(compactSource.includes('export async function getPlannerCompactStatuses'));
 assert.ok(compactSource.includes('if (payload.activeJob) applyJobStatusToItems(payload)'));
+assert.ok(compactSource.includes('label: "run:delete:tombstone"'));
 assert.ok(backgroundSource.includes('delaySeconds: rateLimitDelaySeconds'));
 assert.ok(backgroundSource.includes('await Promise.allSettled(['));
 assert.ok(backgroundSource.includes('messageId: message.id'));
