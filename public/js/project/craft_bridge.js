@@ -1,7 +1,8 @@
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-workspace-20261106h';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-workspace-20261106h';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-workspace-20261106h';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-workspace-20261106h';
+import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from '../picker-list.js?v=picker-reuse-20261106a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-workspace-20261106j';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-workspace-20261106j';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-workspace-20261106j';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-workspace-20261106j';
 
 export function getCraftPromptFields() {
     return {
@@ -84,34 +85,6 @@ function cacheCraftPromptSaveLocation({ projectPath, characterPath, situationId,
             situationId: projectCache.situationId || ''
         });
     }
-}
-
-function makeCraftSavePickerItem({ type, label, subLabel = '', active = false, onClick }) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.pickerType = type;
-    button.dataset.searchText = `${label} ${subLabel}`.toLowerCase();
-    button.className = 'w-full flex items-center text-left gap-2 px-2.5 py-2 rounded-md border border-transparent hover:border-indigo-300 dark:hover:border-indigo-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 transition min-w-0';
-    button.onclick = onClick;
-    button.innerHTML = `
-        <span class="min-w-0 flex-1">
-            <span class="block text-xs font-bold truncate">${label}</span>
-            ${subLabel ? `<span class="block text-[10px] text-gray-500 dark:text-gray-400 truncate">${subLabel}</span>` : ''}
-        </span>
-        <i data-lucide="check" class="w-3.5 h-3.5 text-indigo-500 ${active ? '' : 'invisible'}"></i>
-    `;
-    return button;
-}
-
-function setCraftSaveListEmpty(id, message) {
-    const list = document.getElementById(id);
-    if (list) list.innerHTML = `<div class="py-5 text-center text-xs text-gray-500 dark:text-gray-400">${message}</div>`;
-}
-
-function getSituationSaveLabel(situation, index) {
-    const storageName = String(situation?.storageName || situation?.folderName || (situation?.imageNumber ?? index));
-    const name = situation?.alias || situation?.name || situation?.id || `상황 ${storageName}`;
-    return `${storageName} - ${name}`;
 }
 
 function setCraftSaveVariantSelect(type, variants = [], selectedId = '') {
@@ -257,7 +230,7 @@ export async function loadCraftPromptSaveProjects() {
         window.CRAFT_PROMPT_SAVE_STATE = state;
         window.renderCraftPromptSaveList('project');
     } catch (err) {
-        setCraftSaveListEmpty('craft-save-project-list', err.message || '프로젝트 목록을 불러오지 못했습니다.');
+        setPickerListMessage('craft-save-project-list', err.message || '프로젝트 목록을 불러오지 못했습니다.');
     }
 }
 
@@ -296,8 +269,8 @@ export async function loadCraftPromptSaveTargets(projectPath, restoreCached = fa
         if (state.situationId) loadCraftPromptSaveSituationVariants(state.situationId, restoreCached);
         window.updateCraftPromptSaveSummary();
     } catch (err) {
-        setCraftSaveListEmpty('craft-save-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
-        setCraftSaveListEmpty('craft-save-situation-list', err.message || '상황 목록을 불러오지 못했습니다.');
+        setPickerListMessage('craft-save-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
+        setPickerListMessage('craft-save-situation-list', err.message || '상황 목록을 불러오지 못했습니다.');
     }
 }
 
@@ -308,7 +281,7 @@ export function renderCraftPromptSaveList(type) {
     list.innerHTML = '';
     if (type === 'project') {
         (state.projects || []).forEach(project => {
-            list.appendChild(makeCraftSavePickerItem({
+            list.appendChild(createPickerListItem({
                 type,
                 label: project.name || project.folderName,
                 subLabel: project.prefix,
@@ -318,7 +291,7 @@ export function renderCraftPromptSaveList(type) {
         });
     } else if (type === 'character') {
         (state.characters || []).forEach(character => {
-            list.appendChild(makeCraftSavePickerItem({
+            list.appendChild(createPickerListItem({
                 type,
                 label: character.name || character.alias || character.folderName || character.id,
                 subLabel: character.prefix,
@@ -336,9 +309,9 @@ export function renderCraftPromptSaveList(type) {
     } else if (type === 'situation') {
         (state.situations || []).forEach((situation, index) => {
             const id = situation.id || situation.folderName || `situation-${index + 1}`;
-            list.appendChild(makeCraftSavePickerItem({
+            list.appendChild(createPickerListItem({
                 type,
-                label: getSituationSaveLabel(situation, index),
+                label: getPickerSituationLabel(situation, index),
                 subLabel: String(id),
                 active: String(id) === String(state.situationId),
                 onClick: () => {
@@ -352,7 +325,7 @@ export function renderCraftPromptSaveList(type) {
             }));
         });
     }
-    if (!list.children.length) setCraftSaveListEmpty(list.id, '선택 가능한 항목이 없습니다.');
+    if (!list.children.length) setPickerListMessage(list.id, '선택 가능한 항목이 없습니다.');
     if (window.lucide) window.lucide.createIcons();
 }
 
@@ -365,10 +338,7 @@ export function selectCraftPromptSaveVariant(type, value = '') {
 }
 
 export function filterCraftPromptSaveList(type, value = '') {
-    const q = String(value || '').trim().toLowerCase();
-    document.querySelectorAll(`#craft-save-${type}-list [data-picker-type="${type}"]`).forEach(item => {
-        item.classList.toggle('hidden', q && !item.dataset.searchText.includes(q));
-    });
+    filterPickerList(`craft-save-${type}-list`, type, value);
 }
 
 export function updateCraftPromptSaveSummary() {

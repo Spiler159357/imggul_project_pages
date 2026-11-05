@@ -1,3 +1,5 @@
+import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=picker-reuse-20261106a';
+import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from './picker-list.js?v=picker-reuse-20261106a';
 // 팝업 창(업로드, 메모, 파일 미리보기, Import 탐색기) 제어
 import { resolveImportedNegativePrompt } from './prompt-metadata.js?v=prompt-components-20261005a';
 
@@ -825,34 +827,6 @@ function cacheImportProjectContext({ projectPath, characterPath, situationId, ch
     }
 }
 
-function makeImportPickerItem({ type, label, subLabel = '', active = false, onClick }) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.dataset.pickerType = type;
-    button.dataset.searchText = `${label} ${subLabel}`.toLowerCase();
-    button.className = 'w-full flex items-center text-left gap-2 px-2.5 py-2 rounded-md border border-transparent hover:border-indigo-300 dark:hover:border-indigo-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 transition min-w-0';
-    button.onclick = onClick;
-    button.innerHTML = `
-        <span class="min-w-0 flex-1">
-            <span class="block text-xs font-bold truncate">${label}</span>
-            ${subLabel ? `<span class="block text-[10px] text-gray-500 dark:text-gray-400 truncate">${subLabel}</span>` : ''}
-        </span>
-        <i data-lucide="check" class="w-3.5 h-3.5 text-indigo-500 ${active ? '' : 'invisible'}"></i>
-    `;
-    return button;
-}
-
-function setImportListMessage(id, message) {
-    const list = document.getElementById(id);
-    if (list) list.innerHTML = `<div class="py-5 text-center text-xs text-gray-500 dark:text-gray-400">${message}</div>`;
-}
-
-function getImportSituationLabel(situation, index) {
-    const storageName = String(situation?.storageName || situation?.folderName || (situation?.imageNumber ?? index));
-    const name = situation?.alias || situation?.name || situation?.id || `상황 ${storageName}`;
-    return `${storageName} - ${name}`;
-}
-
 function getSelectedImportCharacter(state = window.IMPORT_PROJECT_PICKER_STATE || {}) {
     return (state.characters || []).find(character => character.prefix === state.characterPath) || null;
 }
@@ -982,14 +956,14 @@ async function initImportProjectPicker() {
 }
 
 async function loadImportProjectList() {
-    setImportListMessage('import-project-list', '불러오는 중...');
+    setPickerListMessage('import-project-list', '불러오는 중...');
     try {
         const state = window.IMPORT_PROJECT_PICKER_STATE || {};
         state.projects = window.loadProjects ? await window.loadProjects() : [];
         window.IMPORT_PROJECT_PICKER_STATE = state;
         renderImportProjectList('project');
     } catch (err) {
-        setImportListMessage('import-project-list', err.message || '프로젝트 목록을 불러오지 못했습니다.');
+        setPickerListMessage('import-project-list', err.message || '프로젝트 목록을 불러오지 못했습니다.');
     }
 }
 
@@ -1007,8 +981,8 @@ async function loadImportProjectTargets(projectPath, restoreCached = false) {
     state.situationVariants = [];
     state.backgrounds = [];
     window.IMPORT_PROJECT_PICKER_STATE = state;
-    setImportListMessage('import-character-list', '불러오는 중...');
-    setImportListMessage('import-situation-list', '불러오는 중...');
+    setPickerListMessage('import-character-list', '불러오는 중...');
+    setPickerListMessage('import-situation-list', '불러오는 중...');
     setImportVariantSelect('character', []);
     setImportVariantSelect('situation', []);
     setImportVariantSelect('background', []);
@@ -1035,8 +1009,8 @@ async function loadImportProjectTargets(projectPath, restoreCached = false) {
         if (state.situationId) loadImportSituationVariants(state.situationId, restoreCached);
         updateImportProjectSummary();
     } catch (err) {
-        setImportListMessage('import-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
-        setImportListMessage('import-situation-list', err.message || '상황 목록을 불러오지 못했습니다.');
+        setPickerListMessage('import-character-list', err.message || '캐릭터 목록을 불러오지 못했습니다.');
+        setPickerListMessage('import-situation-list', err.message || '상황 목록을 불러오지 못했습니다.');
     }
 }
 
@@ -1047,7 +1021,7 @@ function renderImportProjectList(type) {
     list.innerHTML = '';
     if (type === 'project') {
         (state.projects || []).forEach(project => {
-            list.appendChild(makeImportPickerItem({
+            list.appendChild(createPickerListItem({
                 type,
                 label: project.name || project.folderName,
                 subLabel: project.prefix,
@@ -1057,7 +1031,7 @@ function renderImportProjectList(type) {
         });
     } else if (type === 'character') {
         (state.characters || []).forEach(character => {
-            list.appendChild(makeImportPickerItem({
+            list.appendChild(createPickerListItem({
                 type,
                 label: character.name || character.alias || character.folderName || character.id,
                 subLabel: character.prefix,
@@ -1073,9 +1047,9 @@ function renderImportProjectList(type) {
     } else if (type === 'situation') {
         (state.situations || []).forEach((situation, index) => {
             const id = situation.id || situation.folderName || `situation-${index + 1}`;
-            list.appendChild(makeImportPickerItem({
+            list.appendChild(createPickerListItem({
                 type,
-                label: getImportSituationLabel(situation, index),
+                label: getPickerSituationLabel(situation, index),
                 subLabel: String(id),
                 active: String(id) === String(state.situationId),
                 onClick: () => {
@@ -1087,15 +1061,12 @@ function renderImportProjectList(type) {
             }));
         });
     }
-    if (!list.children.length) setImportListMessage(list.id, '선택 가능한 항목이 없습니다.');
+    if (!list.children.length) setPickerListMessage(list.id, '선택 가능한 항목이 없습니다.');
     if (window.lucide) window.lucide.createIcons();
 }
 
 window.filterImportProjectList = function(type, value = '') {
-    const q = String(value || '').trim().toLowerCase();
-    document.querySelectorAll(`#import-${type}-list [data-picker-type="${type}"]`).forEach(item => {
-        item.classList.toggle('hidden', q && !item.dataset.searchText.includes(q));
-    });
+    filterPickerList(`import-${type}-list`, type, value);
 };
 
 window.selectImportProjectVariant = function(type, value = '') {
@@ -1372,28 +1343,16 @@ window.loadImportPath = async function(prefix) {
         if (prefix !== window.IMPORT_BASE_PREFIX && prefix.length > window.IMPORT_BASE_PREFIX.length && prefix.startsWith(window.IMPORT_BASE_PREFIX)) {
             const parts = prefix.split('/').filter(Boolean); parts.pop(); 
             const parentPrefix = parts.length > 0 ? parts.join('/') + '/' : window.IMPORT_BASE_PREFIX;
-            const div = document.createElement('div');
-            div.className = 'relative w-full aspect-[3/4] bg-gray-200 dark:bg-gray-700 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-gray-300 dark:hover:bg-gray-600 transition group border border-gray-300 dark:border-gray-600 shadow-sm';
-            div.onclick = () => window.loadImportPath(parentPrefix);
-            div.innerHTML = `<i data-lucide="corner-left-up" class="w-8 h-8 text-gray-500 mb-2"></i><span class="text-xs font-bold text-gray-600 dark:text-gray-300">상위 폴더</span>`;
-            grid.appendChild(div);
+            grid.appendChild(createAssetParentCard(() => window.loadImportPath(parentPrefix), { group: true }));
         }
 
         folders.forEach(folderPrefix => {
             const folderName = folderPrefix.split('/').filter(Boolean).pop();
             const alias = window.getAliasOnly(folderPrefix, true); 
             
-            const div = document.createElement('div');
-            div.className = 'relative w-full aspect-[3/4] bg-yellow-50 dark:bg-yellow-900/20 rounded-lg flex flex-col items-center justify-center cursor-pointer hover:bg-yellow-100 dark:hover:bg-yellow-900/40 transition border border-yellow-200 dark:border-yellow-700/50 shadow-sm p-2';
-            div.onclick = () => window.loadImportPath(folderPrefix);
-            div.innerHTML = `
-                <i data-lucide="folder" class="w-10 h-10 text-yellow-500 fill-current mb-2"></i>
-                <div class="flex flex-col items-center w-full overflow-hidden px-1">
-                    <span class="text-xs font-bold text-yellow-800 dark:text-yellow-200 truncate w-full text-center">${alias || folderName}</span>
-                    ${alias ? `<span class="text-[9px] text-yellow-600/70 dark:text-yellow-400/70 truncate w-full text-center">(${folderName})</span>` : ''}
-                </div>
-            `;
-            grid.appendChild(div);
+            grid.appendChild(createAssetFolderCard({
+                folderName, alias, onClick: () => window.loadImportPath(folderPrefix)
+            }));
         });
 
         files.forEach(file => {
@@ -1404,17 +1363,10 @@ window.loadImportPath = async function(prefix) {
             const assetPath = /\.(png|jpe?g|webp)$/i.test(fileName) ? '/i/' : '/';
             const fileUrl = window.location.origin + assetPath + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
             
-            const div = document.createElement('div');
-            div.className = 'relative w-full aspect-[3/4] bg-gray-100 dark:bg-gray-800 rounded-lg overflow-hidden shadow-sm border border-gray-200 dark:border-gray-700 cursor-pointer hover:border-indigo-500 hover:ring-2 hover:ring-indigo-500/50 transition-all group';
-            div.onclick = async () => { await window.importMetadata(file.key, getImportApplyOptions()); };
-            div.innerHTML = `
-                <img src="${fileUrl}" class="absolute inset-0 object-cover w-full h-full transition-opacity duration-200 opacity-80 group-hover:opacity-100" loading="lazy">
-                <div class="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent p-2 flex flex-col items-center">
-                    <span class="text-[10px] text-white truncate w-full text-center font-medium">${alias || fileName}</span>
-                    ${alias ? `<span class="text-[8px] text-gray-300 truncate w-full text-center">(${fileName})</span>` : ''}
-                </div>
-            `;
-            grid.appendChild(div);
+            grid.appendChild(createAssetImageCard({
+                fileName, alias, fileUrl,
+                onClick: async () => { await window.importMetadata(file.key, getImportApplyOptions()); }
+            }));
         });
         
         if (grid.children.length === 0) { emptyState.classList.remove('hidden'); emptyState.classList.add('flex'); } else { grid.classList.remove('hidden'); }

@@ -1,9 +1,9 @@
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext } from './planner-workspace.js?v=planner-workspace-20261106h';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106h';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext } from './planner-workspace.js?v=planner-workspace-20261106j';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106j';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106h';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106h';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106h';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106j';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106j';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106j';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -1928,9 +1928,48 @@ export function ensurePlannerOverlayRoot(id) {
 
 export function renderPlannerResultOverlay() {
     const root = ensurePlannerOverlayRoot('planner-result-overlay-root');
-    root.innerHTML = renderPlannerResultModal(getPlannerResultModalMeta());
+    const markup = renderPlannerResultModal(getPlannerResultModalMeta());
+    const current = root.querySelector('#planner-result-modal');
+    if (current && markup) {
+        const template = document.createElement('template');
+        template.innerHTML = markup;
+        const changedPlan = current.dataset.pwPlanContext !== template.content.firstElementChild.dataset.pwPlanContext;
+        syncPlannerReviewNode(current, template.content.firstElementChild);
+        if (changedPlan) current.querySelectorAll('.pw-thumbnails, .pw-images figure').forEach(element => {
+            element.scrollTop = 0;
+            element.scrollLeft = 0;
+        });
+    } else {
+        root.innerHTML = markup;
+    }
     enhancePlannerWorkspaceDialogs();
     if (window.lucide) lucide.createIcons();
+}
+
+// Keep the backdrop, dialog, focus and unchanged images mounted during review updates.
+function syncPlannerReviewNode(current, next) {
+    if (current.nodeType !== next.nodeType || current.nodeName !== next.nodeName) {
+        current.replaceWith(next);
+        return;
+    }
+    if (current.nodeType !== Node.ELEMENT_NODE) {
+        if (current.nodeValue !== next.nodeValue) current.nodeValue = next.nodeValue;
+        return;
+    }
+    for (const attribute of [...current.attributes]) {
+        if (!next.hasAttribute(attribute.name)) current.removeAttribute(attribute.name);
+    }
+    for (const attribute of next.attributes) {
+        if (current.getAttribute(attribute.name) !== attribute.value) current.setAttribute(attribute.name, attribute.value);
+    }
+    if (current instanceof HTMLInputElement && current.value !== next.value) current.value = next.value;
+    const children = [...current.childNodes];
+    const nextChildren = [...next.childNodes];
+    nextChildren.forEach((child, index) => {
+        if (children[index]) syncPlannerReviewNode(children[index], child);
+        else current.appendChild(child);
+    });
+    children.slice(nextChildren.length).forEach(child => child.remove());
 }
 
 export function renderPlannerRunConfirmOverlay() {
@@ -3138,6 +3177,7 @@ export async function openPlannerResultModal(situationId, characterId = '') {
 }
 
 export function closePlannerResultModal() {
+    plannerWorkspaceOpenOperation++;
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     renderPlannerResultOverlay();
@@ -5721,14 +5761,22 @@ export async function openPlannerWorkspaceItem(situationId, characterId = '') {
         if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return;
         if (meta) setPlannerMetaForCharacter(project, meta);
         const item = getPlannerSituationItem(meta, situationId);
-        if (item?.images?.length) await openPlannerResultModal(situationId, targetId);
-        else await openPlannerSituationPlanModal(situationId, targetId);
+        if (item?.images?.length) {
+            if (window.PLANNER_PLAN_MODAL_SITUATION_ID) closePlannerSituationPlanModal();
+            await openPlannerResultModal(situationId, targetId);
+        } else {
+            if (window.PLANNER_RESULT_MODAL_SITUATION_ID) closePlannerResultModal();
+            capturePlannerEditorDraft();
+            await openPlannerSituationPlanModal(situationId, targetId);
+        }
     } catch (error) {
         setPlannerStatus(error.message || '플랜을 불러오지 못했습니다. 다시 시도하세요.');
     }
 }
 
+let plannerWorkspaceNavigating = false;
 export async function navigatePlannerWorkspaceItem(offset) {
+    if (plannerWorkspaceNavigating) return;
     const project = getActiveProject();
     const characterId = window.PLANNER_PLAN_MODAL_CHARACTER_ID || getPlannerResultModalCharacterId(project);
     const situationId = window.PLANNER_PLAN_MODAL_SITUATION_ID || window.PLANNER_RESULT_MODAL_SITUATION_ID;
@@ -5737,9 +5785,19 @@ export async function navigatePlannerWorkspaceItem(offset) {
     const index = targets.findIndex(item => item.id === (bySituation ? characterId : situationId));
     const next = targets[index + offset];
     if (!next || index < 0) return;
-    if (window.PLANNER_PLAN_MODAL_SITUATION_ID) closePlannerSituationPlanModal();
-    closePlannerResultModal();
-    await openPlannerWorkspaceItem(bySituation ? situationId : next.id, bySituation ? next.id : characterId);
+    plannerWorkspaceNavigating = true;
+    const dialog = document.querySelector('#planner-result-modal [role="dialog"]');
+    const controls = [...(dialog?.querySelectorAll('[data-pw-action="previous-plan"], [data-pw-action="next-plan"]') || [])];
+    dialog?.setAttribute('aria-busy', 'true');
+    controls.forEach(control => { control.disabled = true; });
+    try {
+        // Leave the current review visible until the next plan has loaded successfully.
+        await openPlannerWorkspaceItem(bySituation ? situationId : next.id, bySituation ? next.id : characterId);
+    } finally {
+        plannerWorkspaceNavigating = false;
+        dialog?.removeAttribute('aria-busy');
+        controls.forEach(control => { if (control.isConnected) control.disabled = false; });
+    }
 }
 
 let plannerEditorSaving = false;

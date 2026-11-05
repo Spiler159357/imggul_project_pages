@@ -1,4 +1,4 @@
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106h';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106j';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, zoom: 1, picker: null, library: null, operation: 0 };
@@ -206,7 +206,7 @@ export function renderPlannerWorkspaceReview(item, meta, blocked) {
     const index = images.indexOf(ui.preview);
     const image = ui.preview ? getAssetUrl(ui.preview) : '';
     const reference = ui.reference;
-    return `<div id="planner-result-modal" class="pw-backdrop" data-pw-dialog="review"><section class="pw-dialog pw-review" role="dialog" aria-modal="true" aria-label="후보 검수">
+    return `<div id="planner-result-modal" class="pw-backdrop" data-pw-dialog="review" data-pw-plan-context="${h(meta.characterId)}|${h(item.situationId)}"><section class="pw-dialog pw-review" role="dialog" aria-modal="true" aria-label="후보 검수">
         <header class="pw-dialog-header"><div><h3>${h(item.situationName || item.situationId)}</h3><p id="planner-result-selected-label" aria-live="polite">확대 ${index + 1} / ${images.length} · 선택 ${item.selectedImage ? images.indexOf(item.selectedImage) + 1 : '없음'}</p></div>${button('닫기', 'close-review')}</header>
         <div class="pw-review-tools">${button('‹ 플랜', 'previous-plan', 'aria-label="이전 플랜"')}${button('플랜 ›', 'next-plan', 'aria-label="다음 플랜"')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}"`)}
         ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference || referenceBindings.has(item.situationId) ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}${reference || referenceBindings.has(item.situationId) ? button('비교 해제', 'clear-reference') : ''}

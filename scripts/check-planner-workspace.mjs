@@ -47,7 +47,7 @@ assert(workspace.includes("document.addEventListener('click'"));
 assert(workspace.includes('}, true);'), 'Option actions must survive legacy modal stopPropagation handlers');
 assert(css.includes('.pw-refresh{margin-left:auto'), 'Refresh must remain right aligned');
 assert(css.includes('.pw-thumbnails') && css.includes('overflow:auto'), 'Candidates need a bounded scroll area');
-assert(app.includes('/planner-workspace.css?v=planner-workspace-20261106h'));
+assert(app.includes('/planner-workspace.css?v=planner-workspace-20261106j'));
 
 // Catch misspelled module boundaries without evaluating browser modules.
 for (const file of ['public/js/project/planner.js', 'public/js/project/planner-workspace.js']) {
@@ -65,7 +65,7 @@ for (const file of ['public/js/project/planner.js', 'public/js/project/planner-w
 for (const file of ['public/js/project.js', ...['character', 'craft_bridge', 'manage', 'planner', 'posts', 'situation', 'planner-workspace'].map(name => `public/js/project/${name}.js`)]) {
     const source = read(file);
     for (const match of source.matchAll(/(?:\.\/project\/|\.\/)(?:shared|manage|character|planner|situation|craft_bridge|posts|planner-workspace)\.js\?v=([^'"\s]+)/g)) {
-        assert.equal(match[1], 'planner-workspace-20261106h', `Mixed project module version in ${file}`);
+        assert.equal(match[1], 'planner-workspace-20261106j', `Mixed project module version in ${file}`);
     }
 }
 for (const file of ['public/app.html', 'public/js/main.js', 'public/js/project.js', 'public/js/project/planner.js', 'public/js/project/planner-workspace.js', 'public/planner-workspace.css']) {
