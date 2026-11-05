@@ -1,5 +1,5 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106a';
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106m';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106n';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, zoom: 1, picker: null, library: null, operation: 0 };
@@ -184,7 +184,7 @@ export function renderPlannerWorkspaceCard({ image, item, title, fallbackText, s
 
 export function renderPlannerOption(id, label, value, options, attrs = '') {
     const selected = options.find(([v]) => String(v) === String(value));
-    const dropdownIds = ['planner-plan-character-variant', 'planner-plan-res', 'planner-plan-background-variant', 'planner-setting-model'];
+    const dropdownIds = ['planner-plan-character-variant', 'planner-plan-res', 'planner-plan-background-variant', 'planner-setting-model', 'planner-setting-sampler', 'planner-setting-precise-type'];
     if (dropdownIds.includes(id)) {
         return `<label class="pw-option"><span>${h(label)}</span><select id="${h(id)}" class="pw-select" ${attrs}>${options.map(([optionValue, optionLabel]) => `<option value="${h(optionValue)}" ${String(optionValue) === String(value) ? 'selected' : ''}>${h(optionLabel)}</option>`).join('')}</select></label>`;
     }
