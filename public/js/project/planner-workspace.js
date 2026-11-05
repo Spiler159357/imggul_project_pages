@@ -1,4 +1,4 @@
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106f';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106g';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, zoom: 1, picker: null, library: null, operation: 0 };
@@ -247,9 +247,9 @@ export function confirmPlannerWorkspaceAction(message) {
     });
 }
 
-export function renderPlannerExplorerFolder(character, action, selected = false) {
+function renderPlannerExplorerFolder(character) {
     const name = character.name || character.alias || character.folderName;
-    return `<button type="button" class="image-editor-library-folder-card pw-explorer-folder" data-pw-action="${action}" data-character="${h(character.id)}" data-planner-target-id="folder-${h(character.id)}" data-search="${h((name + ' ' + character.folderName).toLocaleLowerCase())}" aria-pressed="${selected}"><i data-lucide="folder" aria-hidden="true"></i><span>${h(name)}</span><small>${h(character.folderName || '')}</small></button>`;
+    return `<button type="button" class="image-editor-library-folder-card pw-explorer-folder" data-pw-action="library-folder" data-character="${h(character.id)}" data-search="${h((name + ' ' + character.folderName).toLocaleLowerCase())}"><i data-lucide="folder" aria-hidden="true"></i><span>${h(name)}</span><small>${h(character.folderName || '')}</small></button>`;
 }
 
 function renderLibrary() {
@@ -260,7 +260,7 @@ function renderLibrary() {
     const up = character ? button('상위 폴더', 'library-root') : '';
     const content = character
         ? library.files.map(file => `<button type="button" class="image-editor-library-image-card" data-pw-action="library-image" data-key="${h(file.key)}" data-search="${h(getFileNameFromKey(file.key).toLocaleLowerCase())}"><img src="${h(getVersionedAssetUrl(file))}" loading="lazy" alt=""><span>${h(getFileNameFromKey(file.key))}</span></button>`).join('')
-        : library.characters.map(c => renderPlannerExplorerFolder(c, 'library-folder')).join('');
+        : library.characters.map(c => renderPlannerExplorerFolder(c)).join('');
     auxiliary('비교 이미지 선택', `<nav class="pw-explorer-breadcrumb" aria-label="현재 폴더">${root}${character ? `<span>/ ${h(character.name || character.folderName)}</span>` : ''}${up}</nav><p class="pw-explorer-path">/${h(character?.prefix || library.project.prefix)}</p>
         <div class="pw-library-tools"><input type="search" data-pw-library-search placeholder="현재 폴더에서 검색" aria-label="현재 폴더에서 검색"></div>
         ${library.loading ? '<p role="status">이미지를 불러오는 중입니다.</p>' : ''}${library.error ? `<p role="alert">${h(library.error)}</p>${button('다시 불러오기', 'library-retry')}` : ''}
@@ -308,8 +308,6 @@ function updatePreview(key) {
 async function dispatch(button) {
     const { pwAction: action } = button.dataset;
     if (action === 'open') return window.openPlannerWorkspaceItem(button.dataset.situation, button.dataset.character);
-    if (action === 'target-folder') return window.browsePlannerTargetFolder(button.dataset.character);
-    if (action === 'target-root') return window.browsePlannerTargetFolder('');
     if (action === 'filter') {
         ui.filter = button.dataset.filter;
         document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === ui.filter)));

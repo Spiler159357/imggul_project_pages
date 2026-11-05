@@ -32,7 +32,13 @@ for (const removed of ['loadProjects', 'library-project', 'data-pw-reference-fil
     assert(!workspace.includes(removed), `Removed comparison upload/project navigation remains: ${removed}`);
 }
 assert(workspace.includes("getProjectItems(project, 'characters')"), 'Comparison explorer must be limited to the active project');
-assert(planner.includes('export async function browsePlannerTargetFolder'), 'Target selection must support folder navigation');
+for (const removed of ['browsePlannerTargetFolder', 'folderCharacterId', '이 캐릭터 선택', 'target-folder', 'target-root']) {
+    assert(!(planner + workspace).includes(removed), `Target selection must not require folder navigation: ${removed}`);
+}
+const characterPicker = planner.slice(planner.indexOf('function renderPlannerCharacterPickerCards('), planner.indexOf('function renderPlannerSituationPickerCards('));
+const situationPicker = planner.slice(planner.indexOf('function renderPlannerSituationPickerCards('), planner.indexOf('export function renderPlannerTargetPickerModal('));
+assert(characterPicker.includes('window.applyPlannerTargetPickerSelection'), 'Character cards must select directly');
+assert(situationPicker.includes('window.applyPlannerTargetPickerSelection'), 'Situation cards must select directly');
 assert(workspace.includes('referenceBindings.get(item.situationId)'), 'Comparison preferences must be scoped to the plan situation');
 assert(workspace.includes('window.getPlannerSituationImage({ ...character, files }, situation, referenceIndex)'), 'Automatic references must resolve the situation in the active character folder');
 assert(workspace.includes('referenceContext === context'), 'A late reference request must not overwrite another plan');
@@ -41,7 +47,7 @@ assert(workspace.includes("document.addEventListener('click'"));
 assert(workspace.includes('}, true);'), 'Option actions must survive legacy modal stopPropagation handlers');
 assert(css.includes('.pw-refresh{margin-left:auto'), 'Refresh must remain right aligned');
 assert(css.includes('.pw-thumbnails') && css.includes('overflow:auto'), 'Candidates need a bounded scroll area');
-assert(app.includes('/planner-workspace.css?v=planner-workspace-20261106f'));
+assert(app.includes('/planner-workspace.css?v=planner-workspace-20261106g'));
 
 // Catch misspelled module boundaries without evaluating browser modules.
 for (const file of ['public/js/project/planner.js', 'public/js/project/planner-workspace.js']) {
@@ -59,7 +65,7 @@ for (const file of ['public/js/project/planner.js', 'public/js/project/planner-w
 for (const file of ['public/js/project.js', ...['character', 'craft_bridge', 'manage', 'planner', 'posts', 'situation', 'planner-workspace'].map(name => `public/js/project/${name}.js`)]) {
     const source = read(file);
     for (const match of source.matchAll(/(?:\.\/project\/|\.\/)(?:shared|manage|character|planner|situation|craft_bridge|posts|planner-workspace)\.js\?v=([^'"\s]+)/g)) {
-        assert.equal(match[1], 'planner-workspace-20261106f', `Mixed project module version in ${file}`);
+        assert.equal(match[1], 'planner-workspace-20261106g', `Mixed project module version in ${file}`);
     }
 }
 for (const file of ['public/app.html', 'public/js/main.js', 'public/js/project.js', 'public/js/project/planner.js', 'public/js/project/planner-workspace.js', 'public/planner-workspace.css']) {
