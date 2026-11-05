@@ -1,4 +1,4 @@
-import { escapeHtml as h, getActiveProject, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, loadProjects, loadCharacterFiles, isVisibleProjectChildFolder } from './shared.js?v=planner-workspace-20261106a';
+import { escapeHtml as h, getActiveProject, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, loadProjects, loadCharacterFiles, isVisibleProjectChildFolder } from './shared.js?v=planner-workspace-20261106b';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, zoom: 1, picker: null, library: null, operation: 0 };
@@ -121,16 +121,15 @@ export function renderPlannerWorkspaceReview(item, meta, blocked) {
     const image = ui.preview ? getAssetUrl(ui.preview) : '';
     const reference = ui.reference;
     return `<div id="planner-result-modal" class="pw-backdrop" data-pw-dialog="review"><section class="pw-dialog pw-review" role="dialog" aria-modal="true" aria-label="후보 검수">
-        <header class="pw-dialog-header"><div><h3>${h(item.situationName || item.situationId)}</h3><p>확대 ${index + 1} / ${images.length} · 선택 ${item.selectedImage ? h(getFileNameFromKey(item.selectedImage)) : '없음'}</p></div>${button('닫기', 'close-review')}</header>
-        <div class="pw-review-tools">${button('‹ 이전 플랜', 'previous-plan')}${button('다음 플랜 ›', 'next-plan')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}"`)}
-        ${button('후보만', 'solo', `aria-pressed="${!ui.compare}"`)}${button('나란히', 'pair', `aria-pressed="${ui.compare}"`)}${button(reference ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}${reference ? button('비교 해제', 'clear-reference') : ''}
+        <header class="pw-dialog-header"><div><h3>${h(item.situationName || item.situationId)}</h3><p id="planner-result-selected-label" aria-live="polite">확대 ${index + 1} / ${images.length} · 선택 ${item.selectedImage ? images.indexOf(item.selectedImage) + 1 : '없음'}</p></div>${button('닫기', 'close-review')}</header>
+        <div class="pw-review-tools">${button('‹ 플랜', 'previous-plan', 'aria-label="이전 플랜"')}${button('플랜 ›', 'next-plan', 'aria-label="다음 플랜"')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}"`)}
+        ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}${reference ? button('비교 해제', 'clear-reference') : ''}
         ${button('−', 'zoom-out', 'aria-label="축소"')}<span data-pw-zoom>${Math.round(ui.zoom * 100)}%</span>${button('+', 'zoom-in', 'aria-label="확대"')}</div>
         <div class="pw-images ${ui.compare ? 'pw-pair' : ''}" style="--pw-zoom:${ui.zoom}">
         ${ui.compare ? `<figure><figcaption>${h(reference?.name || '비교 이미지 미선택')}</figcaption>${reference ? `<img src="${h(reference.url)}" alt="선택한 비교 이미지">` : button('비교 이미지 선택', 'reference')}</figure>` : ''}
         <figure><figcaption>후보 ${index + 1}${item.selectedImage === ui.preview ? ' · 선택됨' : ''}</figcaption>${image ? `<img src="${h(image)}" alt="확대 후보 ${index + 1}" draggable="false">` : '<p>생성된 이미지가 없습니다.</p>'}</figure></div>
         <div class="pw-thumbnails" aria-label="전체 후보 이미지">${images.map((key, i) => `<button type="button" data-pw-action="preview" data-key="${h(key)}" aria-label="후보 ${i + 1} 확대" aria-pressed="${ui.preview === key}" class="${item.selectedImage === key ? 'pw-picked' : ''}"><img src="${h(getAssetUrl(key))}" alt="" loading="lazy" draggable="false"><span>${item.selectedImage === key ? '✓ ' : ''}${i + 1}</span></button>`).join('')}</div>
         <footer class="pw-review-footer"><div>${button('‹ 이전', 'previous', index <= 0 ? 'disabled' : '')}${button('다음 ›', 'next', index >= images.length - 1 ? 'disabled' : '')}<label>번호 <input data-pw-jump type="number" min="1" max="${images.length}" value="${index + 1}"></label>${button('이동', 'jump')}</div>
-        <p id="planner-result-selected-label" aria-live="polite">${item.selectedImage ? `선택 후보: ${h(getFileNameFromKey(item.selectedImage))}` : '확대·탐색만으로 선택되지 않습니다.'}</p>
         <div>${button('다시 생성', 'regenerate', `data-situation="${h(item.situationId)}"`)}${button('이 후보 선택', 'select', !ui.preview || item.selectedImage === ui.preview ? 'disabled' : '')}<button id="planner-result-confirm-button" type="button" class="pw-button pw-primary" data-pw-action="confirm" data-situation="${h(item.situationId)}" ${!item.selectedImage || blocked ? 'disabled' : ''}>최종 선택 완료</button></div></footer>
     </section></div>`;
 }
