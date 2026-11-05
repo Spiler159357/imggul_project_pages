@@ -42,13 +42,16 @@ function setGenerationNotice(message = '') {
 
 export function dismissGenerationNotice() { setGenerationNotice(); }
 
-function setGenerationFeedback(message, detail = message) {
+function setGenerationFeedback(message, detail = message, metadata = '') {
     for (const id of ['craft-floating-text', 'craft-progress-text']) {
         const node = document.getElementById(id);
         if (node) { node.textContent = message; node.title = detail; }
     }
     const details = document.getElementById('craft-progress-detail');
-    if (details) details.textContent = detail;
+    if (details) {
+        details.textContent = metadata;
+        details.classList.toggle('hidden', !metadata);
+    }
     const announcement = document.getElementById('craft-progress-announcement');
     if (announcement && announcement.textContent !== message) announcement.textContent = message;
 }
@@ -1318,11 +1321,11 @@ export async function processNextQueueItem() {
      * 반환값: 명시 반환 없음.
      */
     const updateProgress = (txt, prog) => {
-        const displayText = stage === 'requesting' && prog !== null && prog > 0 && prog < 100
-            ? appendRemainingEstimate(txt, task, prog, taskStartedAtMs)
-            : txt;
-        const fullMsg = `[${currentIdx}/${totalCount}] ${displayText}`;
-        setGenerationFeedback(txt, fullMsg);
+        const count = `${currentIdx}/${totalCount}회`;
+        const metadata = stage === 'requesting' && prog !== null && prog > 0 && prog < 100
+            ? appendRemainingEstimate(count, task, prog, taskStartedAtMs)
+            : count;
+        setGenerationFeedback(txt, `${txt} · ${metadata}`, metadata);
         if (prog !== null) {
             const pct = `${Math.floor(prog)}%`;
             const label = stage === 'requesting' ? `약 ${pct}` : pct;
