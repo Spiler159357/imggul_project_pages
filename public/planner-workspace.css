@@ -77,7 +77,7 @@
 .pw-confirm-dialog{height:auto;max-width:480px}
 .pw-confirm-message{white-space:pre-wrap}
 .pw-confirm-dialog .pw-dialog-body{flex:initial}
-/* Only the three frequently edited prompt options use native dropdowns. */
+/* The allowed prompt options and settings model use native dropdowns. */
 .pw-select{width:100%;min-width:0;min-height:36px;padding:8px;border:1px solid #e5e7eb;border-radius:7px;background:#fff;color:#374151;font:inherit;font-size:12px}
 .pw-select:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
 .dark .pw-select{background:#171717;border-color:#404040;color:#e5e5e5;color-scheme:dark}
