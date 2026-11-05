@@ -1,3 +1,5 @@
+import { filterSelectionGrid, getSelectionFileAlias, getSelectionFolderImage, prepareSelectionLibrary } from './selection-ui.js?v=selection-ui-20261106a';
+import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=selection-ui-20261106a';
 import { ImageEditorCore } from './image_editor/core.js?v=image-editor-history-20260607a';
 import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js?v=image-editor-history-20260607a';
 import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js?v=image-editor-history-20260607a';
@@ -190,6 +192,7 @@ export function closeImageEditorLibraryModal(event) {
 }
 
 async function loadImageEditorLibraryPath(prefix = '') {
+    prepareSelectionLibrary(document.getElementById('image-editor-library-modal'), 'image-editor-library-grid');
     setImageEditorLibraryMode('image');
     editorLibraryCurrentPrefix = prefix;
     const pathDisplay = document.getElementById('image-editor-library-path');
@@ -242,10 +245,12 @@ async function loadImageEditorLibraryPath(prefix = '') {
                 subLabel: alias ? folderName : '',
                 icon: 'folder',
                 kind: 'folder',
+                image: getSelectionFolderImage(folderPrefix),
                 onClick: () => loadImageEditorLibraryPath(folderPrefix)
             }));
         });
         files.forEach(file => grid.appendChild(createLibraryImageCard(file)));
+        filterSelectionGrid(grid.id, document.querySelector('#image-editor-library-modal [data-selection-search]')?.value || '');
         loader.classList.add('hidden');
         loader.classList.remove('flex');
         if (!grid.children.length) {
@@ -302,36 +307,24 @@ async function loadImageEditorWorkList() {
     }
 }
 
-function createLibraryFolderCard({ label, subLabel = '', icon = 'folder', kind = 'folder', onClick }) {
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = kind === 'folder'
-        ? 'image-editor-library-folder-card'
-        : 'image-editor-library-parent-card';
-    button.onclick = onClick;
-    button.innerHTML = `
-        <i data-lucide="${icon}"></i>
-        <span>${escapeHtml(label)}</span>
-        ${subLabel ? `<small>${escapeHtml(subLabel)}</small>` : ''}
-    `;
-    return button;
+function createLibraryFolderCard({ label, subLabel = '', kind = 'folder', image = '', onClick }) {
+    return kind === 'folder'
+        ? createAssetFolderCard({ folderName: subLabel || label, alias: subLabel ? label : '', image, onClick })
+        : createAssetParentCard(onClick);
 }
 
 function createLibraryImageCard(file) {
-    const fileName = file.key.split('/').pop() || file.key;
-    const button = document.createElement('button');
-    button.type = 'button';
-    button.className = 'image-editor-library-image-card';
+    const button = createAssetImageCard({
+        fileName: file.key.split('/').pop() || file.key,
+        alias: getSelectionFileAlias(file.key),
+        fileUrl: `/${file.key.split('/').map(encodeURIComponent).join('/')}`,
+        onClick: async () => {
+            if (!await confirmUnsavedWorkBeforeReplace()) return;
+            closeImageEditorLibraryModal();
+            await openImage(file.key);
+        }
+    });
     button.title = file.key;
-    button.innerHTML = `
-        <img src="/${file.key.split('/').map(encodeURIComponent).join('/')}" alt="">
-        <span>${escapeHtml(fileName)}</span>
-    `;
-    button.onclick = async () => {
-        if (!await confirmUnsavedWorkBeforeReplace()) return;
-        closeImageEditorLibraryModal();
-        await openImage(file.key);
-    };
     return button;
 }
 
@@ -374,17 +367,17 @@ function ensureImageEditorLibraryModal() {
     if (document.getElementById('image-editor-library-modal')) return;
     const modal = document.createElement('div');
     modal.id = 'image-editor-library-modal';
-    modal.className = 'fixed inset-0 bg-black/70 z-[70] hidden items-center justify-center p-3 sm:p-6';
+    modal.className = 'selection-backdrop fixed inset-0 bg-black/70 z-[70] hidden items-center justify-center p-3 sm:p-6';
     modal.onclick = event => closeImageEditorLibraryModal(event);
     modal.innerHTML = `
-        <div class="bg-white dark:bg-gray-900 w-full max-w-5xl max-h-[88vh] rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden" onclick="event.stopPropagation()">
-            <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
+        <div role="dialog" aria-modal="true" aria-label="편집할 이미지 선택" class="selection-dialog bg-white dark:bg-gray-900 w-full max-w-5xl max-h-[88vh] rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 flex flex-col overflow-hidden" onclick="event.stopPropagation()">
+            <div class="selection-header flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                 <div class="min-w-0">
                     <h3 class="text-sm font-bold text-gray-900 dark:text-white">편집할 이미지 선택</h3>
                     <p id="image-editor-library-path" class="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[70vw]">/</p>
                 </div>
-                <button id="close-image-editor-library-btn" type="button" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" aria-label="닫기">
-                    <i data-lucide="x" class="w-5 h-5"></i>
+                <button id="close-image-editor-library-btn" type="button" class="pw-button selection-close" aria-label="닫기">
+                    닫기
                 </button>
             </div>
             <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/70">
@@ -397,12 +390,12 @@ function ensureImageEditorLibraryModal() {
                     </button>
                 </div>
             </div>
-            <div class="flex-1 min-h-0 overflow-auto p-4">
+            <div class="selection-content">
                 <div id="image-editor-library-loading" class="hidden items-center justify-center py-12 text-gray-500 text-sm">
                     <i data-lucide="loader" class="w-5 h-5 mr-2 animate-spin"></i> 이미지를 불러오는 중...
                 </div>
                 <div id="image-editor-library-empty" class="hidden items-center justify-center py-12 text-gray-500 text-sm">선택할 수 있는 이미지가 없습니다.</div>
-                <div id="image-editor-library-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3"></div>
+                <div id="image-editor-library-grid" class="selection-grid"></div>
             </div>
         </div>
     `;
@@ -415,6 +408,8 @@ function ensureImageEditorLibraryModal() {
 
 function setImageEditorLibraryMode(mode = 'image') {
     editorLibraryMode = mode === 'work' ? 'work' : 'image';
+    const search = document.querySelector('#image-editor-library-modal [data-selection-library-toolbar]');
+    if (search) search.hidden = editorLibraryMode === 'work';
     const title = document.querySelector('#image-editor-library-modal h3');
     const loader = document.getElementById('image-editor-library-loading');
     const empty = document.getElementById('image-editor-library-empty');

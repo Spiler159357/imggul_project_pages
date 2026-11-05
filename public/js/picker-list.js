@@ -1,29 +1,15 @@
+import { createSelectionCard } from './selection-ui.js?v=selection-ui-20261106a';
 // Shared presentation for project/character/situation lists. Callers own selection state and actions.
-export function createPickerListItem({ type, label, subLabel = '', active = false, onClick, trackSelection = false }) {
-    const button = document.createElement('button');
-    button.type = 'button';
+export function createPickerListItem({ type, label, subLabel = '', active = false, onClick, trackSelection = false, image = '' }) {
+    const button = createSelectionCard({
+        title: label, subtitle: subLabel, selected: active, image,
+        placeholder: type === 'character' ? '캐릭터' : type === 'situation' ? '상황' : '프로젝트'
+    });
+    button.classList.add('selection-row');
     button.dataset.pickerType = type;
     if (trackSelection) button.dataset.pickerSelected = active ? 'true' : 'false';
     button.dataset.searchText = `${label} ${subLabel}`.toLowerCase();
-    button.className = 'w-full flex items-center text-left gap-2 px-2.5 py-2 rounded-md border border-transparent hover:border-indigo-300 dark:hover:border-indigo-700 bg-white dark:bg-gray-900 text-gray-800 dark:text-gray-100 transition min-w-0';
     button.onclick = onClick;
-
-    const text = document.createElement('span');
-    text.className = 'min-w-0 flex-1';
-    const title = document.createElement('span');
-    title.className = 'block text-xs font-bold truncate';
-    title.textContent = label;
-    text.appendChild(title);
-    if (subLabel) {
-        const subtitle = document.createElement('span');
-        subtitle.className = 'block text-[10px] text-gray-500 dark:text-gray-400 truncate';
-        subtitle.textContent = subLabel;
-        text.appendChild(subtitle);
-    }
-    const check = document.createElement('i');
-    check.dataset.lucide = 'check';
-    check.className = `w-3.5 h-3.5 text-indigo-500 ${active ? '' : 'invisible'}`;
-    button.append(text, check);
     return button;
 }
 
@@ -31,7 +17,7 @@ export function setPickerListMessage(id, message) {
     const list = document.getElementById(id);
     if (!list) return;
     const status = document.createElement('div');
-    status.className = 'py-5 text-center text-xs text-gray-500 dark:text-gray-400';
+    status.className = 'selection-status';
     status.textContent = message;
     list.replaceChildren(status);
 }

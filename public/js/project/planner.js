@@ -1,9 +1,10 @@
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext } from './planner-workspace.js?v=planner-workspace-20261106j';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106j';
+import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106a';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext } from './planner-workspace.js?v=planner-workspace-20261106k';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106k';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106j';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106j';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106j';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106k';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106k';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106k';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -57,6 +58,7 @@ function createPlannerTargetPickerState() {
         type: 'character',
         selectedId: '',
         rating: 'all',
+        query: '',
         triggerId: ''
     };
 }
@@ -1982,6 +1984,7 @@ export function renderPlannerRunConfirmOverlay() {
 export function renderPlannerTargetPickerOverlay(options = {}) {
     const root = ensurePlannerOverlayRoot('planner-target-picker-overlay-root');
     root.innerHTML = renderPlannerTargetPickerModal();
+    filterSelectionGrid('planner-target-selection-grid', getPlannerTargetPickerState().query || '');
     enhancePlannerWorkspaceDialogs();
     if (window.lucide) lucide.createIcons();
 
@@ -2016,6 +2019,7 @@ export function openPlannerTargetPicker(type = 'character') {
         type: normalizedType,
         selectedId,
         rating: 'all',
+        query: '',
         triggerId: normalizedType === 'situation' ? 'planner-situation-picker-trigger' : 'planner-character-picker-trigger'
     });
     document.getElementById(state.triggerId)?.setAttribute('aria-expanded', 'true');
@@ -2065,7 +2069,7 @@ export function handlePlannerTargetPickerKeydown(event) {
     const card = event.target?.closest?.('[data-planner-target-id]');
     if (!card || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
     const grid = card.closest('[data-planner-target-grid]');
-    const cards = Array.from(grid?.querySelectorAll('[data-planner-target-id]') || []);
+    const cards = Array.from(grid?.querySelectorAll('[data-planner-target-id]:not([hidden])') || []);
     const index = cards.indexOf(card);
     if (index < 0) return;
     const columnCount = Math.max(1, getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length);
@@ -2713,26 +2717,30 @@ function renderPlannerTargetTrigger(type, project, item) {
 }
 
 function renderPlannerCharacterPickerCards(characters, state) {
-    if (!characters.length) return renderEmptyState('등록된 캐릭터가 없습니다.');
-    return `<div data-planner-target-grid class="pw-target-grid">${characters.map(character => {
-        const current = character.id === state.selectedId;
-        const title = character.name || character.alias || character.folderName;
-        return `<button type="button" class="pw-target-card" data-planner-target-id="${escapeHtml(character.id)}" aria-pressed="${current}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(character.id)}')">
-            ${character.coverImage ? `<img src="${escapeHtml(getAssetUrl(character.coverImage))}" alt="" loading="lazy" data-pw-cover>` : ''}<span class="pw-plan-placeholder" data-pw-cover-placeholder ${character.coverImage ? 'hidden' : ''}>캐릭터</span>
-            <strong>${escapeHtml(title)}</strong><small>${escapeHtml(character.folderName || '')}</small>${current ? '<span class="pw-target-selected">✓ 현재 대상</span>' : ''}</button>`;
-    }).join('')}</div>`;
+    return `<div id="planner-target-selection-grid" data-planner-target-grid class="selection-grid">${characters.map(character => renderSelectionCard({
+        title: character.name || character.alias || character.folderName,
+        subtitle: character.folderName || '',
+        image: character.coverImage ? getAssetUrl(character.coverImage) : '',
+        placeholder: '캐릭터', selected: character.id === state.selectedId,
+        attributes: `data-planner-target-id="${escapeHtml(character.id)}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(character.id)}')"`
+    })).join('')}</div>${!characters.length ? '<p class="selection-status">등록된 캐릭터가 없습니다.</p>' : ''}`;
 }
 
 function renderPlannerSituationPickerCards(project, situations, state) {
     const filtered = state.rating === 'all' ? situations : situations.filter(situation => getSituationRating(situation) === state.rating);
-    if (!filtered.length) return renderEmptyState('표시할 상황이 없습니다.');
-    return `<div data-planner-target-grid class="pw-target-situations">${filtered.map(situation => {
-        const current = situation.id === state.selectedId;
+    return `<div id="planner-target-selection-grid" data-planner-target-grid class="selection-grid">${filtered.map(situation => {
         const number = getSituationImageNumber(project, situation);
-        const rating = getSituationRating(situation);
-        return `<button type="button" class="pw-target-card pw-target-situation" data-planner-target-id="${escapeHtml(situation.id)}" aria-pressed="${current}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(situation.id)}')">
-            <span class="pw-target-number">${escapeHtml(number)}</span><span><strong>${escapeHtml(getSituationDisplayName(situation))}</strong><small>${escapeHtml(number)}.webp · ${rating.toUpperCase()}</small>${current ? '<span class="pw-target-selected">✓ 현재 대상</span>' : ''}</span></button>`;
-    }).join('')}</div>`;
+        return renderSelectionCard({
+            title: getSituationDisplayName(situation), subtitle: `${number}.webp · ${getSituationRating(situation).toUpperCase()}`,
+            placeholder: number, selected: situation.id === state.selectedId,
+            attributes: `data-planner-target-id="${escapeHtml(situation.id)}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(situation.id)}')"`
+        });
+    }).join('')}</div>${!filtered.length ? '<p class="selection-status">표시할 상황이 없습니다.</p>' : ''}`;
+}
+
+export function filterPlannerTargetPicker(value = '') {
+    getPlannerTargetPickerState().query = value;
+    filterSelectionGrid('planner-target-selection-grid', value);
 }
 
 export function renderPlannerTargetPickerModal() {
@@ -2740,12 +2748,16 @@ export function renderPlannerTargetPickerModal() {
     const project = getActiveProject();
     if (!state.open || !project || state.projectId !== project.id) return '';
     const isCharacter = state.type === 'character';
-    const title = isCharacter ? '대상 캐릭터 선택' : '대상 상황 선택';
-    const filters = !isCharacter ? `<div class="pw-library-tools">${[['all', '전체'], ['sfw', 'SFW'], ['nsfw', 'NSFW']].map(([rating, label]) => `<button type="button" id="planner-target-filter-${rating}" class="pw-button" aria-pressed="${state.rating === rating}" onclick="window.setPlannerTargetPickerRating('${rating}')">${label}</button>`).join('')}</div>` : '';
-    return `<div id="planner-target-picker-modal" class="pw-backdrop" onclick="window.closePlannerTargetPicker(event)"><section class="pw-dialog" role="dialog" aria-modal="true" aria-labelledby="planner-target-picker-title" onclick="event.stopPropagation()" onkeydown="window.handlePlannerTargetPickerKeydown(event)">
-        <header class="pw-dialog-header"><div><h3 id="planner-target-picker-title">${title}</h3><p>${isCharacter ? '캐릭터를 클릭하면 바로 선택됩니다.' : '상황을 클릭하면 바로 선택됩니다.'}</p></div><button type="button" class="pw-button" aria-label="닫기" onclick="window.closePlannerTargetPicker()">닫기</button></header>
-        <div class="pw-dialog-body">${filters}${isCharacter ? renderPlannerCharacterPickerCards(getProjectItems(project, 'characters'), state) : renderPlannerSituationPickerCards(project, getProjectItems(project, 'situations'), state)}</div>
-    </section></div>`;
+    const filters = !isCharacter ? [['all', '전체'], ['sfw', 'SFW'], ['nsfw', 'NSFW']].map(([rating, label]) => `<button type="button" id="planner-target-filter-${rating}" class="pw-button" aria-pressed="${state.rating === rating}" onclick="window.setPlannerTargetPickerRating('${rating}')">${label}</button>`).join('') : '';
+    return renderSelectionDialog({
+        id: 'planner-target-picker-modal', title: isCharacter ? '대상 캐릭터 선택' : '대상 상황 선택',
+        context: escapeHtml(project.name || project.folderName),
+        toolbar: `<div class="selection-tools">${renderSelectionSearch({ target: 'planner-target-selection-grid', value: state.query || '', attributes: 'oninput="window.filterPlannerTargetPicker(this.value)"' })}${filters}</div>`,
+        body: (isCharacter ? renderPlannerCharacterPickerCards(getProjectItems(project, 'characters'), state) : renderPlannerSituationPickerCards(project, getProjectItems(project, 'situations'), state)) + '<p class="selection-status" data-selection-empty hidden>검색 결과가 없습니다.</p>',
+        closeAttributes: 'onclick="window.closePlannerTargetPicker()"',
+        backdropAttributes: 'onclick="window.closePlannerTargetPicker(event)"',
+        panelAttributes: 'onclick="event.stopPropagation()" onkeydown="window.handlePlannerTargetPickerKeydown(event)"'
+    });
 }
 
 export function renderPlannerPanel(project, situations) {
@@ -3121,7 +3133,8 @@ export async function loadPlannerForSelectedCharacter() {
     ]);
     window.PROJECT_PLANNER_META = meta;
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, undefined, { force: true }).catch(() => meta ? [{ character, meta }] : []);
-    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';    renderPlannerSituationPlanOverlay();
+    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
+    renderPlannerSituationPlanOverlay();
     renderPlannerResultOverlay();
     renderPlannerRunConfirmOverlay();
     renderPlannerSectionByState();

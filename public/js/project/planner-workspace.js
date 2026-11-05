@@ -1,4 +1,5 @@
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106j';
+import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106a';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106k';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, zoom: 1, picker: null, library: null, operation: 0 };
@@ -220,11 +221,13 @@ export function renderPlannerWorkspaceReview(item, meta, blocked) {
     </section></div>`;
 }
 
-function auxiliary(title, body, canClose = true) {
+function auxiliary(title, body, canClose = true, selection = null) {
     let root = document.getElementById('planner-workspace-auxiliary');
     if (!root) { root = document.createElement('div'); root.id = 'planner-workspace-auxiliary'; document.body.append(root); }
     if (!root.childElementCount) restoreFocus = document.activeElement;
-    root.innerHTML = `<div class="pw-backdrop" data-pw-dialog="auxiliary"><section class="pw-dialog ${pendingConfirmation ? 'pw-confirm-dialog' : ''}" role="dialog" aria-modal="true" aria-label="${h(title)}"><header class="pw-dialog-header"><h3>${h(title)}</h3>${canClose ? button('닫기', 'close-auxiliary') : ''}</header><div class="pw-dialog-body">${body}</div></section></div>`;
+    root.innerHTML = selection ? renderSelectionDialog({
+        title, body, ...selection, closeAttributes: 'data-pw-action="close-auxiliary"', backdropAttributes: 'data-pw-dialog="auxiliary"'
+    }) : `<div class="pw-backdrop" data-pw-dialog="auxiliary"><section class="pw-dialog ${pendingConfirmation ? 'pw-confirm-dialog' : ''}" role="dialog" aria-modal="true" aria-label="${h(title)}"><header class="pw-dialog-header"><h3>${h(title)}</h3>${canClose ? button('닫기', 'close-auxiliary') : ''}</header><div class="pw-dialog-body">${body}</div></section></div>`;
     root.querySelector('button')?.focus();
     window.lucide?.createIcons();
 }
@@ -248,8 +251,15 @@ export function confirmPlannerWorkspaceAction(message) {
 }
 
 function renderPlannerExplorerFolder(character) {
-    const name = character.name || character.alias || character.folderName;
-    return `<button type="button" class="image-editor-library-folder-card pw-explorer-folder" data-pw-action="library-folder" data-character="${h(character.id)}" data-search="${h((name + ' ' + character.folderName).toLocaleLowerCase())}"><i data-lucide="folder" aria-hidden="true"></i><span>${h(name)}</span><small>${h(character.folderName || '')}</small></button>`;
+    return renderSelectionCard({
+        title: character.name || character.alias || character.folderName, subtitle: character.folderName || '',
+        image: character.coverImage ? getAssetUrl(character.coverImage) : '', placeholder: '캐릭터', badge: '이미지 보기',
+        attributes: `data-pw-action="library-folder" data-character="${h(character.id)}"`
+    });
+}
+
+function getLibrarySituation(file, library, character) {
+    return getProjectItems(library.project, 'situations').find((situation, index) => window.getPlannerSituationImage({ ...character, files: [file] }, situation, index));
 }
 
 function renderLibrary() {
@@ -259,12 +269,23 @@ function renderLibrary() {
     const root = button(h(library.project.name || library.project.folderName), 'library-root');
     const up = character ? button('상위 폴더', 'library-root') : '';
     const content = character
-        ? library.files.map(file => `<button type="button" class="image-editor-library-image-card" data-pw-action="library-image" data-key="${h(file.key)}" data-search="${h(getFileNameFromKey(file.key).toLocaleLowerCase())}"><img src="${h(getVersionedAssetUrl(file))}" loading="lazy" alt=""><span>${h(getFileNameFromKey(file.key))}</span></button>`).join('')
+        ? library.files.map(file => {
+            const situation = getLibrarySituation(file, library, character);
+            return renderSelectionCard({
+                title: situation ? getSituationDisplayName(situation) : (window.getAliasOnly?.(file.key, false) || getFileNameFromKey(file.key)),
+                subtitle: getFileNameFromKey(file.key), image: getVersionedAssetUrl(file),
+                selected: ui.reference?.url === getVersionedAssetUrl(file),
+                attributes: `data-pw-action="library-image" data-key="${h(file.key)}"`
+            });
+        }).join('')
         : library.characters.map(c => renderPlannerExplorerFolder(c)).join('');
-    auxiliary('비교 이미지 선택', `<nav class="pw-explorer-breadcrumb" aria-label="현재 폴더">${root}${character ? `<span>/ ${h(character.name || character.folderName)}</span>` : ''}${up}</nav><p class="pw-explorer-path">/${h(character?.prefix || library.project.prefix)}</p>
-        <div class="pw-library-tools"><input type="search" data-pw-library-search placeholder="현재 폴더에서 검색" aria-label="현재 폴더에서 검색"></div>
-        ${library.loading ? '<p role="status">이미지를 불러오는 중입니다.</p>' : ''}${library.error ? `<p role="alert">${h(library.error)}</p>${button('다시 불러오기', 'library-retry')}` : ''}
-        <div class="pw-explorer-grid">${content}</div>${!library.loading && !library.error && !content ? '<p>이 폴더에 표시할 항목이 없습니다.</p>' : ''}`);
+    auxiliary('비교 이미지 선택', `${library.loading ? '<p class="selection-status" role="status">이미지를 불러오는 중입니다.</p>' : ''}${library.error ? `<p class="selection-status" role="alert">${h(library.error)}</p>${button('다시 불러오기', 'library-retry')}` : ''}
+        <div id="planner-library-selection-grid" class="selection-grid">${content}</div><p class="selection-status" data-selection-empty hidden>검색 결과가 없습니다.</p>${!library.loading && !library.error && !content ? '<p class="selection-status">이 폴더에 표시할 항목이 없습니다.</p>' : ''}`, true, {
+        description: character ? '이미지를 클릭하면 비교 이미지로 선택됩니다.' : '캐릭터를 열어 비교할 이미지를 선택하세요.',
+        context: `${root}${character ? `<span>/ ${h(character.name || character.folderName)}</span>` : ''}${up}`,
+        toolbar: `<div class="selection-tools">${renderSelectionSearch({ target: 'planner-library-selection-grid', value: library.query || '', attributes: 'data-pw-library-search' })}</div>`
+    });
+    filterSelectionGrid('planner-library-selection-grid', library.query || '');
 }
 
 async function loadLibraryFolder(characterId) {
@@ -273,6 +294,7 @@ async function loadLibraryFolder(characterId) {
     const character = library.characters.find(c => c.id === characterId);
     if (!character) return;
     const operation = ++ui.operation;
+    if (library.characterId !== characterId) library.query = '';
     library.characterId = characterId; library.loading = true; library.error = ''; library.files = [];
     renderLibrary();
     try {
@@ -365,7 +387,7 @@ async function dispatch(button) {
     if (action === 'library-root') {
         if (!ui.library) return;
         ui.operation++;
-        Object.assign(ui.library, { characterId: '', files: [], loading: false, error: '' });
+        Object.assign(ui.library, { characterId: '', files: [], loading: false, error: '', query: '' });
         renderLibrary(); return;
     }
     if (action === 'library-image') {
@@ -376,14 +398,13 @@ async function dispatch(button) {
         if (!file) return;
         const character = library.characters.find(c => c.id === library.characterId);
         if (!character) return;
-        const situations = getProjectItems(library.project, 'situations');
-        const situation = situations.find((situation, index) => window.getPlannerSituationImage({ ...character, files: [file] }, situation, index));
+        const situation = getLibrarySituation(file, library, character);
         referenceBindings.set(referenceContext.situationId, situation
             ? { kind: 'situation', situationId: situation.id }
             : { kind: 'file', characterId: character.id, key: file.key });
         saveReferenceBindings();
         referenceRequest++; referencePending = false; referenceNotice = '';
-        ui.reference = { name: `${character?.name || character?.folderName || ''} / ${getFileNameFromKey(file.key)}`, url: getVersionedAssetUrl(file) }; ui.compare = true;
+        ui.reference = { name: `${character.name || character.folderName} / ${situation ? getSituationDisplayName(situation) + ' · ' : ''}${getFileNameFromKey(file.key)}`, url: getVersionedAssetUrl(file) }; ui.compare = true;
         closeAuxiliary(); window.renderPlannerResultOverlay();
     }
 }
@@ -419,7 +440,7 @@ document.addEventListener('click', event => {
 }, true);
 document.addEventListener('input', event => {
     if (event.target.matches('[data-pw-search]')) { ui.query = event.target.value; filterCards(); }
-    if (event.target.matches('[data-pw-library-search]')) document.querySelectorAll('#planner-workspace-auxiliary .pw-explorer-grid [data-search]').forEach(card => card.hidden = !card.dataset.search.includes(event.target.value.toLocaleLowerCase()));
+    if (event.target.matches('[data-pw-library-search]') && ui.library) ui.library.query = event.target.value;
 });
 document.addEventListener('keydown', event => {
     const modal = topDialog();

@@ -1,5 +1,6 @@
-import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=picker-reuse-20261106a';
-import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from './picker-list.js?v=picker-reuse-20261106a';
+import { filterSelectionGrid, getSelectionFileAlias, getSelectionFolderImage, prepareSelectionLibrary } from './selection-ui.js?v=selection-ui-20261106a';
+import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=selection-ui-20261106a';
+import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from './picker-list.js?v=selection-ui-20261106a';
 // 6. temp_gallery.js: 임시 보관함 및 변환 유예 관리
 import { getProjectByPrefix, getProjectItems, loadProjectCharacters, loadProjectSituations, loadProjects } from './project/shared.js?v=novelai-v5-20260823d';
 /**
@@ -539,6 +540,7 @@ export function closeInpaintLibraryModal(e, skipHistory = false) {
 }
 
 export async function loadInpaintLibraryPath(prefix) {
+    prepareSelectionLibrary(document.getElementById('inpaint-library-modal'), 'inpaint-library-grid');
     window.INPAINT_LIBRARY_CURRENT_PREFIX = prefix;
     const pathDisplay = document.getElementById('inpaint-library-path');
     const grid = document.getElementById('inpaint-library-grid');
@@ -582,19 +584,21 @@ export async function loadInpaintLibraryPath(prefix) {
             const folderName = folderPrefix.split('/').filter(Boolean).pop();
             const alias = window.getAliasOnly ? window.getAliasOnly(folderPrefix, true) : '';
             grid.appendChild(createAssetFolderCard({
-                folderName, alias, onClick: () => loadInpaintLibraryPath(folderPrefix)
+                folderName, alias, image: getSelectionFolderImage(folderPrefix), onClick: () => loadInpaintLibraryPath(folderPrefix)
             }));
         });
 
         files.forEach(file => {
             const fileName = file.key.split('/').pop();
-            const alias = window.getAliasOnly ? window.getAliasOnly(file.key, false) : '';
+            const alias = getSelectionFileAlias(file.key);
             const fileUrl = '/' + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
             grid.appendChild(createAssetImageCard({
                 fileName, alias, fileUrl,
                 onClick: () => setInpaintImageFromKey(file.key, file.uploaded)
             }));
         });
+
+        filterSelectionGrid(grid.id, document.querySelector('#inpaint-library-modal [data-selection-search]')?.value || '');
 
         if (grid.children.length === 0) {
             emptyState.classList.remove('hidden');
@@ -1312,6 +1316,7 @@ export function renderCraftUploadPickerList(type) {
                 trackSelection: true,
                 type,
                 label: character.name || character.alias || character.folderName || character.id,
+                image: character.coverImage ? window.getAssetUrl(character.coverImage) : '',
                 subLabel: character.prefix,
                 active: character.prefix === state.characterPath,
                 onClick: () => {

@@ -1,5 +1,6 @@
-import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=picker-reuse-20261106a';
-import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from './picker-list.js?v=picker-reuse-20261106a';
+import { getSelectionFileAlias, getSelectionFolderImage } from './selection-ui.js?v=selection-ui-20261106a';
+import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=selection-ui-20261106a';
+import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from './picker-list.js?v=selection-ui-20261106a';
 // 팝업 창(업로드, 메모, 파일 미리보기, Import 탐색기) 제어
 import { resolveImportedNegativePrompt } from './prompt-metadata.js?v=prompt-components-20261005a';
 
@@ -1034,6 +1035,7 @@ function renderImportProjectList(type) {
             list.appendChild(createPickerListItem({
                 type,
                 label: character.name || character.alias || character.folderName || character.id,
+                image: character.coverImage ? window.getAssetUrl(character.coverImage) : '',
                 subLabel: character.prefix,
                 active: character.prefix === state.characterPath,
                 onClick: async () => {
@@ -1343,7 +1345,7 @@ window.loadImportPath = async function(prefix) {
         if (prefix !== window.IMPORT_BASE_PREFIX && prefix.length > window.IMPORT_BASE_PREFIX.length && prefix.startsWith(window.IMPORT_BASE_PREFIX)) {
             const parts = prefix.split('/').filter(Boolean); parts.pop(); 
             const parentPrefix = parts.length > 0 ? parts.join('/') + '/' : window.IMPORT_BASE_PREFIX;
-            grid.appendChild(createAssetParentCard(() => window.loadImportPath(parentPrefix), { group: true }));
+            grid.appendChild(createAssetParentCard(() => window.loadImportPath(parentPrefix)));
         }
 
         folders.forEach(folderPrefix => {
@@ -1351,7 +1353,7 @@ window.loadImportPath = async function(prefix) {
             const alias = window.getAliasOnly(folderPrefix, true); 
             
             grid.appendChild(createAssetFolderCard({
-                folderName, alias, onClick: () => window.loadImportPath(folderPrefix)
+                folderName, alias, image: getSelectionFolderImage(folderPrefix), onClick: () => window.loadImportPath(folderPrefix)
             }));
         });
 
@@ -1359,7 +1361,7 @@ window.loadImportPath = async function(prefix) {
             const fileName = file.key.split('/').pop();
             if (!/\.(jpg|jpeg|png|gif|webp|svg)$/i.test(fileName)) return;
             
-            const alias = window.getAliasOnly(file.key, false); 
+            const alias = getSelectionFileAlias(file.key);
             const assetPath = /\.(png|jpe?g|webp)$/i.test(fileName) ? '/i/' : '/';
             const fileUrl = window.location.origin + assetPath + file.key + '?t=' + (file.uploaded ? new Date(file.uploaded).getTime() : Date.now());
             

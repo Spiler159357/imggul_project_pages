@@ -1,8 +1,8 @@
-import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from '../picker-list.js?v=picker-reuse-20261106a';
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-workspace-20261106j';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-workspace-20261106j';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-workspace-20261106j';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-workspace-20261106j';
+import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from '../picker-list.js?v=selection-ui-20261106a';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-workspace-20261106k';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-workspace-20261106k';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-workspace-20261106k';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-workspace-20261106k';
 
 export function getCraftPromptFields() {
     return {
@@ -294,6 +294,7 @@ export function renderCraftPromptSaveList(type) {
             list.appendChild(createPickerListItem({
                 type,
                 label: character.name || character.alias || character.folderName || character.id,
+                image: character.coverImage ? window.getAssetUrl(character.coverImage) : '',
                 subLabel: character.prefix,
                 active: character.prefix === state.characterPath,
                 onClick: async () => {
