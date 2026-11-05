@@ -1,4 +1,4 @@
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106g';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106h';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, zoom: 1, picker: null, library: null, operation: 0 };
@@ -176,7 +176,7 @@ export function renderPlannerWorkspaceCard({ image, item, title, fallbackText, s
     // Candidates are storage keys; finalized images are versioned file objects.
     // Unreviewed candidates must not become a representative image implicitly.
     const src = selectedKey ? getAssetUrl(selectedKey) : image?.key ? getVersionedAssetUrl(image) : '';
-    return `<button type="button" class="pw-plan-card" data-pw-plan data-title="${h(title.toLocaleLowerCase())}" data-missing="${missing}" data-review="${!!item && images.length > 0}" ${visible ? '' : 'hidden'} data-pw-action="open" data-situation="${h(situationId)}" data-character="${h(characterId)}">
+    return `<button type="button" class="pw-plan-card" data-pw-plan data-has-plan="${!!item}" data-title="${h(title.toLocaleLowerCase())}" data-missing="${missing}" data-review="${!!item && images.length > 0}" ${visible ? '' : 'hidden'} data-pw-action="open" data-situation="${h(situationId)}" data-character="${h(characterId)}">
         ${src ? `<img src="${h(src)}" alt="" loading="lazy" data-pw-cover>` : ''}<span class="pw-plan-placeholder" data-pw-cover-placeholder ${src ? 'hidden' : ''}>${h(fallbackText)}</span>
         <strong>${h(title)}</strong><span>${h(state)} · ${images.length}장</span>${error ? `<small>${h(error)}</small>` : ''}</button>`;
 }
