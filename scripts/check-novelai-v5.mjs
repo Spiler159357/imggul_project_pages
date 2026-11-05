@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { getGenerationCostPresentation } from '../public/js/generation-feedback.js';
 import {
     buildNovelAiBaseParameters,
     getNovelAiModelProfile,
@@ -219,6 +220,21 @@ assert.equal(calculateNovelAiRequestCost({
 }).total, 90);
 
 const appHtml = readFileSync(new URL('../public/app.html', import.meta.url), 'utf8');
+// 비용은 유지하되 비 V5 버튼에만 잘못 붙던 Anlas 문구는 제거한다.
+for (const model of ['nai-diffusion-4-5-full', 'nai-diffusion-4-full', 'nai-diffusion-3', 'nai-diffusion-furry-3', 'nai-diffusion-5-full']) {
+    for (const subscription of [activeOpus, { available: false }]) {
+        for (const steps of [28, 29]) {
+            const cost = calculateNovelAiRepeatedRequestCost({
+                model, parameters: { ...v45Inpaint, steps }, subscription, requestCount: 2
+            });
+            const view = getGenerationCostPresentation(cost);
+            assert.equal(view.label.includes('Anlas'), model === 'nai-diffusion-5-full' && cost.requiresConsent);
+            assert.equal(Boolean(view.detail), cost.requiresConsent);
+            if (model !== 'nai-diffusion-5-full') assert.equal(view.label, '생성');
+            if (steps === 29) assert.ok(cost.maximum > 0);
+        }
+    }
+}
 const craftSource = readFileSync(new URL('../public/js/craft.js', import.meta.url), 'utf8');
 const plannerSource = readFileSync(new URL('../public/js/project/planner.js', import.meta.url), 'utf8');
 assert.equal(appHtml.includes('id="nai-cost-card"'), false);

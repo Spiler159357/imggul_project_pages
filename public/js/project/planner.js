@@ -4717,13 +4717,17 @@ export async function deletePlannerImage(key) {
     renderPlannerSectionByState();
 }
 
-export async function waitForPlannerQueueComplete() {
+export async function waitForPlannerQueueComplete(signal) {
     return await new Promise(resolve => {
         const handler = (event) => {
             window.removeEventListener('imggul:generation-queue-complete', handler);
+            signal?.removeEventListener('abort', cancel);
             resolve(event.detail || {});
         };
+        const cancel = () => handler({ detail: { stopped: true } });
         window.addEventListener('imggul:generation-queue-complete', handler);
+        signal?.addEventListener('abort', cancel, { once: true });
+        if (signal?.aborted) cancel();
     });
 }
 
@@ -5956,21 +5960,35 @@ async function runPlannerCompactBrowserGeneration(project, meta, situationId = n
 
         const target = splitPlannerCompactR2Key(next.slot.r2Key);
         setPlannerStatus(`${next.slot.globalImageIndex + 1}번째 이미지 생성 중...`);
-        await window.generateNaiImage({
-            outputPrefix: target.prefix,
-            outputFileName: target.fileName,
-            v4PromptCharacters: generation.v4PromptCharacters || [],
-            anlasConfirmed,
-            planner: {
-                compact: true,
-                runKey: next.runKey,
-                jobId: next.jobId,
-                assetId: next.slot.assetId,
-                generationSequence: next.slot.generationSequence,
-                situationId: next.slot.itemId
-            }
-        });
-        const result = await waitForPlannerQueueComplete();
+        // 빠른 준비 실패/큐 중단도 놓치지 않도록 호출 전에 구독한다.
+        const completionAbort = new AbortController();
+        const completion = waitForPlannerQueueComplete(completionAbort.signal);
+        let started;
+        try {
+            started = await window.generateNaiImage({
+                outputPrefix: target.prefix,
+                outputFileName: target.fileName,
+                v4PromptCharacters: generation.v4PromptCharacters || [],
+                anlasConfirmed,
+                planner: {
+                    compact: true,
+                    runKey: next.runKey,
+                    jobId: next.jobId,
+                    assetId: next.slot.assetId,
+                    generationSequence: next.slot.generationSequence,
+                    situationId: next.slot.itemId
+                }
+            });
+        } catch (error) {
+            completionAbort.abort();
+            throw error;
+        }
+        if (started === false) {
+            completionAbort.abort();
+            setPlannerStatus('생성을 시작하지 못했습니다. 이미지 생성 탭의 비용 및 오류 안내를 확인해 주세요.');
+            break;
+        }
+        const result = await completion;
         if (result.stopped) break;
 
         const [width, height] = String(generation.res || '832x1216').split('x').map(Number);

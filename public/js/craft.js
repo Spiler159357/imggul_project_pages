@@ -1,4 +1,5 @@
 // 5. craft.js: 이미지 생성 큐, 설정 로직
+import { getGenerationCostPresentation, withGenerationTimeout, readGenerationHttpError } from './generation-feedback.js?v=20261105a';
 import {
     buildNovelAiBaseParameters,
     getNovelAiInpaintModel,
@@ -23,6 +24,63 @@ const MAX_V4_PROMPT_CHARACTERS = 6;
 const DEFAULT_CRAFT_QUALITY_TAGS = 'masterpiece, best quality, very aesthetic, no text';
 const DEFAULT_CRAFT_DEFAULT_NEGATIVE_PROMPT = '';
 const NOVELAI_SUBSCRIPTION_CACHE_MS = 30_000;
+const NOVELAI_USAGE_TIMEOUT_MS = 10_000;
+const NOVELAI_GENERATION_TIMEOUT_MS = 180_000;
+let preparation = null;
+
+function logGeneration(stage, fields = {}) {
+    void window.logFlowToStorage?.('generation_stage', { stage, attemptId: fields.requestId || preparation?.id, ...fields });
+}
+
+function setGenerationNotice(message = '') {
+    for (const id of ['craft-generation-notice', 'craft-result-notice-text']) {
+        const notice = document.getElementById(id);
+        if (notice) { notice.textContent = message; notice.classList.toggle('hidden', !message); }
+    }
+    document.getElementById('craft-result-notice')?.classList.toggle('hidden', !message);
+}
+
+export function dismissGenerationNotice() { setGenerationNotice(); }
+
+function setGenerationFeedback(message, detail = message) {
+    for (const id of ['craft-floating-text', 'craft-progress-text']) {
+        const node = document.getElementById(id);
+        if (node) { node.textContent = message; node.title = detail; }
+    }
+    const details = document.getElementById('craft-progress-detail');
+    if (details) details.textContent = detail;
+    const announcement = document.getElementById('craft-progress-announcement');
+    if (announcement && announcement.textContent !== message) announcement.textContent = message;
+}
+
+function resetGenerationProgress() {
+    for (const id of ['craft-floating-bar', 'craft-progress-bar']) {
+        const node = document.getElementById(id);
+        if (node) node.style.width = '0%';
+    }
+    for (const id of ['craft-floating-percent', 'craft-progress-percent']) {
+        const node = document.getElementById(id);
+        if (node) node.textContent = '—';
+    }
+}
+
+async function renderReferenceImage(file, render) {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    try {
+        return await withGenerationTimeout(30_000, () => new Promise((resolve, reject) => {
+            img.onload = () => {
+                try { resolve(render(img)); } catch (error) { reject(error); }
+            };
+            img.onerror = () => reject(new Error('참조 이미지를 읽지 못했습니다.'));
+            img.src = url;
+        }));
+    } finally {
+        img.onload = img.onerror = null;
+        img.src = '';
+        URL.revokeObjectURL(url);
+    }
+}
 
 let novelAiSubscriptionState = { available: false, loading: false, fetchedAt: 0 };
 let novelAiSubscriptionRequest = null;
@@ -235,6 +293,7 @@ export async function initGenerationQueue() {
  */
 function isPersistableQueueTask(task) {
     return !!task
+        && !task.requestStarted
         && !task.planner
         && !task.preloadedVibeBase64
         && !task.preloadedDirectorBase64
@@ -246,7 +305,9 @@ function serializeQueueForStorage(queue) {
 }
 
 export function saveQueueToStorage() {
-    const persistableQueue = serializeQueueForStorage(window.GENERATION_QUEUE);
+    // 전송된 작업은 결과 확인 전 새로고침으로 재생성하지 않는다. 후속 작업도 보류한다.
+    const persistableQueue = window.GENERATION_QUEUE.some(task => task.requestStarted)
+        ? [] : serializeQueueForStorage(window.GENERATION_QUEUE);
     try {
         if (persistableQueue.length === 0) {
             localStorage.removeItem('imggul_gen_queue');
@@ -266,10 +327,15 @@ export function saveQueueToStorage() {
  * 반환값: 명시 반환 없음.
  */
 export function cancelNaiGeneration() {
+    if (preparation && !preparation.handedOff) {
+        preparation.cancelled = true;
+        setGenerationFeedback('취소 대기 중');
+        return;
+    }
     if (window.IS_GENERATING) {
         window.CANCEL_GENERATION = true; window.GENERATION_QUEUE = []; window.saveQueueToStorage();
         const floatText = document.getElementById('craft-floating-text'); const sideText = document.getElementById('craft-progress-text');
-        if(floatText) floatText.innerText = '취소 중... (작업 중단 완료)'; if(sideText) sideText.innerText = '취소 대기 중...';
+        if(floatText) floatText.innerText = '현재 작업 응답 대기 중'; if(sideText) sideText.innerText = '후속 생성 중지 · 현재 작업 응답 대기';
     }
 }
 
@@ -387,22 +453,17 @@ function renderNovelAiCost(disclosure) {
     const generateButton = document.getElementById('nai-generate-btn');
     const buttonLabel = document.getElementById('nai-generate-label');
 
-    let buttonText = '생성';
-
-    if (disclosure.status === 'paid') {
-        buttonText = `${disclosure.maximum.toLocaleString('ko-KR')} Anlas 사용 · 생성`;
-    } else if (disclosure.status === 'conditional') {
-        buttonText = `최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas · 생성`;
-    } else if (disclosure.status === 'unknown') {
-        buttonText = `최대 ${disclosure.maximum.toLocaleString('ko-KR')} Anlas 가능 · 생성`;
-    }
+    const presentation = getGenerationCostPresentation(disclosure);
 
     syncNovelAiUsageDisplays();
-    if (buttonLabel) buttonLabel.textContent = buttonText;
+    if (buttonLabel) buttonLabel.textContent = presentation.label;
+    const costNotice = document.getElementById('nai-cost-notice');
+    if (costNotice) {
+        costNotice.textContent = presentation.detail;
+        costNotice.classList.toggle('hidden', !presentation.detail);
+    }
     if (generateButton) {
-        generateButton.title = disclosure.requiresConsent
-            ? `예상 Anlas 비용: ${disclosure.minimum.toLocaleString('ko-KR')} ~ ${disclosure.maximum.toLocaleString('ko-KR')}${disclosure.reasons.length ? ` · ${disclosure.reasons.join(' · ')}` : ''}`
-            : '';
+        generateButton.title = presentation.detail;
     }
     lastRenderedNovelAiCostKey = `${disclosure.status}:${disclosure.minimum}:${disclosure.maximum}`;
     return disclosure;
@@ -411,30 +472,37 @@ function renderNovelAiCost(disclosure) {
 export async function refreshNovelAiSubscription(options = {}) {
     const force = options.force === true;
     const age = Date.now() - Number(novelAiSubscriptionState.fetchedAt || 0);
-    if (!force && novelAiSubscriptionState.available && age < NOVELAI_SUBSCRIPTION_CACHE_MS) {
+    if (novelAiSubscriptionRequest) return novelAiSubscriptionRequest;
+    // 실패 직후에도 같은 생성 시작에서 조회를 연속으로 반복하지 않는다.
+    const cacheMs = novelAiSubscriptionState.available ? NOVELAI_SUBSCRIPTION_CACHE_MS : 5_000;
+    if (!force && novelAiSubscriptionState.fetchedAt && age < cacheMs) {
         return novelAiSubscriptionState;
     }
-    if (novelAiSubscriptionRequest) return novelAiSubscriptionRequest;
 
     novelAiSubscriptionState = { ...novelAiSubscriptionState, loading: true };
-    novelAiSubscriptionRequest = fetch('/api/novelai/usage', { cache: 'no-store' })
-        .then(async response => {
-            if (!response.ok) throw new Error(`NovelAI usage HTTP ${response.status}`);
-            const payload = await response.json();
-            novelAiSubscriptionState = {
-                ...payload,
-                available: payload.available === true,
-                loading: false,
-                fetchedAt: Date.now()
-            };
-            return novelAiSubscriptionState;
+    const startedAt = Date.now();
+    logGeneration('checking-cost');
+    novelAiSubscriptionRequest = withGenerationTimeout(NOVELAI_USAGE_TIMEOUT_MS, async signal => {
+        const response = await fetch('/api/novelai/usage', { cache: 'no-store', signal });
+        if (!response.ok) throw await readGenerationHttpError(response);
+        const payload = await response.json();
+        if (signal.aborted) throw new DOMException('구독 조회 시간 초과', 'AbortError');
+        novelAiSubscriptionState = {
+            ...payload,
+            available: payload.available === true,
+            loading: false,
+            fetchedAt: Date.now()
+        };
+        logGeneration('cost-checked', { elapsedMs: Date.now() - startedAt });
+        return novelAiSubscriptionState;
         })
         .catch(error => {
+            logGeneration('cost-check-failed', { elapsedMs: Date.now() - startedAt, status: error.status, upstreamStatus: error.upstreamStatus, requestId: error.requestId, timedOut: error.name === 'AbortError' });
             novelAiSubscriptionState = {
                 available: false,
                 loading: false,
                 fetchedAt: Date.now(),
-                error: error?.message || String(error)
+                error: error.name === 'AbortError' ? '구독 조회 시간 초과' : '구독 조회 실패'
             };
             return novelAiSubscriptionState;
         })
@@ -467,8 +535,13 @@ export async function initNovelAiCostState() {
 
 async function prepareCurrentNovelAiCost(options = {}) {
     const previouslyRenderedCostKey = lastRenderedNovelAiCostKey;
-    await refreshNovelAiSubscription({ force: true });
-    let disclosure = calculateAnlas({ requestCount: options.requestCount });
+    await refreshNovelAiSubscription();
+    let disclosure = calculateNovelAiRepeatedRequestCost({
+        ...(options.input || getCurrentNovelAiCostInput()),
+        requestCount: options.requestCount,
+        subscription: novelAiSubscriptionState
+    });
+    renderNovelAiCost(disclosure);
     if (options.anlasConfirmed === true) {
         disclosure = {
             ...disclosure,
@@ -1014,10 +1087,39 @@ export function setCraftV4PromptRows(rows = []) {
  * 역할: UI 입력값을 NovelAI 생성 작업 배열로 변환해 큐에 적재하고 처리를 시작한다.
  * 매개변수: 없음.
  * 주요 변수: repeatCount, splitPrompts, combinedPrompt, negativeText, width, height, model, charCaptionsArray - 생성 요청 구성값.
- * 반환값: 명시 반환 없음. 이미 생성 중이면 바로 종료한다.
+ * 반환값: 큐에 작업을 넘기면 true, 준비 보류/실패/중복 호출은 false.
  */
 export async function generateNaiImage(options = {}) {
-    if (window.IS_GENERATING) return;
+    if (window.IS_GENERATING || preparation) return false;
+    const attempt = { id: crypto.randomUUID(), cancelled: false, handedOff: false };
+    preparation = attempt;
+    // 준비 중 입력 변경을 막고, 원래 disabled 상태를 종료 시 복원한다.
+    const controls = [...document.querySelectorAll('#sidebar input, #sidebar select, #sidebar textarea, #sidebar button, #inpaint-editor-modal button, #inpaint-editor-modal input')]
+        .filter(node => node.id !== 'nai-cancel-btn');
+    const disabledStates = controls.map(node => node.disabled);
+    try {
+        controls.forEach(node => { node.disabled = true; });
+        setGenerationNotice();
+        resetGenerationProgress();
+        window.updateQueueUI(true);
+        setGenerationFeedback('생성 준비 중');
+        await prepareNaiGeneration(options, attempt);
+        return attempt.handedOff;
+    } catch (error) {
+        setGenerationNotice('생성을 시작하지 못했습니다. 설정과 연결 상태를 확인한 뒤 다시 시도해 주세요.');
+        logGeneration('preparation-failed', { timedOut: error.name === 'AbortError' });
+        return false;
+    } finally {
+        controls.forEach((node, index) => { node.disabled = disabledStates[index]; });
+        preparation = null;
+        if (!attempt.handedOff) {
+            window.updateQueueUI(false);
+            if (attempt.cancelled) setGenerationNotice('생성 준비를 취소했습니다.');
+        }
+    }
+}
+
+async function prepareNaiGeneration(options, attempt) {
     window.saveCraftSettings();
 
     // DOM/저장 키의 batch 명칭은 기존 설정 호환을 위해 유지하지만 실제 동작은 n_samples=1 요청의 순차 반복이다.
@@ -1059,16 +1161,38 @@ export async function generateNaiImage(options = {}) {
     const pType = document.getElementById('precise-type')?.value || "character&style";
     const invertedFidelity = 1.0 - pFidelityUI; 
 
+    const promptRows = readCraftV4PromptRows();
+    const vibeFile = window.VIBE_IMAGE_FILE;
+    const preciseFile = window.PRECISE_IMAGE_FILE;
+    const source = window.INPAINT_IMAGE_SOURCE;
+    const costInput = getCurrentNovelAiCostInput();
+    const inputKey = JSON.stringify(costInput);
+    const inputsUnchanged = () => inputKey === JSON.stringify(getCurrentNovelAiCostInput())
+        && source === window.INPAINT_IMAGE_SOURCE && vibeFile === window.VIBE_IMAGE_FILE && preciseFile === window.PRECISE_IMAGE_FILE;
+    // 네트워크/이미지 처리 전에 준비 UI를 그릴 기회를 준다.
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (attempt.cancelled) return;
+    setGenerationFeedback('비용 확인 중');
+
     const costPreparation = await prepareCurrentNovelAiCost({
+        input: costInput,
         requestCount: repeatCount,
         anlasConfirmed: options.anlasConfirmed === true
     });
-    if (!costPreparation.ready) return;
+    if (attempt.cancelled) return;
+    if (!inputsUnchanged()) { calculateAnlas(); setGenerationNotice('생성 설정이 변경되었습니다. 확인한 뒤 다시 눌러 주세요.'); return; }
+    if (!costPreparation.ready) {
+        setGenerationNotice('예상 비용이 변경되었습니다. 표시된 비용을 확인한 뒤 생성 버튼을 다시 눌러 주세요.');
+        return;
+    }
     const approvedAnlasPerRequest = Math.ceil(
         costPreparation.disclosure.maximum / Math.max(repeatCount, 1)
     );
 
-    window.updateQueueUI(true);
+    setGenerationFeedback('이미지 준비 중');
+    logGeneration('preprocessing');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    if (attempt.cancelled) return;
 
     let currentBaseSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : parseInt(baseSeedInput);
 
@@ -1079,17 +1203,13 @@ export async function generateNaiImage(options = {}) {
      * 반환값: base64 JPEG 문자열을 resolve하는 Promise.
      */
     const processVibeImage = async (file) => {
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => {
-                let w = img.width, h = img.height; const max = 1024;
-                if (w > max || h > max) { if (w > h) { h = Math.round(h * (max / w)); w = max; } else { w = Math.round(w * (max / h)); h = max; } }
-                w = Math.round(w / 64) * 64; h = Math.round(h / 64) * 64;
-                if (w === 0) w = 64; if (h === 0) h = 64;
-                const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
-                canvas.getContext('2d').drawImage(img, 0, 0, w, h); resolve(canvas.toDataURL('image/jpeg', 0.9).split(',')[1]);
-            };
-            img.onerror = reject; img.src = URL.createObjectURL(file);
+        return renderReferenceImage(file, img => {
+            let w = img.width, h = img.height; const max = 1024;
+            if (w > max || h > max) { if (w > h) { h = Math.round(h * (max / w)); w = max; } else { w = Math.round(w * (max / h)); h = max; } }
+            w = Math.round(w / 64) * 64; h = Math.round(h / 64) * 64;
+            if (w === 0) w = 64; if (h === 0) h = 64;
+            const canvas = document.createElement('canvas'); canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h); return canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
         });
     };
 
@@ -1100,18 +1220,14 @@ export async function generateNaiImage(options = {}) {
      * 반환값: base64 JPEG 문자열을 resolve하는 Promise.
      */
     const processDirectorImage = async (file) => {
-        return new Promise((resolve, reject) => {
-            const img = new Image();
-            img.onload = () => {
-                let targetW = 1472, targetH = 1472; const ratio = img.width / img.height;
-                if (ratio > 1.2) { targetW = 1536; targetH = 1024; } else if (ratio < 0.8) { targetW = 1024; targetH = 1536; } 
-                const canvas = document.createElement('canvas'); canvas.width = targetW; canvas.height = targetH;
-                const ctx = canvas.getContext('2d');
-                let drawW = targetW, drawH = targetH, offsetX = 0, offsetY = 0;
-                if (ratio > (targetW / targetH)) { drawH = targetW / ratio; offsetY = (targetH - drawH) / 2; } else { drawW = targetH * ratio; offsetX = (targetW - drawW) / 2; }
-                ctx.drawImage(img, offsetX, offsetY, drawW, drawH); resolve(canvas.toDataURL('image/jpeg', 0.9).split(',')[1]);
-            };
-            img.onerror = reject; img.src = URL.createObjectURL(file);
+        return renderReferenceImage(file, img => {
+            let targetW = 1472, targetH = 1472; const ratio = img.width / img.height;
+            if (ratio > 1.2) { targetW = 1536; targetH = 1024; } else if (ratio < 0.8) { targetW = 1024; targetH = 1536; }
+            const canvas = document.createElement('canvas'); canvas.width = targetW; canvas.height = targetH;
+            const ctx = canvas.getContext('2d');
+            let drawW = targetW, drawH = targetH, offsetX = 0, offsetY = 0;
+            if (ratio > (targetW / targetH)) { drawH = targetW / ratio; offsetY = (targetH - drawH) / 2; } else { drawW = targetH * ratio; offsetX = (targetW - drawW) / 2; }
+            ctx.drawImage(img, offsetX, offsetY, drawW, drawH); return canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
         });
     };
 
@@ -1124,15 +1240,20 @@ export async function generateNaiImage(options = {}) {
         }
         : null;
     try {
-        if (modelProfile.supportsVibeTransfer && window.VIBE_IMAGE_FILE) preloadedVibeBase64 = await processVibeImage(window.VIBE_IMAGE_FILE);
-        if (modelProfile.supportsPreciseReference && window.PRECISE_IMAGE_FILE) preloadedDirectorBase64 = await processDirectorImage(window.PRECISE_IMAGE_FILE);
+        if (modelProfile.supportsVibeTransfer && vibeFile) preloadedVibeBase64 = await processVibeImage(vibeFile);
+        if (attempt.cancelled) return;
+        if (modelProfile.supportsPreciseReference && preciseFile) preloadedDirectorBase64 = await processDirectorImage(preciseFile);
+        if (attempt.cancelled) return;
         if (window.INPAINT_IMAGE_SOURCE && window.prepareInpaintPayload) {
-            inpaintPayload = await window.prepareInpaintPayload(width, height);
+            inpaintPayload = await withGenerationTimeout(30_000, () => window.prepareInpaintPayload(width, height));
         }
-    } catch (err) { if (window.logFlowToStorage) window.logFlowToStorage('inpaint_generate_prepare_failed', { width, height, model, source: inpaintSource, error: err }); alert('이미지 전처리 실패: ' + err.message); window.updateQueueUI(false); return; }
+    } catch (err) { logGeneration('preprocessing-failed', { model, width, height }); setGenerationNotice('이미지 전처리에 실패했습니다. 이미지와 마스크를 확인한 뒤 다시 시도해 주세요.'); return; }
+    if (attempt.cancelled) return;
+    if (!inputsUnchanged()) { calculateAnlas(); setGenerationNotice('생성 설정이 변경되었습니다. 확인한 뒤 다시 눌러 주세요.'); return; }
+    logGeneration('preprocessed');
 
     let charCaptionsArray = []; let negCharCaptionsArray = [];
-    readCraftV4PromptRows().forEach(row => {
+    promptRows.forEach(row => {
         const mergedCharPrompt = [row.subject, row.clothing, row.expression, row.action].filter(v => v.length > 0).join(', ');
         if (mergedCharPrompt) charCaptionsArray.push({ char_caption: mergedCharPrompt, centers: [{"x": 0.5, "y": 0.5}] });
         if (row.negative) negCharCaptionsArray.push({ char_caption: row.negative, centers: [{"x": 0.5, "y": 0.5}] });
@@ -1156,7 +1277,10 @@ export async function generateNaiImage(options = {}) {
         let loopSeed = isRandomSeed ? Math.floor(Math.random() * 4294967296) : ((currentBaseSeed + i) % 4294967296);
         window.GENERATION_QUEUE.push({ id: Date.now() + i, index: i + 1, total: repeatCount, prompt: combinedPrompt, splitPrompts: splitPrompts, negative: negativeText, userNegativePrompt, qualityTags: promptDefaults.qualityTags, defaultNegativePrompt: promptDefaults.defaultNegativePrompt, useQualityTags: promptDefaults.useQualityTags, useDefaultNegativePrompt: promptDefaults.useDefaultNegativePrompt, width: width, height: height, model: model, steps: steps, sampler: sampler, scale: scale, sm, smDyn, seed: loopSeed, approvedAnlasPerRequest, preloadedVibeBase64: preloadedVibeBase64, preloadedDirectorBase64: preloadedDirectorBase64, inpaintPayload: inpaintPayload, inpaintSource: inpaintPayload ? inpaintSource : null, charCaptionsArray: charCaptionsArray, negCharCaptionsArray: negCharCaptionsArray, vibeInfo, vibeStrength, pStrength, invertedFidelity, pType, outputPrefix, outputFileName: options.outputFileName || '', planner: options.planner || null, estimatedDurationMs });
     }
-    window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false; window.processNextQueueItem();
+    window.saveQueueToStorage(); window.IS_GENERATING = true; window.CANCEL_GENERATION = false;
+    attempt.handedOff = true;
+    // 큐 소유권을 넘긴 뒤 준비 finally가 실행 UI를 숨기지 않는다.
+    void window.processNextQueueItem();
 }
 
 /**
@@ -1177,10 +1301,13 @@ export async function processNextQueueItem() {
     const task = window.GENERATION_QUEUE[0]; const totalCount = task.total; const currentIdx = task.index;
     const repeatStatus = document.getElementById('nai-batch-status'); if (repeatStatus) repeatStatus.innerText = `${currentIdx}/${totalCount}`;
 
-    const sideBar = document.getElementById('craft-progress-bar'); const sideText = document.getElementById('craft-progress-text'); const sidePercent = document.getElementById('craft-progress-percent');
-    const floatBar = document.getElementById('craft-floating-bar'); const floatText = document.getElementById('craft-floating-text'); const floatPercent = document.getElementById('craft-floating-percent');
+    const sideBar = document.getElementById('craft-progress-bar'); const sidePercent = document.getElementById('craft-progress-percent');
+    const floatBar = document.getElementById('craft-floating-bar'); const floatPercent = document.getElementById('craft-floating-percent');
 
-    const taskStartedAtMs = Date.now();
+    let taskStartedAtMs = Date.now();
+    let stage = 'checking-cost';
+    let requestSent = false;
+    let resultReceived = false;
     let progress = 0; let expectedMs = Number(task.estimatedDurationMs || 0) || CRAFT_FIXED_GENERATION_ESTIMATE_MS;
     const updateInterval = 100; const increment = 100 / (expectedMs / updateInterval);
     
@@ -1191,23 +1318,26 @@ export async function processNextQueueItem() {
      * 반환값: 명시 반환 없음.
      */
     const updateProgress = (txt, prog) => {
-        const displayText = prog !== null && prog > 0 && prog < 100 && !txt.includes('완료') && !txt.includes('실패')
+        const displayText = stage === 'requesting' && prog !== null && prog > 0 && prog < 100
             ? appendRemainingEstimate(txt, task, prog, taskStartedAtMs)
             : txt;
         const fullMsg = `[${currentIdx}/${totalCount}] ${displayText}`;
-        if (sideText) sideText.innerText = fullMsg; if (floatText) floatText.innerText = fullMsg;
+        setGenerationFeedback(txt, fullMsg);
         if (prog !== null) {
             const pct = `${Math.floor(prog)}%`;
-            if (sideBar) sideBar.style.width = pct; if (sidePercent) sidePercent.innerText = pct;
-            if (floatBar) floatBar.style.width = pct; if (floatPercent) floatPercent.innerText = pct;
+            const label = stage === 'requesting' ? `약 ${pct}` : pct;
+            if (sideBar) sideBar.style.width = pct; if (sidePercent) sidePercent.innerText = label;
+            if (floatBar) floatBar.style.width = pct; if (floatPercent) floatPercent.innerText = label;
         }
     };
 
-    updateProgress('초기화 중...', 0);
-    const progressTimer = setInterval(() => { progress += increment; if (progress > 95) progress = 95; updateProgress('추론 진행 중...', progress); }, updateInterval);
+    resetGenerationProgress();
+    updateProgress('비용 확인 중', null);
+    let progressTimer;
 
     try {
-        await refreshNovelAiSubscription({ force: true });
+        await refreshNovelAiSubscription();
+        if (window.CANCEL_GENERATION) { window.processNextQueueItem(); return; }
         const normalizedModel = normalizeNovelAiModelId(task.model);
         const profile = getNovelAiModelProfile(normalizedModel);
         const base = buildNovelAiBaseParameters({
@@ -1236,16 +1366,11 @@ export async function processNextQueueItem() {
         });
         const approvedCost = Math.max(0, Number(task.approvedAnlasPerRequest) || 0);
         if (currentCost.total > approvedCost) {
-            renderNovelAiCost({
-                status: 'paid',
-                minimum: currentCost.total,
-                maximum: currentCost.total,
-                requiresConsent: true,
-                reasons: currentCost.reasons,
-                profile
-            });
+            // 큐 실행 중 모델을 바꾸었어도 이전 작업의 모델 문구를 복원하지 않는다.
+            calculateAnlas();
             clearInterval(progressTimer);
             updateProgress('예상 비용이 변경되어 생성을 중지했습니다.', 0);
+            setGenerationNotice(`진행 작업의 예상 비용이 ${currentCost.total.toLocaleString('ko-KR')} Anlas로 변경되어 중지했습니다. 설정과 비용을 확인한 뒤 다시 실행해 주세요.`);
             const generateButton = document.getElementById('nai-generate-btn');
             if (generateButton) generateButton.title = '갱신된 Anlas 비용을 확인한 뒤 다시 눌러 주세요.';
             window.CANCEL_GENERATION = true;
@@ -1294,17 +1419,34 @@ export async function processNextQueueItem() {
             if (requestBody.parameters.v4_prompt) requestBody.parameters.v4_prompt.use_coords = true;
         }
 
-        const res = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(requestBody) });
-        if (!res.ok) {
-            let errStr = "서버 통신 오류 발생"; const rawText = await res.text();
-            try { const errJson = JSON.parse(rawText); errStr = errJson.error || errJson.message || rawText; } catch(e) { errStr = rawText; }
-            throw new Error(`[HTTP ${res.status}] ${errStr}`);
-        }
+        stage = 'requesting';
+        taskStartedAtMs = Date.now();
+        const requestId = crypto.randomUUID();
+        task.requestId = requestId;
+        // 직렬화 실패는 요청 전 오류로 분류한다.
+        const requestJson = JSON.stringify(requestBody);
+        task.requestStarted = true;
+        window.saveQueueToStorage();
+        updateProgress('생성 응답 대기 중', 0);
+        progressTimer = setInterval(() => { progress = Math.min(95, progress + increment); updateProgress('생성 응답 대기 중', progress); }, updateInterval);
+        logGeneration(stage, { taskId: task.id, requestId });
+        requestSent = true;
+        const blob = await withGenerationTimeout(NOVELAI_GENERATION_TIMEOUT_MS, async signal => {
+            const res = await fetch('/api/generate', { method: 'POST', headers: { 'Content-Type': 'application/json', 'X-Request-Id': requestId }, body: requestJson, signal });
+            if (signal.aborted) throw new DOMException('생성 응답 시간 초과', 'AbortError');
+            logGeneration('response-received', { taskId: task.id, requestId, status: res.status, elapsedMs: Date.now() - taskStartedAtMs });
+            clearInterval(progressTimer);
+            if (!res.ok) throw await readGenerationHttpError(res);
+            stage = 'receiving';
+            updateProgress('결과 수신 중', 96);
+            return await res.blob();
+        });
+        resultReceived = true;
         void refreshNovelAiSubscription({ force: true });
 
-        clearInterval(progressTimer); updateProgress('다운로드 완료! 파일 압축 해제 중...', 98);
-
-        const blob = await res.blob();
+        stage = 'unpacking';
+        logGeneration(stage, { taskId: task.id, requestId: task.requestId });
+        clearInterval(progressTimer); updateProgress('압축 해제 중', 98);
         if (!window.JSZip) throw new Error("압축 해제 라이브러리를 찾을 수 없습니다.");
         const zip = await JSZip.loadAsync(blob);
         const filename = Object.keys(zip.files)[0];
@@ -1323,7 +1465,7 @@ export async function processNextQueueItem() {
         const rawFileName = `nai_${dateString}_${Date.now().toString().slice(-4)}.png`;
         const generatedFile = new File([fileData], rawFileName, { type: "image/png" });
         
-        updateProgress('최적화 및 임시 저장소 업로드 중...', 99);
+        updateProgress('이미지 준비 중', 98);
         let extractedMetadata = await window.extractMetadata(generatedFile);
         if (!extractedMetadata) extractedMetadata = {};
         const appliedDefaultNegativePrompt = task.useDefaultNegativePrompt === false ? '' : task.defaultNegativePrompt;
@@ -1346,8 +1488,12 @@ export async function processNextQueueItem() {
         let uploadFileName = rawFileName;
         let uploadContentType = 'image/png';
         if (task.planner) {
+            stage = 'converting';
+            logGeneration(stage, { taskId: task.id, requestId: task.requestId });
+            updateProgress('이미지 변환 중', 99);
+            await new Promise(resolve => setTimeout(resolve, 0));
             if (!window.convertToWebP) throw new Error('WebP 변환 함수를 찾을 수 없습니다.');
-            uploadFile = await window.convertToWebP(generatedFile);
+            uploadFile = await withGenerationTimeout(30_000, () => window.convertToWebP(generatedFile));
             uploadFileName = rawFileName.replace(/\.png$/i, '.webp');
             if (uploadFile.name !== uploadFileName) uploadFile = new File([uploadFile], uploadFileName, { type: 'image/webp', lastModified: Date.now() });
             uploadContentType = 'image/webp';
@@ -1364,15 +1510,23 @@ export async function processNextQueueItem() {
             uploadHeaders['X-Planner-Asset-Id'] = encodeURIComponent(task.planner.assetId || '');
             uploadHeaders['X-Planner-Generation-Sequence'] = String(task.planner.generationSequence || 0);
         }
-        const buffer = await new Promise((resolve, reject) => { const r = new FileReader(); r.onload = () => resolve(r.result); r.onerror = () => reject(new Error("FileReader 에러")); r.readAsArrayBuffer(uploadFile); });
-        const uploadRes = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: uploadHeaders, body: buffer, cache: 'no-store' });
-        if (!uploadRes.ok) throw new Error("서버 임시 저장소 동기화에 실패했습니다.");
+        stage = 'uploading';
+        logGeneration(stage, { taskId: task.id, requestId: task.requestId });
+        updateProgress('이미지 저장 중', 99);
+        const buffer = await uploadFile.arrayBuffer();
+        await withGenerationTimeout(NOVELAI_GENERATION_TIMEOUT_MS, async signal => {
+            const uploadRes = await fetch('/api/upload?_t=' + Date.now(), { method: 'PUT', headers: uploadHeaders, body: buffer, cache: 'no-store', signal });
+            if (!uploadRes.ok) throw await readGenerationHttpError(uploadRes);
+            await uploadRes.body?.cancel();
+        });
 
         if (extractedMetadata && !task.planner?.compact) {
-            await window.saveMetadataToDB(outputPrefix, uploadFileName, extractedMetadata);
+            await withGenerationTimeout(NOVELAI_GENERATION_TIMEOUT_MS, () => window.saveMetadataToDB(outputPrefix, uploadFileName, extractedMetadata));
         }
 
-        updateProgress('완료!', 100);
+        stage = 'completed';
+        logGeneration(stage, { taskId: task.id, requestId: task.requestId, elapsedMs: Date.now() - taskStartedAtMs });
+        updateProgress('생성 완료', 100);
         if (outputPrefix === window.TEMP_FOLDER) window.TEMP_IMAGES.unshift({ key: tempKey, uploaded: new Date().toISOString(), inpaintSourceKey: task.inpaintSource?.key || '' });
         
         if (outputPrefix === window.TEMP_FOLDER && window.TEMP_IMAGES.length > 100) {
@@ -1396,12 +1550,19 @@ export async function processNextQueueItem() {
         window.processNextQueueItem(); 
 
     } catch (e) {
-        clearInterval(progressTimer); console.error('반복 생성 중 에러:', e);
-        updateProgress(`생성 실패: ${e.message}`, 0);
-        if (window.logErrorToStorage) window.logErrorToStorage('이미지 생성 큐 처리 중 에러', e);
-        window.dispatchEvent(new CustomEvent('imggul:generation-task-failed', { detail: { task, error: e.message } }));
-        window.GENERATION_QUEUE.shift(); window.saveQueueToStorage();
-        await new Promise(r => setTimeout(r, 2000));
+        clearInterval(progressTimer);
+        const resultUnknown = requestSent && !resultReceived && e.resultUnknown !== false;
+        const message = resultUnknown
+            ? '응답을 확인하지 못했습니다. 생성이 처리되었을 수 있습니다. 결과를 확인한 뒤 다시 실행해 주세요.'
+            : !requestSent ? '생성을 시작하지 못했습니다. 비용과 연결 상태를 확인해 주세요.'
+                : resultReceived ? '생성 결과 처리 또는 저장에 실패했습니다. 저장 상태를 확인해 주세요.'
+                    : '생성 요청이 거부되었습니다. 설정과 구독 상태를 확인해 주세요.';
+        updateProgress(resultUnknown ? '생성 결과 확인 필요' : '이미지 처리 실패', 0);
+        setGenerationNotice(`${message}${e.status ? ` (HTTP ${e.status})` : ''}${task.requestId ? ` · 요청 ID: ${task.requestId}` : ''}`);
+        logGeneration('failed', { failedStage: stage, taskId: task.id, requestId: e.requestId || task.requestId, status: e.status, upstreamStatus: e.upstreamStatus, resultUnknown, timedOut: e.name === 'AbortError', elapsedMs: Date.now() - taskStartedAtMs });
+        window.dispatchEvent(new CustomEvent('imggul:generation-task-failed', { detail: { task, error: message, stage, resultUnknown } }));
+        // 결과 불확실 상태뿐 아니라 처리 실패도 후속 생성으로 가리지 않는다.
+        window.CANCEL_GENERATION = true;
         window.processNextQueueItem();
     } finally { clearInterval(progressTimer); }
 }

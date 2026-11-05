@@ -1,4 +1,5 @@
 // functions/[[path]].js
+import { proxyNovelAi } from "../src/novelai-proxy.js";
 import {
     jsonResponse,
     writeBackgroundErrorLog
@@ -2681,77 +2682,13 @@ export async function onRequest(context) {
     if (path === "/api/novelai/usage" && method === "GET") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         if (!env.NOVELAI_TOKEN) return jsonResponse({ available: false, error: 'NovelAI token is not configured' }, { status: 503 });
-        try {
-            const subscriptionRes = await fetch("https://image.novelai.net/user/subscription", {
-                headers: {
-                    "Authorization": `Bearer ${env.NOVELAI_TOKEN}`,
-                    "Accept": "application/json",
-                    "Origin": "https://novelai.net",
-                    "Referer": "https://novelai.net/"
-                }
-            });
-            if (!subscriptionRes.ok) {
-                return jsonResponse({ available: false }, { status: 502 });
-            }
-
-            const subscription = await subscriptionRes.json();
-            const fixed = Number(subscription?.trainingStepsLeft?.fixedTrainingStepsLeft);
-            const purchased = Number(subscription?.trainingStepsLeft?.purchasedTrainingSteps);
-            const hasAnlasBalance = Number.isFinite(fixed) && Number.isFinite(purchased);
-            return jsonResponse({
-                available: true,
-                active: subscription?.active === true,
-                tier: Number(subscription?.tier) || 0,
-                usage: subscription?.usage ? {
-                    percent: Number(subscription.usage.percent),
-                    isNegative: subscription.usage.isNegative === true,
-                    timeUntilNextPercent: Number(subscription.usage.timeUntilNextPercent)
-                } : null,
-                anlas: hasAnlasBalance ? {
-                    subscription: fixed,
-                    paid: purchased,
-                    total: fixed + purchased
-                } : null
-            });
-        } catch {
-            return jsonResponse({ available: false }, { status: 502 });
-        }
+        return proxyNovelAi(request, env.NOVELAI_TOKEN, true);
     }
 
     if (path === "/api/generate" && method === "POST") {
-        if (!isAdmin) return new Response(JSON.stringify({ error: 'Unauthorized' }), { status: 403 });
-        if (!env.NOVELAI_TOKEN) return new Response(JSON.stringify({ error: 'Novel AI API 토큰이 설정되지 않았습니다.' }), { status: 500 });
-        
-        try {
-            const naiPayload = await request.json();
-            const naiRes = await fetch("https://image.novelai.net/ai/generate-image", {
-                method: "POST",
-                headers: {
-                    "Authorization": `Bearer ${env.NOVELAI_TOKEN}`,
-                    "Content-Type": "application/json",
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-                    "Accept": "application/x-zip-compressed",
-                    "Origin": "https://novelai.net",
-                    "Referer": "https://novelai.net/"
-                },
-                body: JSON.stringify(naiPayload)
-            });
-
-            if (!naiRes.ok) {
-                const errText = await naiRes.text();
-                throw new Error(`[${naiRes.status}] ${errText}`);
-            }
-
-            const buffer = await naiRes.arrayBuffer();
-            return new Response(buffer, {
-                headers: {
-                    "Content-Type": "application/x-zip-compressed",
-                    "Content-Disposition": 'attachment; filename="image.zip"'
-                }
-            });
-        } catch (e) {
-            return new Response(JSON.stringify({ error: e.message }), { status: 500 });
-        }
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        if (!env.NOVELAI_TOKEN) return jsonResponse({ error: 'Novel AI API 토큰이 설정되지 않았습니다.', code: 'NOVELAI_NOT_CONFIGURED', stage: 'preparing' }, { status: 503 });
+        return proxyNovelAi(request, env.NOVELAI_TOKEN);
     }
 
     if (path === "/api/generate-stream" && method === "POST") {

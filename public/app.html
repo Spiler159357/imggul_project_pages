@@ -382,18 +382,20 @@
                         <input type="number" id="nai-batch-count" value="1" min="1" max="100" class="w-10 bg-transparent text-sm font-bold text-indigo-600 dark:text-indigo-400 focus:outline-none text-center">
                         <span class="text-xs font-bold text-gray-500 dark:text-gray-400">회</span>
                     </div>
-                    <button id="nai-generate-btn" onclick="window.generateNaiImage()" class="flex-1 bg-indigo-600 text-white py-3.5 rounded-xl shadow-md hover:bg-indigo-700 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
-                        <i data-lucide="sparkles" class="w-5 h-5"></i> <span id="nai-generate-label">생성</span>
+                    <button id="nai-generate-btn" onclick="window.generateNaiImage()" class="flex-1 min-w-0 bg-indigo-600 text-white px-2 py-3.5 rounded-xl shadow-md hover:bg-indigo-700 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
+                        <i data-lucide="sparkles" class="w-5 h-5 flex-shrink-0"></i> <span id="nai-generate-label" class="min-w-0 break-words">생성</span>
                     </button>
                     <button id="nai-cancel-btn" onclick="window.cancelNaiGeneration()" class="hidden flex-1 bg-red-500 text-white py-3.5 rounded-xl shadow-md hover:bg-red-600 transition flex items-center justify-center gap-2 font-bold text-sm sm:text-base tracking-wide">
                         <i data-lucide="stop-circle" class="w-5 h-5"></i> 중지 (<span id="nai-batch-status">0/0</span>)
                     </button>
                 </div>
 
-                <div id="craft-progress-container" class="hidden flex-col items-center w-full mt-2 px-1">
-                    <div class="flex justify-between w-full text-[10px] font-bold text-gray-500 mb-1.5">
-                        <span id="craft-progress-text">준비 중...</span>
-                        <span id="craft-progress-percent">0%</span>
+                <p id="nai-cost-notice" class="hidden text-xs text-amber-700 dark:text-amber-300 break-words mb-2" aria-live="polite"></p>
+                <p id="craft-generation-notice" class="hidden text-xs text-amber-700 dark:text-amber-300 break-words mb-2" role="status"></p>
+                <div id="craft-progress-container" class="hidden flex-col items-center w-full min-w-0 mt-2 px-1">
+                    <div class="flex justify-between gap-2 w-full min-w-0 text-[10px] font-bold text-gray-500 mb-1.5">
+                        <span id="craft-progress-text" class="min-w-0 truncate">준비 중...</span>
+                        <span id="craft-progress-percent" class="flex-shrink-0">0%</span>
                     </div>
                     <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden shadow-inner">
                         <div id="craft-progress-bar" class="bg-indigo-600 h-full rounded-full transition-all duration-200 ease-out" style="width: 0%"></div>
@@ -545,7 +547,11 @@
                         </div>
                     </div>
 
-                    <div id="craft-progress-overlay" class="hidden absolute bottom-20 right-6 z-40 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md flex-row items-center p-4 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-72 transition-all">
+                    <div id="craft-result-notice" class="hidden absolute bottom-20 right-3 sm:right-6 z-40 w-80 max-w-[calc(100%_-_1.5rem)] p-3 rounded-xl border border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-gray-800 shadow-xl">
+                        <p id="craft-result-notice-text" class="text-xs text-amber-800 dark:text-amber-200 break-words" role="status"></p>
+                        <button type="button" onclick="window.dismissGenerationNotice()" class="mt-2 px-2 py-1 text-xs font-bold text-amber-800 dark:text-amber-200">닫기</button>
+                    </div>
+                    <div id="craft-progress-overlay" class="hidden absolute bottom-20 right-3 sm:right-6 z-40 bg-white/90 dark:bg-gray-800/90 backdrop-blur-md flex-row items-center p-4 rounded-2xl shadow-2xl border border-gray-200 dark:border-gray-700 w-72 max-w-[calc(100%_-_1.5rem)] transition-all">
                         <div class="relative w-10 h-10 mr-4 flex-shrink-0">
                             <i data-lucide="sparkles" class="w-5 h-5 text-indigo-500 absolute top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 animate-pulse"></i>
                             <svg class="animate-spin w-full h-full text-indigo-200 dark:text-indigo-900/50" viewBox="0 0 24 24">
@@ -553,12 +559,17 @@
                                 <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                             </svg>
                         </div>
-                        <div class="flex-1 w-full">
+                        <div class="flex-1 min-w-0">
                             <div class="flex justify-between items-center mb-1">
-                                <h3 class="text-sm font-bold text-gray-800 dark:text-white leading-none">생성 진행 중</h3>
-                                <span id="craft-floating-percent" class="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">0%</span>
+                                <h3 class="min-w-0 truncate text-sm font-bold text-gray-800 dark:text-white leading-none">생성 진행 현황</h3>
+                                <span id="craft-floating-percent" class="flex-shrink-0 ml-2 text-[10px] font-bold text-indigo-600 dark:text-indigo-400">0%</span>
                             </div>
                             <p id="craft-floating-text" class="text-[10px] text-gray-500 dark:text-gray-400 mb-2 font-mono truncate w-full">모델 추론 진행 중</p>
+                            <details class="text-[10px] text-gray-500 dark:text-gray-400 mb-2">
+                                <summary class="cursor-pointer">진행 상세</summary>
+                                <p id="craft-progress-detail" class="break-words max-h-24 overflow-y-auto"></p>
+                            </details>
+                            <span id="craft-progress-announcement" class="sr-only" role="status" aria-live="polite"></span>
                             <div class="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5 overflow-hidden">
                                 <div id="craft-floating-bar" class="bg-indigo-600 h-full rounded-full transition-all duration-200 ease-out" style="width: 0%"></div>
                             </div>
@@ -1289,6 +1300,6 @@
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=prompt-tab-20261005a"></script>
+    <script type="module" src="/js/main.js?v=generation-feedback-20261105a"></script>
 </body>
 </html>
