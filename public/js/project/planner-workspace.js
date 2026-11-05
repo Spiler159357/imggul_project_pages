@@ -1,4 +1,4 @@
-import { escapeHtml as h, getActiveProject, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, loadProjects, loadCharacterFiles, isVisibleProjectChildFolder } from './shared.js?v=planner-workspace-20261106b';
+import { escapeHtml as h, getActiveProject, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, loadProjects, loadCharacterFiles, isVisibleProjectChildFolder } from './shared.js?v=planner-workspace-20261106c';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, zoom: 1, picker: null, library: null, operation: 0 };
@@ -15,7 +15,7 @@ export function capturePlannerEditorDraft() {
     drafts.set(draftKey(), {
         // V4 rows are restored through their structured values: their DOM indices
         // can change after empty rows are normalized or a character is removed.
-        values: [...modal.querySelectorAll('input[id],textarea[id]')].filter(el => !el.id.startsWith('planner-plan-v4-')).map(el => [el.id, el.value, el.checked]),
+        values: [...modal.querySelectorAll('input[id],select[id],textarea[id]')].filter(el => !el.id.startsWith('planner-plan-v4-')).map(el => [el.id, el.value, el.checked]),
         variants: [...modal.querySelectorAll('[data-planner-plan-situation-variant]')].map(el => [el.value, el.checked]),
         rows: window.readPlannerPlanV4PromptRows?.() || [],
         dirtyRows: modal.querySelector('#planner-plan-v4-rows')?.dataset.dirty === 'true',
@@ -26,7 +26,7 @@ export function restorePlannerEditorDraft() {
     const draft = drafts.get(draftKey());
     if (!draft) return;
     window.setPlannerPlanV4PromptRows?.(draft.rows);
-    draft.values.forEach(([id, value, checked]) => { const el = document.getElementById(id); if (el) { el.value = value; el.checked = checked; } });
+    draft.values.forEach(([id, value, checked]) => { const el = document.getElementById(id); if (el) { el.value = value; if (el.type === 'checkbox' || el.type === 'radio') el.checked = checked; } });
     document.querySelectorAll('[data-planner-plan-situation-variant]').forEach(el => el.checked = draft.variants.find(([value]) => value === el.value)?.[1] || false);
     const rows = document.getElementById('planner-plan-v4-rows');
     if (rows) rows.dataset.dirty = String(draft.dirtyRows);
@@ -102,6 +102,10 @@ export function renderPlannerWorkspaceCard({ image, item, title, fallbackText, s
 
 export function renderPlannerOption(id, label, value, options, attrs = '') {
     const selected = options.find(([v]) => String(v) === String(value));
+    const dropdownIds = ['planner-plan-character-variant', 'planner-plan-res', 'planner-plan-background-variant'];
+    if (dropdownIds.includes(id)) {
+        return `<label class="pw-option"><span>${h(label)}</span><select id="${h(id)}" class="pw-select" ${attrs}>${options.map(([optionValue, optionLabel]) => `<option value="${h(optionValue)}" ${String(optionValue) === String(value) ? 'selected' : ''}>${h(optionLabel)}</option>`).join('')}</select></label>`;
+    }
     return `<div class="pw-option"><span>${h(label)}</span><input type="hidden" id="${h(id)}" value="${h(value)}" ${attrs}>
         <button type="button" class="pw-button" data-pw-action="options" data-input="${h(id)}" data-options="${h(JSON.stringify(options))}" aria-haspopup="dialog">${h(selected?.[1] || value)}</button></div>`;
 }
@@ -125,10 +129,10 @@ export function renderPlannerWorkspaceReview(item, meta, blocked) {
         <div class="pw-review-tools">${button('‹ 플랜', 'previous-plan', 'aria-label="이전 플랜"')}${button('플랜 ›', 'next-plan', 'aria-label="다음 플랜"')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}"`)}
         ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}${reference ? button('비교 해제', 'clear-reference') : ''}
         ${button('−', 'zoom-out', 'aria-label="축소"')}<span data-pw-zoom>${Math.round(ui.zoom * 100)}%</span>${button('+', 'zoom-in', 'aria-label="확대"')}</div>
-        <div class="pw-images ${ui.compare ? 'pw-pair' : ''}" style="--pw-zoom:${ui.zoom}">
+        <div class="pw-review-stage"><div class="pw-images ${ui.compare ? 'pw-pair' : ''}" style="--pw-zoom:${ui.zoom}">
         ${ui.compare ? `<figure><figcaption>${h(reference?.name || '비교 이미지 미선택')}</figcaption>${reference ? `<img src="${h(reference.url)}" alt="선택한 비교 이미지">` : button('비교 이미지 선택', 'reference')}</figure>` : ''}
         <figure><figcaption>후보 ${index + 1}${item.selectedImage === ui.preview ? ' · 선택됨' : ''}</figcaption>${image ? `<img src="${h(image)}" alt="확대 후보 ${index + 1}" draggable="false">` : '<p>생성된 이미지가 없습니다.</p>'}</figure></div>
-        <div class="pw-thumbnails" aria-label="전체 후보 이미지">${images.map((key, i) => `<button type="button" data-pw-action="preview" data-key="${h(key)}" aria-label="후보 ${i + 1} 확대" aria-pressed="${ui.preview === key}" class="${item.selectedImage === key ? 'pw-picked' : ''}"><img src="${h(getAssetUrl(key))}" alt="" loading="lazy" draggable="false"><span>${item.selectedImage === key ? '✓ ' : ''}${i + 1}</span></button>`).join('')}</div>
+        <div class="pw-thumbnails" aria-label="전체 후보 이미지">${images.map((key, i) => `<button type="button" data-pw-action="preview" data-key="${h(key)}" aria-label="후보 ${i + 1} 확대${item.selectedImage === key ? ' · 선택됨' : ''}" aria-pressed="${ui.preview === key}" class="${item.selectedImage === key ? 'pw-picked' : ''}"><img src="${h(getAssetUrl(key))}" alt="" loading="lazy" draggable="false">${item.selectedImage === key ? '<span class="pw-thumbnail-check" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div></div>
         <footer class="pw-review-footer"><div>${button('‹ 이전', 'previous', index <= 0 ? 'disabled' : '')}${button('다음 ›', 'next', index >= images.length - 1 ? 'disabled' : '')}<label>번호 <input data-pw-jump type="number" min="1" max="${images.length}" value="${index + 1}"></label>${button('이동', 'jump')}</div>
         <div>${button('다시 생성', 'regenerate', `data-situation="${h(item.situationId)}"`)}${button('이 후보 선택', 'select', !ui.preview || item.selectedImage === ui.preview ? 'disabled' : '')}<button id="planner-result-confirm-button" type="button" class="pw-button pw-primary" data-pw-action="confirm" data-situation="${h(item.situationId)}" ${!item.selectedImage || blocked ? 'disabled' : ''}>최종 선택 완료</button></div></footer>
     </section></div>`;
@@ -314,7 +318,7 @@ document.addEventListener('keydown', event => {
     if (!modal) return;
     if (event.key === 'Escape') { event.preventDefault(); dismiss[modal.closest(dialogs)?.dataset.pwDialog]?.(); return; }
     if (event.key === 'Tab') {
-        const focusable = [...modal.querySelectorAll('button,input,textarea,a[href]')].filter(el => !el.disabled && el.getClientRects().length);
+        const focusable = [...modal.querySelectorAll('button,input,select,textarea,a[href]')].filter(el => !el.disabled && el.getClientRects().length);
         const first = focusable[0], last = focusable.at(-1);
         if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
         else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }

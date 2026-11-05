@@ -34,12 +34,7 @@
 .dark .pw-images figure{background:#171717}
 .pw-images figcaption{flex:none;font-size:11px;padding:5px;overflow-wrap:anywhere}
 .pw-images img{display:block;width:100%;transform:scale(var(--pw-zoom,1));transform-origin:top left;max-width:none;min-height:0;flex:1;object-fit:contain;touch-action:pan-y}
-.pw-thumbnails{display:grid;grid-template-columns:repeat(10,minmax(0,1fr));gap:5px;align-content:start;height:126px;flex:none;overflow:auto;overscroll-behavior:contain;margin:10px 14px;scrollbar-gutter:stable}
-.pw-thumbnails button{height:55px;position:relative;overflow:hidden;border:2px solid transparent;border-radius:5px;background:#f3f4f6}
 .pw-thumbnails button[aria-pressed=true]{border-color:#6366f1}
-.pw-thumbnails img{width:100%;height:100%;object-fit:cover}
-.pw-thumbnails span{position:absolute;bottom:0;left:0;right:0;font-size:10px;background:#fffE;color:#111827}
-.pw-thumbnails .pw-picked span{background:#4f46e5;color:white}
 .pw-review-footer{padding:10px 14px;border-top:1px solid #e5e7eb;display:grid;gap:7px;flex:none}
 .pw-review-footer>div{justify-content:flex-end}
 .pw-review-footer>div:first-child{justify-content:space-between}
@@ -70,8 +65,6 @@
 .pw-review-tools .pw-button{font-size:11px;padding:6px}
 .pw-images{margin:0 8px;gap:5px;min-height:90px}
 .pw-images figcaption{font-size:10px}
-.pw-thumbnails{grid-template-columns:repeat(5,minmax(0,1fr));height:112px;margin:8px}
-.pw-thumbnails button{height:48px}
 .pw-review-footer{padding:8px;gap:6px}
 .pw-review-footer .pw-button{font-size:11px;padding:7px}
 .pw-editor-body{padding:10px!important}
@@ -92,6 +85,28 @@
 .pw-confirm-message{white-space:pre-wrap}
 .pw-confirm-dialog .pw-dialog-body{flex:initial}
 
+/* Only the three frequently edited prompt options use native dropdowns. */
+.pw-select{width:100%;min-width:0;min-height:36px;padding:8px;border:1px solid #e5e7eb;border-radius:7px;background:#fff;color:#374151;font:inherit;font-size:12px}
+.pw-select:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
+.dark .pw-select{background:#171717;border-color:#404040;color:#e5e5e5;color-scheme:dark}
+
+/* A bounded candidate rail beside the full-size image on desktop. */
+.pw-review-stage{display:grid;grid-template-columns:minmax(0,1fr) clamp(216px,21vw,288px);gap:12px;flex:1;min-height:0;margin:0 10px 8px}
+.pw-review .pw-review-stage .pw-images{margin:0;min-width:0;min-height:0}
+.pw-thumbnails{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;align-content:start;min-width:0;min-height:0;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-gutter:stable;padding:2px 4px 2px 2px}
+.pw-thumbnails button{position:relative;display:block;width:100%;height:auto;min-width:0;min-height:0;aspect-ratio:1 / 1;padding:0;overflow:hidden;border:2px solid transparent;border-radius:6px;background:#f3f4f6}
+.pw-thumbnails img{position:absolute;inset:0;width:100%;height:100%;object-fit:cover}
+.pw-thumbnail-check{position:absolute;top:4px;right:4px;display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#4f46e5;color:#fff;font-size:12px;line-height:1}
+@media(min-width:769px) and (max-width:1100px){
+    .pw-review-stage{grid-template-columns:minmax(0,1fr) 184px}
+    .pw-thumbnails{grid-template-columns:repeat(2,minmax(0,1fr))}
+}
+@media(max-width:768px){
+    .pw-review-stage{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) clamp(100px,18dvh,164px);gap:8px;margin:0 6px 6px}
+    .pw-thumbnails{grid-template-columns:repeat(auto-fill,minmax(64px,1fr));gap:6px}
+}
+@media(pointer:coarse){.pw-select{min-height:44px;font-size:16px}}
+
 /* Match the existing project gray/indigo palette. */
 .pw-button:hover:not(:disabled):not([aria-pressed=true]):not(.pw-primary){background:#f9fafb;border-color:#818cf8}
 .pw-button.pw-primary:hover:not(:disabled),.pw-button[aria-pressed=true]:hover:not(:disabled){background:#4338ca;border-color:#4338ca}
@@ -107,8 +122,6 @@
 .dark .pw-plan-card>span,.dark .pw-plan-card>small,.dark .pw-dialog-header p,.dark .pw-images figcaption,.dark .pw-option>span,.dark .pw-review-footer p,.dark .pw-plan-placeholder{color:#a3a3a3}
 .dark .pw-button.text-red-600{color:#fca5a5}
 .dark .pw-thumbnails button{background:#171717}
-.dark .pw-thumbnails span{background:rgba(10,10,10,.9);color:#f5f5f5}
-.dark .pw-thumbnails .pw-picked span{background:#4f46e5;color:#fff}
 .dark .pw-plan-card:hover{border-color:#525252}
 .dark .pw-upload{border-color:#404040}
 
@@ -119,8 +132,6 @@
 .pw-review .pw-review-tools{padding:6px 14px;gap:6px}
 .pw-review .pw-images{margin:0 10px}
 .pw-review .pw-images figcaption{padding:3px 5px}
-.pw-review .pw-thumbnails{height:88px;margin:7px 10px;gap:4px}
-.pw-review .pw-thumbnails button{height:40px}
 .pw-review .pw-review-footer{padding:7px 12px;gap:5px}
 @media(max-width:640px){
     .pw-backdrop:has(>.pw-review){padding:8px}
@@ -128,8 +139,6 @@
     .pw-review .pw-dialog-header{padding:7px 9px}
     .pw-review .pw-review-tools{padding:5px 8px;gap:4px}
     .pw-review .pw-images{margin:0 6px;gap:4px}
-    .pw-review .pw-thumbnails{height:94px;margin:6px;gap:4px}
-    .pw-review .pw-thumbnails button{height:44px}
     .pw-review .pw-review-footer{padding:6px 8px;gap:4px}
 }
 

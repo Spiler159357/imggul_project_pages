@@ -14,7 +14,12 @@ const app = read('public/app.html');
 for (const name of ['renderPlannerResultList', 'renderPlannerImages', 'renderPlannerImagePreviewModal', 'PLANNER_IMAGE_PREVIEW_CONTEXT', 'readPlannerEditsFromDom', 'savePlannerDraft', 'renderPlannerV4PromptSection']) {
     assert(!planner.includes(name), `Retired planner UI remains: ${name}`);
 }
-assert(!/<select\b|<details\b/.test(planner + workspace), 'Planner controls must not use dropdowns or collapsed prompts');
+assert(!/<select\b|<details\b/.test(planner), 'Planner templates must route option controls through the shared renderer');
+assert(!/<details\b/.test(workspace), 'Core prompts must not be collapsed');
+assert(workspace.includes("const dropdownIds = ['planner-plan-character-variant', 'planner-plan-res', 'planner-plan-background-variant']"), 'Only clothing, resolution and background may use dropdowns');
+assert(workspace.includes('input[id],select[id],textarea[id]'), 'Draft restoration must include dropdown values');
+assert(css.includes('aspect-ratio:1 / 1'), 'Candidate thumbnails must remain square');
+assert(workspace.includes('pw-review-stage') && workspace.includes('pw-thumbnail-check'), 'Candidate rail and selection marker must be present');
 assert(!planner.includes("modeButton('result'"), 'Separate results tab must be retired');
 assert(planner.includes("item?.images?.length"), 'Entry routing must inspect generated candidates');
 assert(planner.includes('renderPlannerSituationPlanOverlay();\n    const savedStatus'), 'Save must keep the editor open');
@@ -25,7 +30,7 @@ assert(workspace.includes("document.addEventListener('click'"));
 assert(workspace.includes('}, true);'), 'Option actions must survive legacy modal stopPropagation handlers');
 assert(css.includes('.pw-refresh{margin-left:auto'), 'Refresh must remain right aligned');
 assert(css.includes('.pw-thumbnails') && css.includes('overflow:auto'), 'Candidates need a bounded scroll area');
-assert(app.includes('/planner-workspace.css?v=planner-workspace-20261106b'));
+assert(app.includes('/planner-workspace.css?v=planner-workspace-20261106c'));
 
 // Catch misspelled module boundaries without evaluating browser modules.
 for (const file of ['public/js/project/planner.js', 'public/js/project/planner-workspace.js']) {
@@ -43,7 +48,7 @@ for (const file of ['public/js/project/planner.js', 'public/js/project/planner-w
 for (const file of ['public/js/project.js', ...['character', 'craft_bridge', 'manage', 'planner', 'posts', 'situation', 'planner-workspace'].map(name => `public/js/project/${name}.js`)]) {
     const source = read(file);
     for (const match of source.matchAll(/(?:\.\/project\/|\.\/)(?:shared|manage|character|planner|situation|craft_bridge|posts|planner-workspace)\.js\?v=([^'"\s]+)/g)) {
-        assert.equal(match[1], 'planner-workspace-20261106b', `Mixed project module version in ${file}`);
+        assert.equal(match[1], 'planner-workspace-20261106c', `Mixed project module version in ${file}`);
     }
 }
 for (const file of ['public/app.html', 'public/js/main.js', 'public/js/project.js', 'public/js/project/planner.js', 'public/js/project/planner-workspace.js', 'public/planner-workspace.css']) {
