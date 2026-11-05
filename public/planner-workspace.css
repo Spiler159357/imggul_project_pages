@@ -14,6 +14,7 @@
 .pw-plan-card{display:flex;flex-direction:column;text-align:left;gap:6px;padding:9px;border:1px solid #e5e7eb;border-radius:8px;background:transparent;min-width:0;color:inherit}
 .pw-plan-card img,.pw-plan-placeholder{width:100%;height:115px;object-fit:contain;background:#f3f4f6;border-radius:5px}
 .pw-plan-placeholder{display:grid;place-items:center;color:#6b7280}
+.pw-plan-placeholder[hidden]{display:none}
 .pw-plan-card strong{font-size:13px;overflow-wrap:anywhere}
 .pw-plan-card span,.pw-plan-card small{font-size:11px}
 .pw-plan-card[hidden]{display:none}
@@ -42,15 +43,10 @@
 .pw-review-footer label{font-size:12px}
 .pw-review-footer input{width:60px;padding:6px;background:transparent;border:1px solid #e5e7eb;border-radius:5px}
 .pw-option{display:grid;gap:4px;font-size:11px;color:inherit}
-.pw-option-grid,.pw-library-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
+.pw-option-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
 .pw-option-grid .pw-button{min-height:65px;overflow-wrap:anywhere}
 .pw-library-tools{display:flex;gap:7px;flex-wrap:wrap;align-items:center;margin-bottom:12px}
 .pw-library-tools input[type=search]{padding:8px;border:1px solid #e5e7eb;border-radius:5px;background:transparent}
-.pw-upload{padding:8px;border:1px dashed #d1d5db;border-radius:7px;font-size:12px}
-.pw-upload input{display:block;max-width:240px}
-.pw-library-grid button{border:1px solid #e5e7eb;border-radius:7px;padding:7px;min-width:0;font-size:11px;overflow-wrap:anywhere}
-.pw-library-grid img{height:120px;width:100%;object-fit:contain}
-.pw-library-grid [hidden]{display:none}
 .pw-editor-body textarea{height:55px;resize:none;overflow:auto}
 .pw-editor-body{overscroll-behavior:contain}
 .pw-button:focus-visible,.pw-plan-card:focus-visible,.pw-thumbnails button:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
@@ -70,7 +66,6 @@
 .pw-editor-body{padding:10px!important}
 .pw-editor-body textarea{font-size:16px!important;height:48px}
 .pw-dialog-header p{max-width:230px;overflow-wrap:anywhere}
-.pw-library-grid{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 
 @media(pointer:coarse){.pw-button{min-height:44px}
@@ -84,6 +79,18 @@
 .pw-confirm-dialog{height:auto;max-width:480px}
 .pw-confirm-message{white-space:pre-wrap}
 .pw-confirm-dialog .pw-dialog-body{flex:initial}
+.pw-explorer-breadcrumb{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:7px}
+.pw-explorer-path{font-size:11px;color:#6b7280;overflow-wrap:anywhere;margin-bottom:12px}
+.dark .pw-explorer-path{color:#a3a3a3}
+.pw-explorer-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;align-content:start}
+.pw-explorer-grid [hidden]{display:none}
+.pw-explorer-grid .image-editor-library-image-card{justify-content:flex-start;padding:8px;text-align:left}
+.pw-explorer-grid .pw-plan-placeholder{height:auto;aspect-ratio:1}
+.pw-explorer-preview{margin:0}
+.pw-explorer-situation[aria-pressed=true],.pw-explorer-folder[aria-pressed=true]{outline:2px solid #6366f1;outline-offset:2px}
+.pw-explorer-grid small{padding:0 4px;font-size:10px;color:#6b7280;overflow-wrap:anywhere}
+.dark .pw-explorer-grid small{color:#a3a3a3}
+@media(max-width:640px){.pw-explorer-grid{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}}
 
 /* Only the three frequently edited prompt options use native dropdowns. */
 .pw-select{width:100%;min-width:0;min-height:36px;padding:8px;border:1px solid #e5e7eb;border-radius:7px;background:#fff;color:#374151;font:inherit;font-size:12px}
@@ -118,12 +125,11 @@
 .dark .pw-button[aria-pressed=true],.dark .pw-button.pw-primary{background:#4f46e5;color:#fff;border-color:#4f46e5}
 .dark .pw-button:hover:not(:disabled):not([aria-pressed=true]):not(.pw-primary){background:#262626;border-color:#525252}
 .dark .pw-button.pw-primary:hover:not(:disabled),.dark .pw-button[aria-pressed=true]:hover:not(:disabled){background:#4338ca;border-color:#4338ca}
-.dark .pw-board-tools input,.dark .pw-dialog-header,.dark .pw-review-footer,.dark .pw-review-footer input,.dark .pw-library-tools input[type=search],.dark .pw-library-grid button{border-color:#404040}
+.dark .pw-board-tools input,.dark .pw-dialog-header,.dark .pw-review-footer,.dark .pw-review-footer input,.dark .pw-library-tools input[type=search]{border-color:#404040}
 .dark .pw-plan-card>span,.dark .pw-plan-card>small,.dark .pw-dialog-header p,.dark .pw-images figcaption,.dark .pw-option>span,.dark .pw-review-footer p,.dark .pw-plan-placeholder{color:#a3a3a3}
 .dark .pw-button.text-red-600{color:#fca5a5}
 .dark .pw-thumbnails button{background:#171717}
 .dark .pw-plan-card:hover{border-color:#525252}
-.dark .pw-upload{border-color:#404040}
 
 /* Give the enlarged candidate the available viewport space. */
 .pw-backdrop:has(>.pw-review){padding:12px}

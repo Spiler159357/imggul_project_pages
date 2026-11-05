@@ -1,9 +1,9 @@
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction } from './planner-workspace.js?v=planner-workspace-20261106c';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106c';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, renderPlannerExplorerFolder, resetPlannerReviewReferenceContext } from './planner-workspace.js?v=planner-workspace-20261106f';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106f';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106c';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106c';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106c';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106f';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106f';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106f';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -49,6 +49,7 @@ let plannerBatchPlanCreationRunning = false;
 let plannerBatchPlanDeletionRunning = false;
 let plannerCostEstimateOperationId = 0;
 let plannerWorkspaceOpenOperation = 0;
+let plannerTargetFolderOperation = 0;
 
 function createPlannerTargetPickerState() {
     return {
@@ -57,6 +58,9 @@ function createPlannerTargetPickerState() {
         type: 'character',
         selectedId: '',
         rating: 'all',
+        folderCharacterId: '',
+        folderLoading: false,
+        folderError: '',
         triggerId: ''
     };
 }
@@ -69,6 +73,7 @@ function getPlannerTargetPickerState() {
 }
 
 function resetPlannerTargetPickerState() {
+    plannerTargetFolderOperation++;
     const triggerId = window.PROJECT_PLANNER_TARGET_PICKER?.triggerId || '';
     if (triggerId) document.getElementById(triggerId)?.setAttribute('aria-expanded', 'false');
     window.PROJECT_PLANNER_TARGET_PICKER = createPlannerTargetPickerState();
@@ -1888,7 +1893,7 @@ export function getPlannerItemBySituationId(meta, situationId) {
 
 export function renderPlannerResultModal(meta) {
     const item = getPlannerItemBySituationId(meta, window.PLANNER_RESULT_MODAL_SITUATION_ID);
-    if (!item) return '';
+    if (!item) { resetPlannerReviewReferenceContext(); return ''; }
     return renderPlannerWorkspaceReview(item, meta, window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(meta, item));
 }
 
@@ -1966,6 +1971,7 @@ function restorePlannerTargetPickerTriggerFocus(triggerId) {
 export function openPlannerTargetPicker(type = 'character') {
     const project = getActiveProject();
     if (!project) return;
+    plannerTargetFolderOperation++;
     const normalizedType = type === 'situation' ? 'situation' : 'character';
     const selectedId = normalizedType === 'situation'
         ? (getSelectedPlannerSituation(project)?.id || '')
@@ -1977,6 +1983,9 @@ export function openPlannerTargetPicker(type = 'character') {
         type: normalizedType,
         selectedId,
         rating: 'all',
+        folderCharacterId: '',
+        folderLoading: false,
+        folderError: '',
         triggerId: normalizedType === 'situation' ? 'planner-situation-picker-trigger' : 'planner-character-picker-trigger'
     });
     document.getElementById(state.triggerId)?.setAttribute('aria-expanded', 'true');
@@ -2674,117 +2683,40 @@ function renderPlannerTargetTrigger(type, project, item) {
 }
 
 function renderPlannerCharacterPickerCards(characters, state) {
-    if (!characters.length) {
-        return renderEmptyState('등록된 캐릭터가 없습니다. 캐릭터를 먼저 추가하세요.');
-    }
-
-    return `
-        <div data-planner-target-grid class="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
-            ${characters.map(character => {
-                const id = character.id || '';
-                const current = id === state.selectedId;
-                const title = character.name || character.alias || character.folderName || id;
-                const path = character.folderName || id;
-                return `
-                    <button type="button" data-planner-target-id="${escapeHtml(id)}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(id)}')" aria-pressed="${current ? 'true' : 'false'}" class="group overflow-hidden rounded-lg border text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${current ? 'border-indigo-500 bg-indigo-50/70 ring-2 ring-indigo-500 dark:bg-indigo-950/30' : 'border-gray-200 bg-white hover:border-indigo-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600'}">
-                        <span class="relative block aspect-[4/5] bg-gray-100 dark:bg-gray-900/60">
-                            <img src="${escapeHtml(getAssetUrl(character.coverImage))}" alt="" class="absolute inset-0 h-full w-full object-cover" loading="lazy" onerror="this.classList.add('hidden'); this.nextElementSibling?.classList.remove('hidden'); this.nextElementSibling?.classList.add('flex')">
-                            <span class="hidden absolute inset-0 items-center justify-center text-gray-300 dark:text-gray-600"><i data-lucide="image-off" class="h-8 w-8"></i></span>
-                            ${current ? '<span class="absolute right-2 top-2 inline-flex h-6 w-6 items-center justify-center rounded-full bg-indigo-600 text-white shadow"><i data-lucide="check" class="h-4 w-4"></i></span>' : ''}
-                            ${current ? '<span class="absolute bottom-2 left-2 rounded-full bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white">현재 대상</span>' : ''}
-                        </span>
-                        <span class="block border-t border-gray-100 p-2.5 dark:border-gray-700">
-                            <span class="block truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(title)}</span>
-                            <span class="mt-1 block truncate text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(path)}</span>
-                        </span>
-                    </button>
-                `;
-            }).join('')}
-        </div>
-    `;
+    if (!characters.length) return renderEmptyState('등록된 캐릭터 폴더가 없습니다.');
+    return `<div data-planner-target-grid class="pw-explorer-grid">${characters.map(character => renderPlannerExplorerFolder(character, 'target-folder', state.type === 'character' && character.id === state.selectedId)).join('')}</div>`;
 }
 
 function renderPlannerSituationPickerCards(project, situations, state) {
-    const filteredSituations = state.rating === 'all'
-        ? situations
-        : situations.filter(situation => getSituationRating(situation) === state.rating);
-    if (!situations.length) {
-        return renderEmptyState('등록된 상황이 없습니다. 상황을 먼저 추가하세요.');
-    }
-    if (!filteredSituations.length) {
-        return renderEmptyState(`${state.rating.toUpperCase()} 상황이 없습니다.`);
-    }
-
-    return `
-        <div data-planner-target-grid class="grid grid-cols-1 gap-2.5 sm:grid-cols-2 lg:grid-cols-3">
-            ${filteredSituations.map(situation => {
-                const id = situation.id || '';
-                const current = id === state.selectedId;
-                const imageNumber = getSituationImageNumber(project, situation);
-                const rating = getSituationRating(situation);
-                return `
-                    <button type="button" data-planner-target-id="${escapeHtml(id)}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(id)}')" aria-pressed="${current ? 'true' : 'false'}" class="min-h-[112px] rounded-lg border p-3 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${current ? 'border-indigo-500 bg-indigo-50/70 ring-2 ring-indigo-500 dark:bg-indigo-950/30' : 'border-gray-200 bg-white hover:border-indigo-300 dark:border-gray-700 dark:bg-gray-800 dark:hover:border-indigo-600'}">
-                        <span class="flex items-start gap-3">
-                            <span class="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-md bg-gray-100 text-[11px] font-extrabold text-gray-500 dark:bg-gray-900/70 dark:text-gray-400">${escapeHtml(imageNumber)}</span>
-                            <span class="min-w-0 flex-1">
-                                <span class="flex items-start justify-between gap-2">
-                                    <span class="truncate text-[10px] font-bold text-gray-400 dark:text-gray-500">${escapeHtml(imageNumber)}.webp</span>
-                                    <span class="rounded-full px-2 py-0.5 text-[9px] font-bold ${rating === 'nsfw' ? 'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300'}">${rating.toUpperCase()}</span>
-                                </span>
-                                <span class="mt-2 block line-clamp-2 text-xs font-bold leading-5 text-gray-900 dark:text-white">${escapeHtml(getSituationDisplayName(situation))}</span>
-                                ${current ? '<span class="mt-2 inline-flex items-center gap-1 rounded-full bg-indigo-600 px-2 py-1 text-[10px] font-bold text-white"><i data-lucide="check" class="h-3 w-3"></i> 현재 대상</span>' : ''}
-                            </span>
-                        </span>
-                    </button>
-                `;
-            }).join('')}
-        </div>
-    `;
+    const character = getProjectItems(project, 'characters').find(c => c.id === state.folderCharacterId);
+    const filtered = state.type === 'character' || state.rating === 'all' ? situations : situations.filter(s => getSituationRating(s) === state.rating);
+    if (!filtered.length) return renderEmptyState('표시할 상황이 없습니다.');
+    return `<div data-planner-target-grid class="pw-explorer-grid">${filtered.map(situation => {
+        const index = situations.indexOf(situation);
+        const image = getPlannerSituationImage(character, situation, index);
+        const title = getSituationDisplayName(situation);
+        const number = getSituationImageNumber(project, situation);
+        const content = `${image ? `<img src="${escapeHtml(getVersionedAssetUrl(image))}" alt="" loading="lazy" data-pw-cover>` : ''}<span class="pw-plan-placeholder" data-pw-cover-placeholder ${image ? 'hidden' : ''}>${escapeHtml(number)}</span><span>${escapeHtml(title)}</span><small>${escapeHtml(number)}.webp · ${getSituationRating(situation).toUpperCase()}</small>`;
+        if (state.type === 'character') return `<figure class="image-editor-library-image-card pw-explorer-preview">${content}</figure>`;
+        return `<button type="button" class="image-editor-library-image-card pw-explorer-situation" data-planner-target-id="${escapeHtml(situation.id)}" aria-pressed="${situation.id === state.selectedId}" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(situation.id)}')">${content}</button>`;
+    }).join('')}</div>`;
 }
 
 export function renderPlannerTargetPickerModal() {
     const state = getPlannerTargetPickerState();
-    if (!state.open) return '';
     const project = getActiveProject();
-    if (!project || state.projectId !== project.id) return '';
-
-    const isCharacter = state.type === 'character';
-    const title = isCharacter ? '대상 캐릭터 선택' : '대상 상황 선택';
-    const description = isCharacter
-        ? '카드를 누르면 플래너 대상 캐릭터가 바로 변경됩니다.'
-        : '카드를 누르면 캐릭터별 플랜과 결과를 확인할 상황이 바로 변경됩니다.';
-    const items = getProjectItems(project, isCharacter ? 'characters' : 'situations');
-    const filterButton = (rating, label) => `
-        <button id="planner-target-filter-${rating}" type="button" onclick="window.setPlannerTargetPickerRating('${rating}')" aria-pressed="${state.rating === rating ? 'true' : 'false'}" class="rounded-md px-3 py-1.5 text-[10px] font-bold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 ${state.rating === rating ? 'bg-indigo-600 text-white' : 'border border-gray-200 text-gray-600 hover:border-indigo-400 dark:border-gray-700 dark:text-gray-300'}">${label}</button>
-    `;
-
-    return `
-        <div id="planner-target-picker-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 backdrop-blur-sm sm:p-4" onclick="window.closePlannerTargetPicker(event)">
-            <div role="dialog" aria-modal="true" aria-labelledby="planner-target-picker-title" aria-describedby="planner-target-picker-description" tabindex="-1" class="flex max-h-[94vh] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-gray-200 bg-white shadow-2xl dark:border-gray-700 dark:bg-gray-900 sm:max-h-[88vh]" onclick="event.stopPropagation()" onkeydown="window.handlePlannerTargetPickerKeydown(event)">
-                <div class="flex flex-shrink-0 items-start justify-between gap-3 border-b border-gray-200 px-4 py-3 dark:border-gray-700">
-                    <div class="min-w-0">
-                        <h3 id="planner-target-picker-title" class="text-sm font-bold text-gray-900 dark:text-white">${title}</h3>
-                        <p id="planner-target-picker-description" class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">${description}</p>
-                    </div>
-                    <button type="button" onclick="window.closePlannerTargetPicker()" class="flex-shrink-0 rounded p-2 text-gray-500 transition hover:bg-gray-100 dark:hover:bg-gray-800" title="닫기" aria-label="닫기">
-                        <i data-lucide="x" class="h-5 w-5"></i>
-                    </button>
-                </div>
-                ${isCharacter ? '' : `
-                    <div class="flex flex-shrink-0 items-center gap-2 border-b border-gray-100 px-4 py-3 dark:border-gray-800" role="group" aria-label="상황 등급 필터">
-                        ${filterButton('all', '전체')}
-                        ${filterButton('sfw', 'SFW')}
-                        ${filterButton('nsfw', 'NSFW')}
-                    </div>
-                `}
-                <div class="min-h-0 flex-1 overflow-y-auto p-4">
-                    ${isCharacter
-                        ? renderPlannerCharacterPickerCards(items, state)
-                        : renderPlannerSituationPickerCards(project, items, state)}
-                </div>
-            </div>
-        </div>
-    `;
+    if (!state.open || !project || state.projectId !== project.id) return '';
+    const characters = getProjectItems(project, 'characters');
+    const character = characters.find(c => c.id === state.folderCharacterId);
+    const title = state.type === 'character' ? '대상 캐릭터 선택' : '대상 상황 선택';
+    const root = `<button type="button" class="pw-button" data-pw-action="target-root">${escapeHtml(project.name || project.folderName)}</button>`;
+    const filters = character && state.type === 'situation' ? `<div class="pw-library-tools">${[['all', '전체'], ['sfw', 'SFW'], ['nsfw', 'NSFW']].map(([rating, label]) => `<button type="button" id="planner-target-filter-${rating}" class="pw-button" aria-pressed="${state.rating === rating}" onclick="window.setPlannerTargetPickerRating('${rating}')">${label}</button>`).join('')}</div>` : '';
+    return `<div id="planner-target-picker-modal" class="pw-backdrop" onclick="window.closePlannerTargetPicker(event)"><section class="pw-dialog" role="dialog" aria-modal="true" aria-labelledby="planner-target-picker-title" onclick="event.stopPropagation()" onkeydown="window.handlePlannerTargetPickerKeydown(event)">
+        <header class="pw-dialog-header"><div><h3 id="planner-target-picker-title">${title}</h3><p>${state.type === 'character' ? '캐릭터 폴더를 열어 확인한 뒤 선택하세요.' : '캐릭터 폴더의 이미지로 상황을 확인하고 선택하세요.'}</p></div><button type="button" class="pw-button" aria-label="닫기" onclick="window.closePlannerTargetPicker()">닫기</button></header>
+        <div class="pw-dialog-body"><nav class="pw-explorer-breadcrumb" aria-label="현재 폴더">${root}${character ? `<span>/ ${escapeHtml(character.name || character.folderName)}</span><button type="button" class="pw-button" data-pw-action="target-root">상위 폴더</button>` : ''}</nav><p class="pw-explorer-path">/${escapeHtml(character?.prefix || project.prefix)}</p>${filters}
+        ${state.folderLoading ? '<p role="status">이미지를 불러오는 중입니다.</p>' : ''}${state.folderError ? `<p role="alert">${escapeHtml(state.folderError)}</p><button type="button" class="pw-button" onclick="window.browsePlannerTargetFolder('${escapeJsString(character?.id || '')}')">다시 불러오기</button>` : ''}
+        ${character ? (state.folderLoading ? '' : renderPlannerSituationPickerCards(project, getProjectItems(project, 'situations'), state)) : renderPlannerCharacterPickerCards(characters, state)}</div>
+        ${character && state.type === 'character' ? `<footer class="pw-review-footer"><div><button type="button" class="pw-button pw-primary" onclick="window.applyPlannerTargetPickerSelection('${escapeJsString(character.id)}')">이 캐릭터 선택</button></div></footer>` : ''}</section></div>`;
 }
 
 export function renderPlannerPanel(project, situations) {
@@ -5831,4 +5763,23 @@ export async function savePlannerSituationPlan(button = null) {
         if (status) status.textContent = error.message || '플랜 저장에 실패했습니다.';
         setPlannerStatus(error.message || '플랜 저장에 실패했습니다.');
     } finally { plannerEditorSaving = false; if (button?.isConnected) button.disabled = false; }
+}
+
+export async function browsePlannerTargetFolder(characterId = '') {
+    const state = getPlannerTargetPickerState();
+    const project = getActiveProject();
+    if (!state.open || !project || state.projectId !== project.id) return;
+    const operation = ++plannerTargetFolderOperation;
+    const character = getProjectItems(project, 'characters').find(c => c.id === characterId);
+    if (characterId && !character) return;
+    state.folderCharacterId = character?.id || '';
+    state.folderError = '';
+    state.folderLoading = !!character;
+    renderPlannerTargetPickerOverlay();
+    if (!character) return;
+    try { await loadCharacterFiles(character, { force: true }); }
+    catch (error) { if (operation === plannerTargetFolderOperation && state === getPlannerTargetPickerState()) state.folderError = error.message || '이미지를 불러오지 못했습니다.'; }
+    if (operation !== plannerTargetFolderOperation || state !== getPlannerTargetPickerState() || getActiveProject()?.id !== project.id) return;
+    state.folderLoading = false;
+    renderPlannerTargetPickerOverlay();
 }

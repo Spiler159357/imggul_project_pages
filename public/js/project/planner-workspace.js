@@ -1,13 +1,92 @@
-import { escapeHtml as h, getActiveProject, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, loadProjects, loadCharacterFiles, isVisibleProjectChildFolder } from './shared.js?v=planner-workspace-20261106c';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106f';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, zoom: 1, picker: null, library: null, operation: 0 };
 const button = (text, action, attrs = '') => `<button type="button" class="pw-button" data-pw-action="${action}" ${attrs}>${text}</button>`;
 const dialogs = '[data-pw-dialog]';
 let restoreFocus = null;
-let uploadUrl = '';
 let pendingConfirmation = null;
 const drafts = new Map();
+const referenceBindings = new Map();
+let referenceScope = '';
+let referenceContext = null;
+let referenceRequest = 0;
+let referencePending = false;
+let referenceNotice = '';
+const referenceStorageKey = scope => `imggul_planner_reference_bindings_v1:${scope}`;
+
+function loadReferenceBindings(project) {
+    const scope = project.prefix || project.id;
+    if (scope === referenceScope) return;
+    referenceScope = scope;
+    referenceBindings.clear();
+    try {
+        const entries = JSON.parse(localStorage.getItem(referenceStorageKey(scope)) || '[]');
+        if (!Array.isArray(entries)) return;
+        for (const entry of entries) {
+            if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
+            const rule = entry[1];
+            if (rule?.kind === 'situation' && typeof rule.situationId === 'string') referenceBindings.set(entry[0], { kind: 'situation', situationId: rule.situationId });
+            else if (rule?.kind === 'file' && typeof rule.characterId === 'string' && typeof rule.key === 'string') referenceBindings.set(entry[0], { kind: 'file', characterId: rule.characterId, key: rule.key });
+        }
+    } catch { /* Keep the in-memory preferences when storage is unavailable. */ }
+}
+
+function saveReferenceBindings() {
+    try { localStorage.setItem(referenceStorageKey(referenceScope), JSON.stringify([...referenceBindings])); }
+    catch { /* Comparing images must not depend on browser storage availability. */ }
+}
+
+export function resetPlannerReviewReferenceContext() {
+    referenceRequest++;
+    referenceContext = null;
+    referencePending = false;
+    referenceNotice = '';
+    ui.reference = null;
+}
+
+function ensureReferenceContext(item, meta) {
+    const project = getActiveProject();
+    if (!project) return;
+    loadReferenceBindings(project);
+    const character = getCharacterById(project, meta.characterId || meta.characterPrefix);
+    const key = JSON.stringify([project.prefix || project.id, character?.id || meta.characterId, item.situationId]);
+    if (referenceContext?.key === key) return;
+    resetPlannerReviewReferenceContext();
+    const context = { key, project, character, situationId: item.situationId };
+    referenceContext = context;
+    const rule = referenceBindings.get(item.situationId);
+    ui.compare = !!rule;
+    if (!rule) return;
+    if (!character) { referenceNotice = '현재 캐릭터를 찾을 수 없습니다.'; return; }
+    const situations = getProjectItems(project, 'situations');
+    const referenceIndex = rule.kind === 'situation' ? situations.findIndex(s => s.id === rule.situationId) : -1;
+    const situation = situations[referenceIndex];
+    if (rule.kind === 'situation' && !situation) { referenceNotice = '비교 기준 상황이 삭제되었습니다. 비교 이미지를 다시 선택하세요.'; return; }
+    if (rule.kind === 'file' && rule.characterId !== character.id) {
+        referenceNotice = '상황에 연결되지 않은 비교 파일입니다. 이 캐릭터의 비교 이미지를 선택하세요.';
+        return;
+    }
+    const request = ++referenceRequest;
+    referencePending = true;
+    const current = () => request === referenceRequest && referenceContext === context && getActiveProject()?.id === project.id;
+    void loadCharacterFiles(character, { force: true }).then(files => {
+        if (!current()) return;
+        const file = situation ? window.getPlannerSituationImage({ ...character, files }, situation, referenceIndex) : files.find(file => file.key === rule.key);
+        referencePending = false;
+        if (file) {
+            ui.reference = { name: `${character.name || character.folderName} / ${situation ? getSituationDisplayName(situation) + ' · ' : ''}${getFileNameFromKey(file.key)}`, url: getVersionedAssetUrl(file) };
+        } else {
+            referenceNotice = `${character.name || character.folderName} / ${situation ? getSituationDisplayName(situation) : getFileNameFromKey(rule.key)}: 비교 이미지가 없습니다.`;
+        }
+        window.renderPlannerResultOverlay();
+    }).catch(error => {
+        if (!current()) return;
+        referencePending = false;
+        referenceNotice = error.message || '비교 이미지를 불러오지 못했습니다.';
+        window.renderPlannerResultOverlay();
+    });
+}
 const draftKey = () => `${getActiveProject()?.id}|${window.PLANNER_PLAN_MODAL_CHARACTER_ID}|${window.PLANNER_PLAN_MODAL_SITUATION_ID}`;
 export function capturePlannerEditorDraft() {
     const modal = document.getElementById('planner-situation-plan-modal');
@@ -79,10 +158,9 @@ export function resetPlannerWorkspace(project) {
     if (ui.project === project?.id) return;
     ui.project = project?.id || '';
     ui.filter = 'all'; ui.query = ''; ui.preview = ''; ui.reference = null; ui.compare = false;
+    resetPlannerReviewReferenceContext();
     ui.operation++; drafts.clear();
     closeAuxiliary();
-    if (uploadUrl) URL.revokeObjectURL(uploadUrl);
-    uploadUrl = '';
 }
 
 export function renderPlannerWorkspaceFilters() {
@@ -90,13 +168,16 @@ export function renderPlannerWorkspaceFilters() {
 }
 
 export function renderPlannerWorkspaceCard({ image, item, title, fallbackText, situationId, characterId, error = '' }) {
-    const images = item?.images || [];
-    const state = !item ? (image ? '최종 이미지 있음' : '미작성') : error ? '확인 필요' : item.selectedImage ? '후보 선택됨' : images.length ? '검토 대기' : '실행 대기';
+    const images = Array.isArray(item?.images) ? item.images : [];
+    const selectedKey = typeof item?.selectedImage === 'string' && images.includes(item.selectedImage) ? item.selectedImage : '';
+    const state = !item ? (image ? '최종 이미지 있음' : '미작성') : error ? '확인 필요' : selectedKey ? '후보 선택됨' : images.length ? '검토 대기' : '실행 대기';
     const missing = !item && !image;
     const visible = title.toLocaleLowerCase().includes(ui.query.toLocaleLowerCase()) && (ui.filter === 'all' || (ui.filter === 'missing' ? missing : !!item && images.length > 0));
-    const src = item?.selectedImage || image || images[0];
+    // Candidates are storage keys; finalized images are versioned file objects.
+    // Unreviewed candidates must not become a representative image implicitly.
+    const src = selectedKey ? getAssetUrl(selectedKey) : image?.key ? getVersionedAssetUrl(image) : '';
     return `<button type="button" class="pw-plan-card" data-pw-plan data-title="${h(title.toLocaleLowerCase())}" data-missing="${missing}" data-review="${!!item && images.length > 0}" ${visible ? '' : 'hidden'} data-pw-action="open" data-situation="${h(situationId)}" data-character="${h(characterId)}">
-        ${src ? `<img src="${h(getVersionedAssetUrl(src))}" alt="" loading="lazy">` : `<span class="pw-plan-placeholder">${h(fallbackText)}</span>`}
+        ${src ? `<img src="${h(src)}" alt="" loading="lazy" data-pw-cover>` : ''}<span class="pw-plan-placeholder" data-pw-cover-placeholder ${src ? 'hidden' : ''}>${h(fallbackText)}</span>
         <strong>${h(title)}</strong><span>${h(state)} · ${images.length}장</span>${error ? `<small>${h(error)}</small>` : ''}</button>`;
 }
 
@@ -119,6 +200,7 @@ export function syncPlannerOptionLabels() {
 }
 
 export function renderPlannerWorkspaceReview(item, meta, blocked) {
+    ensureReferenceContext(item, meta);
     const images = item.images || [];
     if (!images.includes(ui.preview)) ui.preview = item.selectedImage || images[0] || '';
     const index = images.indexOf(ui.preview);
@@ -127,10 +209,10 @@ export function renderPlannerWorkspaceReview(item, meta, blocked) {
     return `<div id="planner-result-modal" class="pw-backdrop" data-pw-dialog="review"><section class="pw-dialog pw-review" role="dialog" aria-modal="true" aria-label="후보 검수">
         <header class="pw-dialog-header"><div><h3>${h(item.situationName || item.situationId)}</h3><p id="planner-result-selected-label" aria-live="polite">확대 ${index + 1} / ${images.length} · 선택 ${item.selectedImage ? images.indexOf(item.selectedImage) + 1 : '없음'}</p></div>${button('닫기', 'close-review')}</header>
         <div class="pw-review-tools">${button('‹ 플랜', 'previous-plan', 'aria-label="이전 플랜"')}${button('플랜 ›', 'next-plan', 'aria-label="다음 플랜"')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}"`)}
-        ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}${reference ? button('비교 해제', 'clear-reference') : ''}
+        ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference || referenceBindings.has(item.situationId) ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}${reference || referenceBindings.has(item.situationId) ? button('비교 해제', 'clear-reference') : ''}
         ${button('−', 'zoom-out', 'aria-label="축소"')}<span data-pw-zoom>${Math.round(ui.zoom * 100)}%</span>${button('+', 'zoom-in', 'aria-label="확대"')}</div>
         <div class="pw-review-stage"><div class="pw-images ${ui.compare ? 'pw-pair' : ''}" style="--pw-zoom:${ui.zoom}">
-        ${ui.compare ? `<figure><figcaption>${h(reference?.name || '비교 이미지 미선택')}</figcaption>${reference ? `<img src="${h(reference.url)}" alt="선택한 비교 이미지">` : button('비교 이미지 선택', 'reference')}</figure>` : ''}
+        ${ui.compare ? `<figure aria-busy="${referencePending}"><figcaption>${h(reference?.name || (referencePending ? '비교 이미지를 불러오는 중입니다.' : referenceNotice || '비교 이미지 미선택'))}</figcaption>${reference ? `<img src="${h(reference.url)}" alt="선택한 비교 이미지" data-pw-reference-image>` : button('비교 이미지 선택', 'reference')}</figure>` : ''}
         <figure><figcaption>후보 ${index + 1}${item.selectedImage === ui.preview ? ' · 선택됨' : ''}</figcaption>${image ? `<img src="${h(image)}" alt="확대 후보 ${index + 1}" draggable="false">` : '<p>생성된 이미지가 없습니다.</p>'}</figure></div>
         <div class="pw-thumbnails" aria-label="전체 후보 이미지">${images.map((key, i) => `<button type="button" data-pw-action="preview" data-key="${h(key)}" aria-label="후보 ${i + 1} 확대${item.selectedImage === key ? ' · 선택됨' : ''}" aria-pressed="${ui.preview === key}" class="${item.selectedImage === key ? 'pw-picked' : ''}"><img src="${h(getAssetUrl(key))}" alt="" loading="lazy" draggable="false">${item.selectedImage === key ? '<span class="pw-thumbnail-check" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div></div>
         <footer class="pw-review-footer"><div>${button('‹ 이전', 'previous', index <= 0 ? 'disabled' : '')}${button('다음 ›', 'next', index >= images.length - 1 ? 'disabled' : '')}<label>번호 <input data-pw-jump type="number" min="1" max="${images.length}" value="${index + 1}"></label>${button('이동', 'jump')}</div>
@@ -144,6 +226,7 @@ function auxiliary(title, body, canClose = true) {
     if (!root.childElementCount) restoreFocus = document.activeElement;
     root.innerHTML = `<div class="pw-backdrop" data-pw-dialog="auxiliary"><section class="pw-dialog ${pendingConfirmation ? 'pw-confirm-dialog' : ''}" role="dialog" aria-modal="true" aria-label="${h(title)}"><header class="pw-dialog-header"><h3>${h(title)}</h3>${canClose ? button('닫기', 'close-auxiliary') : ''}</header><div class="pw-dialog-body">${body}</div></section></div>`;
     root.querySelector('button')?.focus();
+    window.lucide?.createIcons();
 }
 
 function closeAuxiliary() {
@@ -151,7 +234,8 @@ function closeAuxiliary() {
     ui.operation++;
     document.getElementById('planner-workspace-auxiliary')?.replaceChildren();
     ui.picker = null; ui.library = null;
-    if (restoreFocus?.isConnected) restoreFocus.focus({ preventScroll: true });
+    const target = restoreFocus?.isConnected ? restoreFocus : topDialog()?.querySelector('button:not([disabled])');
+    target?.focus({ preventScroll: true });
     restoreFocus = null;
 }
 
@@ -163,41 +247,38 @@ export function confirmPlannerWorkspaceAction(message) {
     });
 }
 
-function renderLibrary() {
-    const library = ui.library;
-    if (!library) return;
-    const project = library.projects.find(p => p.id === library.projectId);
-    auxiliary('비교 이미지 선택', `<div class="pw-library-tools">${library.projects.map(p => button(h(p.name || p.folderName), 'library-project', `data-project="${h(p.id)}" aria-pressed="${p.id === library.projectId}"`)).join('')}
-        <label class="pw-upload">이미지 파일 선택<input type="file" accept="image/*" data-pw-reference-file></label><input type="search" data-pw-library-search placeholder="캐릭터 · 파일명 검색" aria-label="비교 이미지 검색"></div>
-        ${library.loading ? '<p role="status">이미지를 불러오는 중입니다.</p>' : ''}${library.error ? `<p role="alert">${h(library.error)}</p>` : ''}
-        <div class="pw-library-grid">${library.files.map(file => `<button type="button" data-pw-action="library-image" data-key="${h(file.key)}" data-name="${h(file.name)}" data-search="${h(file.name.toLocaleLowerCase())}"><img src="${h(getAssetUrl(file.key))}" loading="lazy" alt=""><span>${h(file.name)}</span></button>`).join('')}</div>
-        <p>${h(project?.name || '')} · 비교 이미지는 다음 플랜에서도 유지됩니다.</p>`);
+export function renderPlannerExplorerFolder(character, action, selected = false) {
+    const name = character.name || character.alias || character.folderName;
+    return `<button type="button" class="image-editor-library-folder-card pw-explorer-folder" data-pw-action="${action}" data-character="${h(character.id)}" data-planner-target-id="folder-${h(character.id)}" data-search="${h((name + ' ' + character.folderName).toLocaleLowerCase())}" aria-pressed="${selected}"><i data-lucide="folder" aria-hidden="true"></i><span>${h(name)}</span><small>${h(character.folderName || '')}</small></button>`;
 }
 
-async function loadLibraryProject(projectId) {
-    const operation = ++ui.operation;
+function renderLibrary() {
     const library = ui.library;
-    library.projectId = projectId; library.loading = true; library.error = ''; library.files = [];
+    if (!library || library.project.id !== getActiveProject()?.id) return;
+    const character = library.characters.find(c => c.id === library.characterId);
+    const root = button(h(library.project.name || library.project.folderName), 'library-root');
+    const up = character ? button('상위 폴더', 'library-root') : '';
+    const content = character
+        ? library.files.map(file => `<button type="button" class="image-editor-library-image-card" data-pw-action="library-image" data-key="${h(file.key)}" data-search="${h(getFileNameFromKey(file.key).toLocaleLowerCase())}"><img src="${h(getVersionedAssetUrl(file))}" loading="lazy" alt=""><span>${h(getFileNameFromKey(file.key))}</span></button>`).join('')
+        : library.characters.map(c => renderPlannerExplorerFolder(c, 'library-folder')).join('');
+    auxiliary('비교 이미지 선택', `<nav class="pw-explorer-breadcrumb" aria-label="현재 폴더">${root}${character ? `<span>/ ${h(character.name || character.folderName)}</span>` : ''}${up}</nav><p class="pw-explorer-path">/${h(character?.prefix || library.project.prefix)}</p>
+        <div class="pw-library-tools"><input type="search" data-pw-library-search placeholder="현재 폴더에서 검색" aria-label="현재 폴더에서 검색"></div>
+        ${library.loading ? '<p role="status">이미지를 불러오는 중입니다.</p>' : ''}${library.error ? `<p role="alert">${h(library.error)}</p>${button('다시 불러오기', 'library-retry')}` : ''}
+        <div class="pw-explorer-grid">${content}</div>${!library.loading && !library.error && !content ? '<p>이 폴더에 표시할 항목이 없습니다.</p>' : ''}`);
+}
+
+async function loadLibraryFolder(characterId) {
+    const library = ui.library;
+    if (!library || library.project.id !== getActiveProject()?.id) return;
+    const character = library.characters.find(c => c.id === characterId);
+    if (!character) return;
+    const operation = ++ui.operation;
+    library.characterId = characterId; library.loading = true; library.error = ''; library.files = [];
     renderLibrary();
     try {
-        const project = library.projects.find(p => p.id === projectId);
-        // Do not use loadProjectCharacters here: it changes the active project's alias globals.
-        const response = await fetch(`/api/list?prefix=${encodeURIComponent(project.prefix)}`);
-        if (!response.ok) throw new Error('캐릭터 목록을 불러오지 못했습니다.');
-        const payload = await response.json();
-        const characters = (payload.folders || []).map(prefix => ({ prefix, folderName: prefix.split('/').filter(Boolean).at(-1) })).filter(character => isVisibleProjectChildFolder(character.folderName));
-        // Bounded concurrency; retain successful characters when another folder fails.
-        let cursor = 0; let failures = 0;
-        const files = [];
-        await Promise.all(Array.from({ length: Math.min(4, characters.length) }, async () => {
-            while (cursor < characters.length && operation === ui.operation && library === ui.library) {
-                const character = characters[cursor++];
-                try { (await loadCharacterFiles(character)).forEach(file => files.push({ key: file.key, name: `${character.name || character.folderName} / ${getFileNameFromKey(file.key)}` })); }
-                catch { failures++; }
-            }
-        }));
-        if (operation !== ui.operation || library !== ui.library) return;
-        library.files = files.sort((a, b) => a.name.localeCompare(b.name, 'ko', { numeric: true })); library.error = failures ? `${failures}개 캐릭터의 이미지를 불러오지 못했습니다.` : files.length ? '' : '이미지가 없습니다. 파일을 선택해 비교할 수 있습니다.';
+        const files = await loadCharacterFiles(character, { force: true });
+        if (operation !== ui.operation || library !== ui.library || getActiveProject()?.id !== library.project.id) return;
+        library.files = files;
     } catch (error) {
         if (operation !== ui.operation || library !== ui.library) return;
         library.error = error.message || '이미지 목록을 불러오지 못했습니다.';
@@ -227,6 +308,8 @@ function updatePreview(key) {
 async function dispatch(button) {
     const { pwAction: action } = button.dataset;
     if (action === 'open') return window.openPlannerWorkspaceItem(button.dataset.situation, button.dataset.character);
+    if (action === 'target-folder') return window.browsePlannerTargetFolder(button.dataset.character);
+    if (action === 'target-root') return window.browsePlannerTargetFolder('');
     if (action === 'filter') {
         ui.filter = button.dataset.filter;
         document.querySelectorAll('[data-filter]').forEach(b => b.setAttribute('aria-pressed', String(b.dataset.filter === ui.filter)));
@@ -264,22 +347,45 @@ async function dispatch(button) {
     if (action === 'regenerate') return window.startPlannerResultGeneration(button.dataset.situation);
     if (action === 'solo' || action === 'pair') { ui.compare = action === 'pair'; window.renderPlannerResultOverlay(); return; }
     if (action === 'zoom-in' || action === 'zoom-out') { ui.zoom = Math.max(1, Math.min(3, ui.zoom + (action === 'zoom-in' ? .25 : -.25))); document.querySelector('.pw-images')?.style.setProperty('--pw-zoom', ui.zoom); const label = document.querySelector('[data-pw-zoom]'); if (label) label.textContent = `${Math.round(ui.zoom * 100)}%`; return; }
-    if (action === 'clear-reference') { ui.reference = null; ui.compare = false; window.renderPlannerResultOverlay(); return; }
+    if (action === 'clear-reference') {
+        if (referenceContext) referenceBindings.delete(referenceContext.situationId);
+        saveReferenceBindings();
+        referenceRequest++; referencePending = false; referenceNotice = '';
+        ui.reference = null; ui.compare = false;
+        window.renderPlannerResultOverlay(); return;
+    }
     if (action === 'reference') {
-        auxiliary('비교 이미지 선택', '<p role="status">프로젝트를 불러오는 중입니다.</p><label>이미지 파일 선택<input type="file" accept="image/*" data-pw-reference-file></label>');
-        const operation = ++ui.operation;
-        try {
-            const projects = await loadProjects();
-            if (operation !== ui.operation) return;
-            ui.library = { projects, projectId: getActiveProject()?.id, files: [] };
-            if (projects.length) await loadLibraryProject(projects.some(p => p.id === ui.library.projectId) ? ui.library.projectId : projects[0].id);
-            else renderLibrary();
-        } catch (error) { if (operation === ui.operation) auxiliary('비교 이미지 선택', `<p role="alert">${h(error.message)}</p><input type="file" accept="image/*" data-pw-reference-file>`); }
+        const project = getActiveProject();
+        if (!project) return;
+        ui.operation++;
+        ui.library = { project, characters: getProjectItems(project, 'characters'), characterId: '', files: [], loading: false, error: '' };
+        renderLibrary();
         return;
     }
-    if (action === 'library-project') return loadLibraryProject(button.dataset.project);
+    if (action === 'library-folder') return loadLibraryFolder(button.dataset.character);
+    if (action === 'library-retry') return loadLibraryFolder(ui.library?.characterId);
+    if (action === 'library-root') {
+        if (!ui.library) return;
+        ui.operation++;
+        Object.assign(ui.library, { characterId: '', files: [], loading: false, error: '' });
+        renderLibrary(); return;
+    }
     if (action === 'library-image') {
-        ui.reference = { name: button.dataset.name, url: getAssetUrl(button.dataset.key) }; ui.compare = true;
+        const library = ui.library;
+        if (!library || library.project.id !== getActiveProject()?.id) return;
+        if (!referenceContext || referenceContext.project.id !== library.project.id) return;
+        const file = library.files.find(file => file.key === button.dataset.key);
+        if (!file) return;
+        const character = library.characters.find(c => c.id === library.characterId);
+        if (!character) return;
+        const situations = getProjectItems(library.project, 'situations');
+        const situation = situations.find((situation, index) => window.getPlannerSituationImage({ ...character, files: [file] }, situation, index));
+        referenceBindings.set(referenceContext.situationId, situation
+            ? { kind: 'situation', situationId: situation.id }
+            : { kind: 'file', characterId: character.id, key: file.key });
+        saveReferenceBindings();
+        referenceRequest++; referencePending = false; referenceNotice = '';
+        ui.reference = { name: `${character?.name || character?.folderName || ''} / ${getFileNameFromKey(file.key)}`, url: getVersionedAssetUrl(file) }; ui.compare = true;
         closeAuxiliary(); window.renderPlannerResultOverlay();
     }
 }
@@ -291,6 +397,18 @@ function filterCards() {
     });
 }
 
+document.addEventListener('error', event => {
+    if (event.target.matches?.('img[data-pw-reference-image]') && event.target.getAttribute('src') === ui.reference?.url) {
+        ui.reference = null;
+        referenceNotice = '비교 이미지를 불러오지 못했습니다. 비교 이미지를 다시 선택하세요.';
+        window.renderPlannerResultOverlay();
+        return;
+    }
+    if (!event.target.matches?.('img[data-pw-cover]')) return;
+    const placeholder = event.target.parentElement?.querySelector('[data-pw-cover-placeholder]');
+    event.target.remove();
+    if (placeholder) placeholder.hidden = false;
+}, true);
 document.addEventListener('click', event => {
     const button = event.target.closest('[data-pw-action]');
     if (button && !button.disabled) dispatch(button).catch(error => {
@@ -303,15 +421,7 @@ document.addEventListener('click', event => {
 }, true);
 document.addEventListener('input', event => {
     if (event.target.matches('[data-pw-search]')) { ui.query = event.target.value; filterCards(); }
-    if (event.target.matches('[data-pw-library-search]')) document.querySelectorAll('.pw-library-grid [data-search]').forEach(card => card.hidden = !card.dataset.search.includes(event.target.value.toLocaleLowerCase()));
-});
-document.addEventListener('change', event => {
-    if (!event.target.matches('[data-pw-reference-file]')) return;
-    const file = event.target.files?.[0];
-    if (!file?.type.startsWith('image/')) return;
-    if (uploadUrl) URL.revokeObjectURL(uploadUrl);
-    uploadUrl = URL.createObjectURL(file); ui.reference = { name: file.name, url: uploadUrl }; ui.compare = true;
-    closeAuxiliary(); window.renderPlannerResultOverlay();
+    if (event.target.matches('[data-pw-library-search]')) document.querySelectorAll('#planner-workspace-auxiliary .pw-explorer-grid [data-search]').forEach(card => card.hidden = !card.dataset.search.includes(event.target.value.toLocaleLowerCase()));
 });
 document.addEventListener('keydown', event => {
     const modal = topDialog();

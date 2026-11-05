@@ -20,17 +20,28 @@ assert(workspace.includes("const dropdownIds = ['planner-plan-character-variant'
 assert(workspace.includes('input[id],select[id],textarea[id]'), 'Draft restoration must include dropdown values');
 assert(css.includes('aspect-ratio:1 / 1'), 'Candidate thumbnails must remain square');
 assert(workspace.includes('pw-review-stage') && workspace.includes('pw-thumbnail-check'), 'Candidate rail and selection marker must be present');
+const cardRenderer = workspace.slice(workspace.indexOf('export function renderPlannerWorkspaceCard('), workspace.indexOf('export function renderPlannerOption('));
+assert(!cardRenderer.includes('images[0]'), 'Unselected candidates must not become overview thumbnails');
+assert(!cardRenderer.includes('getVersionedAssetUrl(src)'), 'Candidate key strings must not use the file-object URL API');
 assert(!planner.includes("modeButton('result'"), 'Separate results tab must be retired');
 assert(planner.includes("item?.images?.length"), 'Entry routing must inspect generated candidates');
 assert(planner.includes('renderPlannerSituationPlanOverlay();\n    const savedStatus'), 'Save must keep the editor open');
 assert(workspace.includes("['all', '전체'], ['missing', '미작성'], ['review', '검토']"));
-assert(workspace.includes('loadCharacterFiles(character)'), 'Comparison images must come from real project files');
-assert(workspace.includes('URL.revokeObjectURL'), 'Uploaded comparison URLs need lifecycle cleanup');
+assert(workspace.includes('loadCharacterFiles(character,'), 'Comparison images must come from the opened character folder');
+for (const removed of ['loadProjects', 'library-project', 'data-pw-reference-file', 'createObjectURL', 'uploadUrl']) {
+    assert(!workspace.includes(removed), `Removed comparison upload/project navigation remains: ${removed}`);
+}
+assert(workspace.includes("getProjectItems(project, 'characters')"), 'Comparison explorer must be limited to the active project');
+assert(planner.includes('export async function browsePlannerTargetFolder'), 'Target selection must support folder navigation');
+assert(workspace.includes('referenceBindings.get(item.situationId)'), 'Comparison preferences must be scoped to the plan situation');
+assert(workspace.includes('window.getPlannerSituationImage({ ...character, files }, situation, referenceIndex)'), 'Automatic references must resolve the situation in the active character folder');
+assert(workspace.includes('referenceContext === context'), 'A late reference request must not overwrite another plan');
+assert(planner.includes("if (!item) { resetPlannerReviewReferenceContext(); return ''; }"), 'Closing review must cancel its reference context');
 assert(workspace.includes("document.addEventListener('click'"));
 assert(workspace.includes('}, true);'), 'Option actions must survive legacy modal stopPropagation handlers');
 assert(css.includes('.pw-refresh{margin-left:auto'), 'Refresh must remain right aligned');
 assert(css.includes('.pw-thumbnails') && css.includes('overflow:auto'), 'Candidates need a bounded scroll area');
-assert(app.includes('/planner-workspace.css?v=planner-workspace-20261106c'));
+assert(app.includes('/planner-workspace.css?v=planner-workspace-20261106f'));
 
 // Catch misspelled module boundaries without evaluating browser modules.
 for (const file of ['public/js/project/planner.js', 'public/js/project/planner-workspace.js']) {
@@ -48,7 +59,7 @@ for (const file of ['public/js/project/planner.js', 'public/js/project/planner-w
 for (const file of ['public/js/project.js', ...['character', 'craft_bridge', 'manage', 'planner', 'posts', 'situation', 'planner-workspace'].map(name => `public/js/project/${name}.js`)]) {
     const source = read(file);
     for (const match of source.matchAll(/(?:\.\/project\/|\.\/)(?:shared|manage|character|planner|situation|craft_bridge|posts|planner-workspace)\.js\?v=([^'"\s]+)/g)) {
-        assert.equal(match[1], 'planner-workspace-20261106c', `Mixed project module version in ${file}`);
+        assert.equal(match[1], 'planner-workspace-20261106f', `Mixed project module version in ${file}`);
     }
 }
 for (const file of ['public/app.html', 'public/js/main.js', 'public/js/project.js', 'public/js/project/planner.js', 'public/js/project/planner-workspace.js', 'public/planner-workspace.css']) {
