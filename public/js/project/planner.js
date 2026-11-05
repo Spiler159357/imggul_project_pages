@@ -1,8 +1,9 @@
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=global-posts-20261005a';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction } from './planner-workspace.js?v=planner-workspace-20261106a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106a';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=project-dashboard-20261005g';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=global-posts-20261005a';
-import { combinePromptParts, getSituationById } from './situation.js?v=global-posts-20261005a';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106a';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106a';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106a';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -42,12 +43,12 @@ const plannerSituationScopeState = {
     errors: new Map()
 };
 let plannerScrollRestoreId = 0;
-let plannerDraftDirty = false;
 let plannerVisibilityHandlerInstalled = false;
 let plannerPlanScopeProjectId = '';
 let plannerBatchPlanCreationRunning = false;
 let plannerBatchPlanDeletionRunning = false;
 let plannerCostEstimateOperationId = 0;
+let plannerWorkspaceOpenOperation = 0;
 
 function createPlannerTargetPickerState() {
     return {
@@ -528,10 +529,6 @@ export async function applyPlannerReferenceFiles(generation) {
     window.PRECISE_IMAGE_FILE = profile.supportsPreciseReference
         ? await loadPlannerReferenceFile(generation.preciseImageKey)
         : null;
-}
-
-export function getPlannerField(item, key) {
-    return item?.generation?.fields?.[key] || '';
 }
 
 export function getPlannerStatusLabel(status) {
@@ -1289,7 +1286,6 @@ function setPlannerMetaForCharacter(project, meta) {
 
 function getPlannerResultModalCharacterId(project = getActiveProject()) {
     return window.PLANNER_RESULT_MODAL_CHARACTER_ID
-        || window.PLANNER_IMAGE_PREVIEW_CONTEXT?.characterId
         || getSelectedPlannerCharacterId(project)
         || window.PROJECT_PLANNER_META?.characterId
         || '';
@@ -1300,11 +1296,6 @@ function getPlannerResultModalMeta(project = getActiveProject()) {
 }
 
 function findPlannerMetaByImageKey(project, key = '') {
-    const previewContext = window.PLANNER_IMAGE_PREVIEW_CONTEXT || {};
-    if (previewContext.key === key && previewContext.characterId) {
-        const contextMeta = getPlannerMetaForCharacter(project, previewContext.characterId);
-        if (contextMeta?.items?.some(item => Array.isArray(item.images) && item.images.includes(key))) return contextMeta;
-    }
     const modalMeta = getPlannerResultModalMeta(project);
     if (modalMeta?.items?.some(item => Array.isArray(item.images) && item.images.includes(key))) return modalMeta;
     const queueMetas = Array.isArray(window.PROJECT_PLANNER_QUEUE_METAS) ? window.PROJECT_PLANNER_QUEUE_METAS : [];
@@ -1516,26 +1507,15 @@ function restorePlannerFocusState(state) {
     }
 }
 
-export function readPlannerEditsFromDom(meta) {
+function preparePlannerSavedItems(meta) {
     if (!meta?.items) return meta;
     const craftSettings = window.readCraftSettings ? window.readCraftSettings() : {};
     meta.items.forEach(item => {
         item.generation = item.generation || {};
         item.generation.fields = item.generation.fields || {};
         const fields = item.generation.fields;
-        ['style', 'composition', 'character', 'clothing', 'expression', 'action', 'background', 'negative'].forEach(key => {
-            const input = document.getElementById(`planner-${item.imageNumber}-${key}`);
-            if (input) fields[key] = input.value.trim();
-        });
-        const countInput = document.getElementById(`planner-${item.imageNumber}-count`);
-        if (countInput) item.count = clampPlannerImageCount(countInput.value);
-        const generationInputs = {
-            res: document.getElementById(`planner-${item.imageNumber}-res`)?.value
-        };
-        Object.entries(generationInputs).forEach(([key, value]) => {
-            if (value !== undefined) item.generation[key] = value;
-        });
-        item.generation.v4PromptCharacters = normalizePlannerV4PromptRows(readPlannerV4PromptRows(item.imageNumber));
+        item.count = clampPlannerImageCount(item.count);
+        item.generation.v4PromptCharacters = normalizePlannerV4PromptRows(item.generation.v4PromptCharacters || item.generation.v4_prompt || []);
         item.generation.v4_prompt = item.generation.v4PromptCharacters;
         item.generation.batchCount = String(item.count);
         item.generation.negative = fields.negative;
@@ -1708,24 +1688,8 @@ export function buildPlannerGeneration({ currentSettings, plannerSettings, proje
     return generation;
 }
 
-export function renderPlannerField(item, key, label, rows = 2) {
-    return `
-        <label class="block min-w-0">
-            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">${label}</span>
-            <textarea id="planner-${escapeHtml(item.imageNumber)}-${key}" rows="${rows}" data-planner-editable oninput="window.markPlannerDraftDirty()" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500">${escapeHtml(getPlannerField(item, key))}</textarea>
-        </label>
-    `;
-}
-
 export function renderPlannerSelect(id, label, value, options, attrs = '') {
-    return `
-        <label class="block min-w-0">
-            <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">${label}</span>
-            <select id="${escapeHtml(id)}" ${attrs} class="w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
-                ${options.map(([optionValue, optionLabel]) => `<option value="${escapeHtml(optionValue)}" ${value === optionValue ? 'selected' : ''}>${escapeHtml(optionLabel)}</option>`).join('')}
-            </select>
-        </label>
-    `;
+    return renderPlannerOption(id, label, value, options, attrs);
 }
 
 export function renderPlannerNumberInput(id, label, value, attrs = '') {
@@ -1743,77 +1707,6 @@ export function renderPlannerCheckbox(id, label, checked) {
             <input id="${escapeHtml(id)}" type="checkbox" ${checked ? 'checked' : ''} class="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500">
             ${label}
         </label>
-    `;
-}
-
-export function getPlannerV4PromptRows(item) {
-    const rows = item?.generation?.v4PromptCharacters || [];
-    return Array.isArray(rows)
-        ? rows.slice(0, MAX_V4_PROMPT_CHARACTERS).map(row => ({
-            subject: String(row?.subject || ''),
-            clothing: String(row?.clothing || ''),
-            expression: String(row?.expression || ''),
-            action: String(row?.action || ''),
-            negative: String(row?.negative || '')
-        }))
-        : [];
-}
-
-export function readPlannerV4PromptRows(imageNumber) {
-    const container = document.getElementById(`planner-${imageNumber}-v4-rows`);
-    if (!container) return [];
-    return Array.from(container.querySelectorAll('[data-planner-v4-row]')).slice(0, MAX_V4_PROMPT_CHARACTERS).map(row => {
-        const rowId = row.getAttribute('data-planner-v4-row');
-        return {
-            subject: document.getElementById(`planner-${imageNumber}-v4-${rowId}-subject`)?.value.trim() || '',
-            clothing: document.getElementById(`planner-${imageNumber}-v4-${rowId}-clothing`)?.value.trim() || '',
-            expression: document.getElementById(`planner-${imageNumber}-v4-${rowId}-expression`)?.value.trim() || '',
-            action: document.getElementById(`planner-${imageNumber}-v4-${rowId}-action`)?.value.trim() || '',
-            negative: document.getElementById(`planner-${imageNumber}-v4-${rowId}-negative`)?.value.trim() || ''
-        };
-    }).filter(row => [row.subject, row.clothing, row.expression, row.action, row.negative].some(Boolean));
-}
-
-export function renderPlannerV4PromptRow(imageNumber, row, index) {
-    const rowId = index;
-    const inputClass = 'w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
-    return `
-        <div data-planner-v4-row="${rowId}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/70 p-2">
-            <div class="flex items-center justify-between gap-2 mb-2">
-                <span class="text-[10px] font-bold text-gray-500 dark:text-gray-400">캐릭터 프롬프트 ${index + 1}</span>
-                <button type="button" onclick="window.removePlannerV4Prompt('${escapeJsString(imageNumber)}', ${index})" class="p-1 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20" title="캐릭터 프롬프트 삭제">
-                    <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
-                </button>
-            </div>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-subject" value="${escapeHtml(row.subject || '')}" data-planner-editable oninput="window.markPlannerDraftDirty()" class="${inputClass}" placeholder="캐릭터">
-                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-clothing" value="${escapeHtml(row.clothing || '')}" data-planner-editable oninput="window.markPlannerDraftDirty()" class="${inputClass}" placeholder="의상">
-                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-expression" value="${escapeHtml(row.expression || '')}" data-planner-editable oninput="window.markPlannerDraftDirty()" class="${inputClass}" placeholder="표정">
-                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-action" value="${escapeHtml(row.action || '')}" data-planner-editable oninput="window.markPlannerDraftDirty()" class="${inputClass}" placeholder="행위">
-                <input id="planner-${escapeHtml(imageNumber)}-v4-${rowId}-negative" value="${escapeHtml(row.negative || '')}" data-planner-editable oninput="window.markPlannerDraftDirty()" class="${inputClass} md:col-span-2" placeholder="부정 프롬프트">
-            </div>
-        </div>
-    `;
-}
-
-export function renderPlannerV4PromptSection(item) {
-    const rows = getPlannerV4PromptRows(item);
-    const isAtLimit = rows.length >= MAX_V4_PROMPT_CHARACTERS;
-    return `
-        <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-            <div class="flex items-center justify-between gap-2 mb-2">
-                <div>
-                    <p class="text-[10px] font-bold text-gray-500 dark:text-gray-400">V4 Prompt</p>
-                    <p class="text-[10px] text-gray-400 dark:text-gray-500">필요할 때 캐릭터를 추가해 구조화된 캐릭터 프롬프트로 전달합니다.</p>
-                </div>
-                <button type="button" onclick="window.addPlannerV4Prompt('${escapeJsString(item.imageNumber)}')" ${isAtLimit ? 'disabled' : ''} class="inline-flex items-center gap-1 px-2 py-1.5 rounded-md border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
-                    <i data-lucide="user-plus" class="w-3.5 h-3.5"></i> 캐릭터 추가
-                </button>
-            </div>
-            <div id="planner-${escapeHtml(item.imageNumber)}-v4-rows" class="space-y-2">
-                ${rows.map((row, index) => renderPlannerV4PromptRow(item.imageNumber, row, index)).join('')}
-            </div>
-        </div>
     `;
 }
 
@@ -1839,20 +1732,6 @@ export function renderPlannerReferencePicker(target, label, key) {
     `;
 }
 
-export function renderPlannerGenerationFields(item) {
-    const generation = item.generation || {};
-    const id = `planner-${item.imageNumber}`;
-
-    return `
-        <div class="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                ${renderPlannerSelect(`${id}-res`, '해상도', generation.res || '832x1216', PLANNER_RESOLUTION_OPTIONS, 'data-planner-editable onchange="window.markPlannerDraftDirty()"')}
-            </div>
-        </div>
-        ${renderPlannerV4PromptSection(item)}
-    `;
-}
-
 export function readPlannerPlanV4PromptRows() {
     const container = document.getElementById('planner-plan-v4-rows');
     if (!container) return [];
@@ -1869,7 +1748,7 @@ export function readPlannerPlanV4PromptRows() {
 }
 
 export function renderPlannerPlanV4PromptRow(row, index) {
-    const inputClass = 'planner-plan-v4-prompt-input auto-resize-textarea w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
+    const inputClass = 'planner-plan-v4-prompt-input w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100';
     return `
         <div data-planner-plan-v4-row="${index}" class="rounded-md border border-gray-200 dark:border-gray-700 bg-white/70 dark:bg-gray-800/70 p-2">
             <div class="flex items-center justify-between gap-2 mb-2">
@@ -2002,157 +1881,28 @@ export function renderPlannerSettingsModal(settings) {
     `;
 }
 
-// TODO(planner): 각 플랜별 결과 확인 전용 화면은 별도 레이아웃 검토 후 구현한다.
-
-export function renderPlannerImages(item) {
-    if (!Array.isArray(item.images) || !item.images.length) {
-        return '<div class="text-[11px] text-gray-400 dark:text-gray-500 py-3">아직 생성된 임시 이미지가 없습니다.</div>';
-    }
-
-    return `
-        <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
-            ${item.images.map(key => {
-                const selected = item.selectedImage === key;
-                return `
-                    <div class="relative aspect-square rounded-md overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-900">
-                        <button type="button" onclick="window.selectPlannerImage('${escapeJsString(key)}')" class="absolute inset-0">
-                            <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="w-full h-full object-cover" loading="lazy">
-                        </button>
-                        ${selected ? '<span class="absolute left-1 top-1 px-1.5 py-0.5 rounded bg-indigo-600 text-white text-[10px] font-bold">선택됨</span>' : ''}
-                        <button type="button" onclick="window.deletePlannerImage('${escapeJsString(key)}')" class="absolute right-1 top-1 p-1 rounded bg-black/60 text-white hover:bg-red-600 transition" title="임시 이미지 삭제" aria-label="임시 이미지 삭제">
-                            <i data-lucide="trash-2" class="w-3.5 h-3.5"></i>
-                        </button>
-                    </div>
-                `;
-            }).join('')}
-        </div>
-    `;
-}
-
 export function getPlannerItemBySituationId(meta, situationId) {
     const decodedId = decodeURIComponent(situationId || '');
     return meta?.items?.find(item => item.situationId === decodedId) || null;
 }
 
-export function renderPlannerResultList(meta) {
-    if (!meta?.items?.length) {
-        return renderEmptyState('실행 화면에서 이미지를 생성하면 결과가 표시됩니다.');
-    }
-
-    return `
-        <div class="space-y-2">
-            ${meta.items.map(item => {
-                const generatedCount = Array.isArray(item.images) ? item.images.length : 0;
-                const selected = !!item.selectedImage;
-                return `
-                    <div role="button" tabindex="0" onclick="window.openPlannerResultModal('${escapeJsString(item.situationId)}', '${escapeJsString(meta?.characterId || '')}')" onkeydown="if(event.key === 'Enter' || event.key === ' ') { event.preventDefault(); window.openPlannerResultModal('${escapeJsString(item.situationId)}', '${escapeJsString(meta?.characterId || '')}'); }" class="w-full cursor-pointer rounded-lg border ${selected ? 'border-indigo-300 dark:border-indigo-700 bg-indigo-50/60 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30'} p-3 text-left hover:border-indigo-400 transition">
-                        <div class="grid grid-cols-[minmax(0,1fr)_auto] gap-3 items-center">
-                            <div class="min-w-0">
-                                <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.situationName || item.situationId)}</p>
-                                <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500 truncate">${escapeHtml(item.imageNumber)}.webp · ${selected ? '선택됨' : '미선택'}</p>
-                            </div>
-                            <div class="flex items-center gap-2 flex-shrink-0">
-                                <span class="px-2 py-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-600 dark:text-gray-300">목표 ${escapeHtml(clampPlannerImageCount(item.count))}</span>
-                                <span class="px-2 py-1 rounded bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-[10px] font-bold text-gray-600 dark:text-gray-300">생성 ${generatedCount}</span>
-                                <button type="button" onclick="event.stopPropagation(); window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="inline-flex p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
-                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                `;
-            }).join('')}
-        </div>
-    `;
-}
-
 export function renderPlannerResultModal(meta) {
     const item = getPlannerItemBySituationId(meta, window.PLANNER_RESULT_MODAL_SITUATION_ID);
     if (!item) return '';
-
-    const images = Array.isArray(item.images) ? item.images : [];
-    const confirmBlocked = window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(meta, item);
-    return `
-        <div id="planner-result-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
-            <div class="w-full max-w-5xl max-h-[88vh] rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden flex flex-col">
-                <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                    <div class="min-w-0">
-                        <h3 class="text-sm font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.situationName || item.situationId)}</h3>
-                        <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">목표 ${escapeHtml(clampPlannerImageCount(item.count))}장 · 생성 ${images.length}장 · ${item.selectedImage ? '선택됨' : '미선택'}</p>
-                    </div>
-                    <button type="button" onclick="window.closePlannerResultModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" title="닫기" aria-label="닫기">
-                        <i data-lucide="x" class="w-5 h-5"></i>
-                    </button>
-                </div>
-                <div class="flex-1 min-h-0 overflow-y-auto p-4">
-                    ${images.length ? `
-                        <div class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-3">
-                            ${images.map(key => {
-                                const selected = item.selectedImage === key;
-                                return `
-                                    <button type="button" data-planner-image-key="${escapeHtml(key)}" onclick="window.openPlannerImagePreview('${escapeJsString(key)}', '${escapeJsString(meta?.characterId || '')}', '${escapeJsString(item.situationId || '')}')" class="relative aspect-square rounded-lg overflow-hidden border ${selected ? 'border-indigo-500 ring-2 ring-indigo-500' : 'border-gray-200 dark:border-gray-700'} bg-gray-100 dark:bg-gray-800 hover:border-indigo-400 transition">
-                                        <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="w-full h-full object-cover" loading="lazy">
-                                        ${selected ? '<span data-planner-selected-badge class="absolute left-2 top-2 px-2 py-1 rounded bg-indigo-600 text-white text-[10px] font-bold">선택됨</span>' : ''}
-                                    </button>
-                                `;
-                            }).join('')}
-                        </div>
-                    ` : renderEmptyState('아직 생성된 이미지가 없습니다.')}
-                </div>
-                <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-between gap-3">
-                    <p id="planner-result-selected-label" class="text-[11px] text-gray-500 dark:text-gray-400 truncate">${item.selectedImage ? `선택 이미지: ${getFileNameFromKey(item.selectedImage)}` : '이미지를 클릭해 선택하세요.'}</p>
-                    <div class="flex items-center gap-2">
-                        <button type="button" onclick="window.closePlannerResultModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
-                        <button type="button" onclick="window.startPlannerResultGeneration('${escapeJsString(item.situationId)}')" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400">다시 생성</button>
-                        <button id="planner-result-confirm-button" type="button" onclick="window.confirmPlannerSelection('${escapeJsString(item.situationId)}', this)" ${item.selectedImage && !confirmBlocked ? '' : 'disabled'} class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed">최종 선택 완료</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
-}
-
-export function renderPlannerImagePreviewModal() {
-    const key = window.PLANNER_IMAGE_PREVIEW_CONTEXT?.key || window.PLANNER_IMAGE_PREVIEW_KEY;
-    if (!key) return '';
-
-    return `
-        <div id="planner-image-preview-modal" class="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4" onclick="window.closePlannerImagePreview(event)">
-            <div class="w-full max-w-4xl max-h-[90vh] rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden flex flex-col" onclick="event.stopPropagation()">
-                <div class="flex items-center justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
-                    <h3 class="text-sm font-bold text-gray-900 dark:text-white truncate">${escapeHtml(getFileNameFromKey(key))}</h3>
-                    <button type="button" onclick="window.closePlannerImagePreview()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" title="닫기" aria-label="닫기">
-                        <i data-lucide="x" class="w-5 h-5"></i>
-                    </button>
-                </div>
-                <div class="flex-1 min-h-0 bg-gray-100 dark:bg-gray-950 flex items-center justify-center p-4">
-                    <img src="${escapeHtml(getAssetUrl(key))}?t=${Date.now()}" alt="" class="max-w-full max-h-[68vh] object-contain rounded-lg shadow">
-                </div>
-                <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <p class="text-xs font-bold text-gray-700 dark:text-gray-200">이 이미지를 선택하시겠습니까?</p>
-                    <div class="flex items-center gap-2 justify-end">
-                        <button type="button" onclick="window.closePlannerImagePreview()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">취소</button>
-                        <button type="button" onclick="window.selectPlannerImageFromPreview('${escapeJsString(key)}')" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">선택</button>
-                    </div>
-                </div>
-            </div>
-        </div>
-    `;
+    return renderPlannerWorkspaceReview(item, meta, window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(meta, item));
 }
 
 export function renderPlannerRunConfirmModal() {
     if (!window.PROJECT_PLANNER_RUN_CONFIRM) return '';
     return `
         <div id="planner-run-confirm-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onclick="window.closePlannerRunConfirmModal(event)">
-            <div class="w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
+            <div role="dialog" aria-modal="true" aria-label="실행 확인" class="w-full max-w-md rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
                 <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                     <div class="min-w-0">
                         <h3 class="text-sm font-bold text-gray-900 dark:text-white">기존 결과를 삭제하고 다시 생성</h3>
                         <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">기존에 생성된 이미지를 삭제하고 처음부터 다시 생성합니다.</p>
                     </div>
-                    <button type="button" onclick="window.closePlannerRunConfirmModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition" title="닫기" aria-label="닫기">
-                        <i data-lucide="x" class="w-5 h-5"></i>
-                    </button>
+
                 </div>
                 <div class="px-4 py-4">
                     <p class="text-xs leading-5 text-gray-600 dark:text-gray-300">삭제된 후보 이미지는 되돌릴 수 없습니다. 계속 진행하시겠습니까?</p>
@@ -2179,24 +1929,21 @@ export function ensurePlannerOverlayRoot(id) {
 export function renderPlannerResultOverlay() {
     const root = ensurePlannerOverlayRoot('planner-result-overlay-root');
     root.innerHTML = renderPlannerResultModal(getPlannerResultModalMeta());
-    if (window.lucide) lucide.createIcons();
-}
-
-export function renderPlannerPreviewOverlay() {
-    const root = ensurePlannerOverlayRoot('planner-preview-overlay-root');
-    root.innerHTML = renderPlannerImagePreviewModal();
+    enhancePlannerWorkspaceDialogs();
     if (window.lucide) lucide.createIcons();
 }
 
 export function renderPlannerRunConfirmOverlay() {
     const root = ensurePlannerOverlayRoot('planner-run-confirm-overlay-root');
     root.innerHTML = renderPlannerRunConfirmModal();
+    enhancePlannerWorkspaceDialogs();
     if (window.lucide) lucide.createIcons();
 }
 
 export function renderPlannerTargetPickerOverlay(options = {}) {
     const root = ensurePlannerOverlayRoot('planner-target-picker-overlay-root');
     root.innerHTML = renderPlannerTargetPickerModal();
+    enhancePlannerWorkspaceDialogs();
     if (window.lucide) lucide.createIcons();
 
     const focusTarget = options.focusTarget || '';
@@ -2360,6 +2107,8 @@ export function renderPlannerSituationPlanOverlay() {
     const characterId = getPlannerPlanModalCharacterId(project);
     const character = getCharacterById(project, characterId);
     root.innerHTML = renderPlannerSituationPlanModal(project, situation, character, getPlannerPlanModalMeta(project, characterId));
+    restorePlannerEditorDraft();
+    enhancePlannerWorkspaceDialogs();
     document.getElementById('planner-plan-character-variant')?.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('character'));
     document.querySelectorAll('[data-planner-plan-situation-variant]').forEach(input => {
         input.addEventListener('change', () => window.updatePlannerPlanModalDefaults?.('situation'));
@@ -2465,94 +2214,8 @@ export function updatePlannerPlanModalDefaults(scope = 'all') {
     if (window.refreshNaiPromptWeightPreviews) window.refreshNaiPromptWeightPreviews();
 }
 
-export function syncPlannerResultModalSelection(item, selectedKey = item?.selectedImage || '') {
-    const modal = document.getElementById('planner-result-modal');
-    if (!modal || !item) return;
-
-    modal.querySelectorAll('[data-planner-image-key]').forEach(button => {
-        const imageKey = button.getAttribute('data-planner-image-key') || button.dataset.plannerImageKey || '';
-        const selected = imageKey === selectedKey;
-        button.classList.toggle('border-indigo-500', selected);
-        button.classList.toggle('ring-2', selected);
-        button.classList.toggle('ring-indigo-500', selected);
-        button.classList.toggle('border-gray-200', !selected);
-        button.classList.toggle('dark:border-gray-700', !selected);
-        button.setAttribute('aria-pressed', selected ? 'true' : 'false');
-
-        let badge = button.querySelector('[data-planner-selected-badge]');
-        if (selected && !badge) {
-            badge = document.createElement('span');
-            badge.dataset.plannerSelectedBadge = 'true';
-            badge.className = 'absolute left-2 top-2 px-2 py-1 rounded bg-indigo-600 text-white text-[10px] font-bold';
-            badge.textContent = '선택됨';
-            button.appendChild(badge);
-        } else if (!selected && badge) {
-            badge.remove();
-        }
-    });
-
-    const label = document.getElementById('planner-result-selected-label');
-    if (label) label.textContent = selectedKey ? `선택 이미지: ${getFileNameFromKey(selectedKey)}` : '이미지를 클릭해 선택하세요.';
-    const confirmButton = document.getElementById('planner-result-confirm-button');
-    if (confirmButton) confirmButton.disabled = !selectedKey || window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(getPlannerResultModalMeta() || {}, item);
-}
-
-export function renderPlannerProgressPanel(meta) {
-    if (!meta?.items?.length || !['queued', 'running', 'cancel_requested', 'paused'].includes(meta.status)) return '';
-
-    const activeIds = Array.isArray(meta.runningSituationIds) && meta.runningSituationIds.length
-        ? new Set(meta.runningSituationIds)
-        : null;
-    const progressItems = activeIds ? meta.items.filter(item => activeIds.has(item.situationId)) : meta.items;
-    const total = progressItems.length;
-    const doneCount = progressItems.filter(item => ['done', 'completed', 'confirmed'].includes(item.status)).length;
-    const failedCount = progressItems.reduce((sum, item) => sum + getPlannerItemFailedCount(item), 0);
-    const runningItem = progressItems.find(item => ['queued', 'running', 'cancel_requested'].includes(item.status));
-    const runningIndex = runningItem ? progressItems.findIndex(item => item.situationId === runningItem.situationId) + 1 : doneCount + failedCount + 1;
-    const progressCount = Math.min(total, doneCount + failedCount);
-    const percent = total ? Math.round((progressCount / total) * 100) : 0;
-    const eta = meta.backgroundStatus?.eta || meta.eta || null;
-    const retryStatus = meta.backgroundStatus || meta;
-
-    return `
-        <div class="mb-4 rounded-xl border border-indigo-200 dark:border-indigo-900/70 bg-indigo-50/80 dark:bg-indigo-950/30 p-4">
-            <div class="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div class="min-w-0">
-                    <p class="inline-flex items-center gap-2 text-sm font-bold text-indigo-800 dark:text-indigo-200">
-                        <i data-lucide="loader-2" class="w-4 h-4 animate-spin"></i>
-                        ${meta.status === 'queued' ? '생성 대기 중' : meta.status === 'cancel_requested' ? '취소 요청 중' : '생성 진행 중'}
-                    </p>
-                    <p class="mt-1 text-xs text-indigo-700/80 dark:text-indigo-300/80 truncate">
-                        ${runningItem ? `${escapeHtml(runningItem.imageNumber)}.webp / ${escapeHtml(runningItem.situationName || runningItem.situationId)} · ${escapeHtml(getPlannerStageLabel(runningItem.stage) || getPlannerStatusLabel(runningItem.status))}` : '다음 플랜을 준비 중입니다.'}
-                    </p>
-                </div>
-                <div class="flex items-center gap-2 text-[11px] font-bold text-indigo-700 dark:text-indigo-300">
-                    <span>${Math.min(runningIndex, total)} / ${total}</span>
-                    <span>완료 ${doneCount}</span>
-                    <span>실패 ${failedCount}</span>
-                </div>
-            </div>
-            ${eta ? `<div class="mt-3 flex flex-wrap gap-2">${renderPlannerEtaBadge(eta)}</div>` : ''}
-            ${renderPlannerRetryNotice(retryStatus)}
-            ${renderPlannerExecutionNotice(retryStatus)}
-            <div class="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-white dark:bg-gray-900 border border-indigo-100 dark:border-indigo-900/70">
-                <div class="h-full rounded-full bg-indigo-600 transition-all duration-500" style="width: ${percent}%"></div>
-            </div>
-            <div class="mt-3 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-                ${progressItems.map(item => `
-                    <div class="rounded-lg border ${['queued', 'running', 'cancel_requested'].includes(item.status) ? 'border-indigo-400 bg-white dark:bg-indigo-950/50' : 'border-indigo-100 dark:border-indigo-900/50 bg-white/70 dark:bg-gray-900/50'} px-3 py-2">
-                        <div class="flex items-center justify-between gap-2">
-                            <p class="min-w-0 truncate text-[11px] font-bold text-gray-800 dark:text-gray-100">${escapeHtml(item.situationName || item.situationId)}</p>
-                            <span class="flex-shrink-0 text-[10px] font-bold ${['queued', 'running', 'cancel_requested'].includes(item.status) ? 'text-indigo-600 dark:text-indigo-300' : 'text-gray-500 dark:text-gray-400'}">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>
-                        </div>
-                        <p class="mt-1 text-[10px] text-gray-500 dark:text-gray-400">후보 ${item.images?.length || 0}장 / 목표 ${escapeHtml(clampPlannerImageCount(item.count))}장</p>
-                        ${item.stage ? `<p class="mt-1 text-[10px] font-bold text-indigo-600 dark:text-indigo-300">${escapeHtml(getPlannerStageLabel(item.stage))}</p>` : ''}
-                        ${item.errorMessage ? `<p class="mt-1 text-[10px] text-red-500 truncate">${escapeHtml(item.errorMessage)}</p>` : ''}
-                    </div>
-                `).join('')}
-            </div>
-        </div>
-    `;
+export function syncPlannerResultModalSelection() {
+    renderPlannerResultOverlay();
 }
 
 function renderPlannerQueueProgressPanel(queueMetas = []) {
@@ -2697,27 +2360,8 @@ function renderPlannerCharacterQueue(queueMetas = []) {
     `;
 }
 
-function renderPlannerPlanCard({ image, item, title, fallbackText, clickAction, mode = 'plan' }) {
-    const generatedCount = Array.isArray(item?.images) ? item.images.length : 0;
-    const complete = !!image;
-    const selected = !!item?.selectedImage;
-    const statusText = mode === 'result'
-        ? (selected ? '선택됨' : generatedCount ? `결과 ${generatedCount}` : '결과 없음')
-        : (complete ? '완료' : '미완료');
-    return `
-        <button type="button" onclick="${clickAction}" class="group min-h-[112px] rounded-lg border ${item ? 'border-indigo-200 dark:border-indigo-800 bg-indigo-50/50 dark:bg-indigo-950/20' : 'border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800'} p-3 text-left hover:border-indigo-400 transition">
-            <div class="flex items-start gap-3">
-                <span class="flex h-14 w-14 flex-shrink-0 items-center justify-center overflow-hidden rounded-md bg-gray-100 dark:bg-gray-900 text-[11px] font-extrabold text-gray-500 dark:text-gray-400">
-                    ${image ? `<img src="${escapeHtml(getVersionedAssetUrl(image))}" alt="" class="h-full w-full object-cover" loading="lazy" onerror="this.classList.add('hidden'); this.nextElementSibling?.classList.remove('hidden')"><span class="hidden">${escapeHtml(fallbackText)}</span>` : escapeHtml(fallbackText)}
-                </span>
-                <span class="min-w-0 flex-1">
-                    <span class="block truncate text-xs font-bold text-gray-900 dark:text-white">${escapeHtml(title)}</span>
-                    <span class="mt-1 inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${complete || selected ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300' : 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300'}">${escapeHtml(statusText)}</span>
-                    ${item ? `<span class="mt-1 block truncate text-[10px] text-gray-500 dark:text-gray-400">플랜 ${escapeHtml(clampPlannerImageCount(item.count))}회 · ${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))}</span>` : '<span class="mt-1 block text-[10px] text-gray-400 dark:text-gray-500">플랜 없음</span>'}
-                </span>
-            </div>
-        </button>
-    `;
+function renderPlannerPlanCard(options) {
+    return renderPlannerWorkspaceCard(options);
 }
 
 function getPlannerCostEntries(queueMetas = [], includeCompleted = false) {
@@ -2847,55 +2491,30 @@ async function preparePlannerCostForExecution(entries = []) {
 }
 
 function renderPlannerPlanCardGrid(cards) {
-    return `<div class="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-3">${cards.join('')}</div>`;
+    return `<div class="pw-board-grid">${cards.join('')}</div>`;
 }
 
-export function renderPlannerSituationGrid(project, situations, character, meta, mode = 'plan') {
+export function renderPlannerSituationGrid(project, situations, character, meta) {
     if (!character) return renderEmptyState('플래너에 사용할 캐릭터를 선택하세요.');
     if (!situations.length) return renderEmptyState('먼저 상황을 추가하세요.');
-
-    return renderPlannerPlanCardGrid(situations.map((situation, index) => {
-        const item = getPlannerSituationItem(meta, situation.id);
-        const clickAction = mode === 'result'
-            ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id || '')}')` : `window.setPlannerStatus('이 상황에 저장된 플랜 결과가 없습니다.')`)
-            : `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}')`;
-        return renderPlannerPlanCard({
-            image: getPlannerSituationImage(character, situation, index),
-            item,
-            title: getSituationDisplayName(situation),
-            fallbackText: getSituationImageNumber(project, situation),
-            clickAction,
-            mode
-        });
-    }));
+    return renderPlannerPlanCardGrid(situations.map((situation, index) => renderPlannerPlanCard({
+        image: getPlannerSituationImage(character, situation, index), item: getPlannerSituationItem(meta, situation.id),
+        title: getSituationDisplayName(situation), fallbackText: getSituationImageNumber(project, situation),
+        situationId: situation.id, characterId: character.id
+    })));
 }
 
-function renderPlannerCharacterGridForSituation(project, characters, situation, mode = 'plan') {
-    if (!situation) return renderEmptyState(mode === 'result' ? '결과를 확인할 상황을 선택하세요.' : '플랜을 만들 상황을 선택하세요.');
+function renderPlannerCharacterGridForSituation(project, characters, situation) {
+    if (!situation) return renderEmptyState('상황을 선택하세요.');
     if (!characters.length) return renderEmptyState('먼저 캐릭터를 추가하세요.');
-    if (plannerSituationScopeState.loading && !plannerSituationScopeState.loaded) {
-        return renderEmptyState('캐릭터별 플랜과 이미지 상태를 불러오는 중입니다.');
-    }
-
-    const situations = getProjectItems(project, 'situations');
-    const situationIndex = situations.findIndex(entry => entry.id === situation.id);
-    return renderPlannerPlanCardGrid(characters.map(character => {
-        const meta = plannerSituationScopeState.metas.has(character.id)
-            ? plannerSituationScopeState.metas.get(character.id)
-            : getPlannerMetaForCharacter(project, character.id);
-        const item = getPlannerSituationItem(meta, situation.id);
-        const clickAction = mode === 'result'
-            ? (item ? `window.openPlannerResultModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id)}')` : `window.setPlannerStatus('이 캐릭터에 저장된 플랜 결과가 없습니다.')`)
-            : `window.openPlannerSituationPlanModal('${escapeJsString(situation.id)}', '${escapeJsString(character.id)}')`;
-        return renderPlannerPlanCard({
-            image: getPlannerSituationImage(character, situation, situationIndex),
-            item,
-            title: character.name || character.folderName || character.id,
-            fallbackText: getSituationImageNumber(project, situation),
-            clickAction,
-            mode
-        });
-    }));
+    if (plannerSituationScopeState.loading && !plannerSituationScopeState.loaded) return renderEmptyState('캐릭터별 플랜을 불러오는 중입니다.');
+    const index = getProjectItems(project, 'situations').findIndex(entry => entry.id === situation.id);
+    return renderPlannerPlanCardGrid(characters.map(character => renderPlannerPlanCard({
+        image: getPlannerSituationImage(character, situation, index),
+        item: getPlannerSituationItem(plannerSituationScopeState.metas.get(character.id) || getPlannerMetaForCharacter(project, character.id), situation.id),
+        title: character.name || character.folderName, fallbackText: getSituationImageNumber(project, situation),
+        situationId: situation.id, characterId: character.id, error: plannerSituationScopeState.errors.get(character.id) || ''
+    })));
 }
 
 export function renderPlannerSituationPlanModal(project, situation, character, meta) {
@@ -2946,17 +2565,23 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
 
     return `
         <div id="planner-situation-plan-modal" class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4" onclick="window.closePlannerSituationPlanModal(event)">
-            <div class="w-full max-w-5xl max-h-[90vh] overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-2xl flex flex-col" onclick="event.stopPropagation()">
+            <div class="w-full max-w-5xl h-[calc(100dvh-32px)] max-h-[90dvh] overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 shadow-2xl flex flex-col" onclick="event.stopPropagation()">
                 <div class="flex items-start justify-between gap-3 px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                     <div class="min-w-0">
                         <h3 class="truncate text-sm font-bold text-gray-900 dark:text-white">${escapeHtml(getSituationDisplayName(situation))}</h3>
                         <p class="mt-1 text-[11px] text-gray-500 dark:text-gray-400">${escapeHtml(character.name || character.folderName)} · ${escapeHtml(getSituationImageNumber(project, situation))}.webp</p>
                     </div>
+                    <div class="flex flex-wrap gap-1">
+                        <button type="button" class="pw-button" data-pw-action="previous-plan">‹ 이전 플랜</button>
+                        <button type="button" class="pw-button" data-pw-action="next-plan">다음 플랜 ›</button>
+                        <button type="button" class="pw-button" onclick="window.updatePlannerPlanModalDefaults('all')">기본값</button>
+                        ${existingItem?.images?.length ? `<button type="button" class="pw-button" data-pw-action="review-from-editor" data-situation="${escapeHtml(situation.id)}" data-character="${escapeHtml(character.id)}">후보 검수로</button>` : ''}
+                    </div>
                     <button type="button" onclick="window.closePlannerSituationPlanModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
                         <i data-lucide="x" class="w-5 h-5"></i>
                     </button>
                 </div>
-                <div class="flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
+                <div class="pw-editor-body flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
                         ${renderPlannerSelect('planner-plan-character-variant', '의상 / 헤어스타일', selectedCharacterVariantId, characterVariants.map(variant => [variant.id, getPlannerPromptVariantName(variant)]))}
                         ${renderPlannerSelect('planner-plan-res', '해상도', generation.res || DEFAULT_PLANNER_RESOLUTION, PLANNER_RESOLUTION_OPTIONS)}
@@ -2982,9 +2607,7 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
                         <label class="block"><span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">행위</span><textarea id="planner-plan-action" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.action || '')}</textarea></label>
                         <div class="block">
                             <span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">배경</span>
-                            <select id="planner-plan-background-variant" class="mb-2 w-full p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
-                                ${backgroundData.backgrounds.map(background => `<option value="${escapeHtml(background.id)}" ${background.id === selectedBackgroundId ? 'selected' : ''}>${escapeHtml(background.name)}</option>`).join('')}
-                            </select>
+                            ${renderPlannerSelect('planner-plan-background-variant', '배경 프리셋', selectedBackgroundId, backgroundData.backgrounds.map(background => [background.id, background.name]))}
                             <textarea id="planner-plan-background" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.background || '')}</textarea>
                         </div>
                         <label class="block"><span class="block mb-1 text-[10px] font-bold text-gray-500 dark:text-gray-400">부정 프롬프트</span><textarea id="planner-plan-negative" rows="2" class="w-full resize-y p-2 text-xs rounded-md border border-red-300 dark:border-red-800 bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-100">${escapeHtml(fields.negative || '')}</textarea></label>
@@ -2992,10 +2615,10 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
                     ${renderPlannerPlanV4PromptSection(generation.v4PromptCharacters || generation.v4_prompt || [])}
                     <p id="planner-plan-modal-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                 </div>
-                <div class="flex items-center justify-end gap-2 px-4 py-3 border-t border-gray-200 dark:border-gray-700">
-                    ${existingItem ? `<button type="button" onclick="window.deletePlannerItemFromModal('${escapeJsString(situation.id)}')" class="mr-auto px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-xs font-bold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20">플랜 삭제</button>` : ''}
-                    <button type="button" onclick="window.closePlannerSituationPlanModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">닫기</button>
-                    <button type="button" onclick="window.savePlannerSituationPlan()" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">플랜 추가</button>
+                <div class="flex items-center justify-start gap-2 px-4 py-3 border-t border-gray-200 dark:border-gray-700">
+                    ${existingItem ? `<button type="button" onclick="window.deletePlannerItemFromModal('${escapeJsString(situation.id)}')" class="px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-xs font-bold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20">플랜 삭제</button>` : ''}
+
+                    <button type="button" onclick="window.savePlannerSituationPlan(this)" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">${existingItem ? '플랜 저장' : '플랜 추가'}</button>
                 </div>
             </div>
         </div>
@@ -3165,127 +2788,18 @@ export function renderPlannerTargetPickerModal() {
 }
 
 export function renderPlannerPanel(project, situations) {
+    resetPlannerWorkspace(project);
+    if (window.PROJECT_PLANNER_VIEW !== 'run') window.PROJECT_PLANNER_VIEW = 'plan';
     const characters = getProjectItems(project, 'characters');
     const meta = window.PROJECT_PLANNER_META || null;
-    const activeCharacter = getCharacterById(project, getSelectedPlannerCharacterId(project))
-        || getCharacterById(project, meta?.characterId)
-        || getCharacterById(project, meta?.characterPrefix)
-        || getCharacterById(project, getCachedPlannerCharacterId(project))
-        || characters[0];
-    const view = window.PROJECT_PLANNER_VIEW || 'plan';
+    const activeCharacter = getCharacterById(project, getSelectedPlannerCharacterId(project)) || characters[0];
+    const view = window.PROJECT_PLANNER_VIEW === 'run' ? 'run' : 'plan';
     const planScope = getPlannerPlanScope(project);
     const selectedSituation = getSelectedPlannerSituation(project);
     const settings = normalizePlannerSettings(window.PROJECT_PLANNER_SETTINGS || {});
-    const queueMetas = window.PROJECT_PLANNER_QUEUE_METAS?.length
-        ? window.PROJECT_PLANNER_QUEUE_METAS
-        : (meta?.items?.length ? [{ character: activeCharacter, meta }] : []);
+    const queueMetas = window.PROJECT_PLANNER_QUEUE_METAS?.length ? window.PROJECT_PLANNER_QUEUE_METAS : (meta?.items?.length ? [{ character: activeCharacter, meta }] : []);
     const queueSummary = getPlannerQueueSummary(queueMetas);
-    const characterSelector = renderPlannerTargetTrigger('character', project, activeCharacter);
-    const situationSelector = renderPlannerTargetTrigger('situation', project, selectedSituation);
-    const targetSelector = (view === 'plan' || view === 'result') && planScope === 'situation'
-        ? situationSelector
-        : characterSelector;
-    const situationPlanDeleteTargets = planScope === 'situation'
-        && selectedSituation
-        && plannerSituationScopeState.loaded
-        && !plannerSituationScopeState.loading
-        ? [...plannerSituationScopeState.metas.values()].filter(plannerMeta =>
-            plannerMeta?.items?.some(item => item.situationId === selectedSituation.id)
-        )
-        : [];
-    const deletablePlanCount = planScope === 'situation'
-        ? situationPlanDeleteTargets.length
-        : (meta?.items?.length || 0);
-
-    const modeButton = (mode, label, icon) => `
-        <button type="button" onclick="window.setPlannerView('${mode}')" class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition ${view === mode ? 'bg-indigo-600 text-white' : 'border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 hover:border-indigo-400'}">
-            <i data-lucide="${icon}" class="w-4 h-4"></i>
-            ${label}
-        </button>
-    `;
-
-    const planRows = meta?.items?.length ? `
-        <div class="space-y-3 pr-1">
-            ${meta.items.map(item => `
-                <div class="rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
-                    <div class="flex items-center justify-between gap-3 mb-3">
-                        <div class="min-w-0">
-                            <p class="text-xs font-bold text-gray-900 dark:text-white truncate">${escapeHtml(item.imageNumber)}.webp / ${escapeHtml(item.situationName || item.situationId)}</p>
-                            <p class="mt-0.5 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(item.status || 'pending'))} · 생성 ${escapeHtml(clampPlannerImageCount(item.count))}장</p>
-                        </div>
-                        <div class="flex items-center gap-2 flex-shrink-0">
-                            <input id="planner-${escapeHtml(item.imageNumber)}-count" type="number" min="${PLANNER_MIN_IMAGE_COUNT}" max="${PLANNER_MAX_IMAGE_COUNT}" value="${escapeHtml(clampPlannerImageCount(item.count))}" data-planner-editable oninput="window.markPlannerDraftDirty()" class="w-16 p-1.5 text-xs rounded border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-800 dark:text-gray-100">
-                            <button type="button" onclick="window.deletePlannerItem('${escapeJsString(item.situationId)}')" class="p-1.5 rounded text-red-500 hover:bg-red-50 dark:hover:bg-red-900/20 transition" title="플랜 삭제" aria-label="플랜 삭제">
-                                <i data-lucide="trash-2" class="w-4 h-4"></i>
-                            </button>
-                        </div>
-                    </div>
-                    <div class="grid grid-cols-1 md:grid-cols-2 gap-2">
-                        ${renderPlannerField(item, 'style', '그림체')}
-                        ${renderPlannerField(item, 'composition', '구도', 1)}
-                        ${renderPlannerField(item, 'character', '캐릭터')}
-                        ${renderPlannerField(item, 'clothing', '의상')}
-                        ${renderPlannerField(item, 'expression', '표정', 1)}
-                        ${renderPlannerField(item, 'action', '행위', 1)}
-                        ${renderPlannerField(item, 'background', '배경', 1)}
-                        ${renderPlannerField(item, 'negative', '부정 프롬프트', 1)}
-                    </div>
-                    ${renderPlannerGenerationFields(item)}
-                </div>
-            `).join('')}
-        </div>
-    ` : '<div class="flex-1 flex items-center justify-center text-sm font-bold text-gray-500 dark:text-gray-400 text-center">캐릭터와 상황을 선택한 뒤 추가하기를 눌러 플랜 작성안을 만드세요.</div>';
-
-    const scopeButton = (scope, label) => `
-        <button type="button" role="tab" aria-selected="${planScope === scope ? 'true' : 'false'}" onclick="window.setPlannerPlanScope('${scope}')" class="w-full min-w-0 whitespace-nowrap px-3 py-2 rounded-md text-center text-[10px] sm:text-[11px] font-bold transition ${planScope === scope ? 'bg-indigo-600 text-white' : 'text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700'}">
-            ${label}
-        </button>
-    `;
-
-    const renderScopeSelector = ({ title, characterDescription, situationDescription }) => `
-        <div class="mb-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30 p-3">
-            <div class="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
-                <div>
-                    <p class="text-[11px] font-bold text-gray-700 dark:text-gray-200">${escapeHtml(title)}</p>
-                    <p class="mt-1 text-[10px] text-gray-400 dark:text-gray-500">${escapeHtml(planScope === 'situation' ? situationDescription : characterDescription)}</p>
-                </div>
-                <div role="tablist" aria-label="${escapeHtml(title)}" class="grid w-full grid-cols-2 gap-1 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1.5 sm:w-auto sm:min-w-[210px]">
-                    ${scopeButton('character', '캐릭터 기준')}
-                    ${scopeButton('situation', '상황 기준')}
-                </div>
-            </div>
-        </div>
-    `;
-
-    const planView = `
-        ${renderScopeSelector({
-            title: '플랜 작성 기준',
-            characterDescription: '선택한 캐릭터의 상황별 플랜을 관리합니다.',
-            situationDescription: '선택한 상황의 캐릭터별 플랜을 관리합니다.'
-        })}
-        <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-            <p class="text-[11px] font-bold text-gray-500 dark:text-gray-400">${planScope === 'situation' ? '선택한 상황에 대해 캐릭터별 생성 가능 여부를 확인합니다.' : '상황을 선택하면 해당 상황의 플랜을 구성합니다.'}</p>
-            <div class="flex flex-wrap justify-end gap-2">
-                <button type="button" onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-200 text-xs font-bold hover:border-indigo-400 disabled:opacity-50 disabled:cursor-not-allowed">
-                    <i data-lucide="image-plus" class="w-4 h-4"></i> 누락된 플랜 전체 생성
-                </button>
-                ${deletablePlanCount ? `
-                    <button type="button" onclick="window.deleteAllPlannerItems()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''} class="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-red-600 dark:text-red-300 text-xs font-bold hover:bg-red-50 dark:hover:bg-red-900/20 disabled:opacity-50 disabled:cursor-not-allowed">
-                        <i data-lucide="${plannerBatchPlanDeletionRunning ? 'loader-2' : 'trash-2'}" class="w-4 h-4 ${plannerBatchPlanDeletionRunning ? 'animate-spin' : ''}"></i> ${plannerBatchPlanDeletionRunning ? '삭제 중' : '전체 플랜 삭제'}
-                    </button>
-                ` : ''}
-            </div>
-        </div>
-        ${!characters.length ? renderEmptyState('플랜을 작성하려면 먼저 캐릭터를 추가하세요.') : ''}
-        ${!situations.length ? renderEmptyState('플랜을 작성하려면 먼저 상황을 추가하세요.') : ''}
-        ${characters.length && situations.length ? (
-            planScope === 'situation'
-                ? renderPlannerCharacterGridForSituation(project, characters, selectedSituation)
-                : renderPlannerSituationGrid(project, situations, activeCharacter, meta, 'plan')
-        ) : ''}
-    `;
-
-    const runView = `
+        const runView = `
         <div class="flex items-center justify-between gap-3 mb-4">
             <div>
                 <p class="text-xs font-bold text-gray-900 dark:text-white">저장된 플랜 실행</p>
@@ -3312,58 +2826,20 @@ export function renderPlannerPanel(project, situations) {
         ${renderPlannerCharacterQueue(queueMetas)}
     `;
 
-    const resultView = `
-        ${renderScopeSelector({
-            title: '결과 확인 기준',
-            characterDescription: '선택한 캐릭터의 상황별 결과를 확인합니다.',
-            situationDescription: '선택한 상황의 캐릭터별 결과를 확인합니다.'
-        })}
-        <div class="flex items-center justify-between gap-3 mb-4">
-            <div>
-                <p class="text-xs font-bold text-gray-900 dark:text-white">결과 확인</p>
-                <p class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">${planScope === 'situation' ? '현재 선택한 상황의 캐릭터별 결과를 확인하고 선택합니다.' : '현재 선택한 캐릭터의 상황별 결과를 확인하고 선택합니다.'}</p>
-            </div>
-        </div>
-        ${planScope === 'situation'
-            ? renderPlannerCharacterGridForSituation(project, characters, selectedSituation, 'result')
-            : renderPlannerSituationGrid(project, situations, activeCharacter, meta, 'result')}
-    `;
 
-    return `
-        <div class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg p-4 h-full min-h-0 overflow-hidden flex flex-col">
-            <div class="flex flex-wrap items-start justify-between gap-3 mb-4 flex-shrink-0">
-                <div>
-                    <h3 class="font-bold text-sm text-gray-900 dark:text-white">플래너 데모</h3>
-                    <p id="planner-status" class="mt-1 min-h-4 text-[11px] text-gray-400 dark:text-gray-500">${escapeHtml(getPlannerStatusLabel(meta?.status))}</p>
-                </div>
-                <div class="flex w-full flex-wrap items-end justify-end gap-2 sm:w-auto">
-                    <div data-nai-usage-surface="planner" aria-live="polite" class="flex flex-shrink-0 items-center gap-1">
-                        <span data-nai-v5-usage class="flex-shrink-0 whitespace-nowrap rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-gray-500 dark:text-gray-300" title="NovelAI V5 무료 사용량">V5 --%</span>
-                        <span data-nai-anlas-balance class="flex-shrink-0 whitespace-nowrap rounded-md border border-gray-200 dark:border-gray-600 bg-gray-50 dark:bg-gray-700/70 px-1.5 sm:px-2 py-1 text-[9px] sm:text-[10px] font-semibold text-gray-500 dark:text-gray-300" title="NovelAI 잔여 Anlas">-- Anlas</span>
-                        ${renderPlannerBackgroundHealthBadge()}
-                    </div>
-                    ${targetSelector}
-                    <div class="flex items-center justify-end gap-1">
-                        <button type="button" onclick="window.openPlannerSettingsModal()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="플래너 설정">
-                            <i data-lucide="settings" class="w-4 h-4"></i>
-                        </button>
-                        <button type="button" onclick="window.requestPlannerRefresh()" class="p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700" title="새로고침">
-                            <i data-lucide="refresh-cw" class="w-4 h-4"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <div class="flex flex-wrap gap-2 mb-4 flex-shrink-0">
-                ${modeButton('plan', '플랜짜기', 'list-plus')}
-                ${modeButton('run', '실행 화면', 'play')}
-                ${modeButton('result', '결과 확인', 'images')}
-            </div>
-            <div data-planner-scroll="main" data-planner-view="${escapeHtml(view)}" class="min-h-0 flex-1 overflow-y-auto pr-1" style="overflow-anchor: none;">
-                ${view === 'plan' ? planView : view === 'run' ? runView : resultView}
-            </div>
-            ${renderPlannerSettingsModal(settings)}
-        </div>
-    `;
+    const scopeButton = (scope, label) => `<button type="button" class="pw-button" aria-pressed="${planScope === scope}" onclick="window.setPlannerPlanScope('${scope}')">${label}</button>`;
+    const viewButton = (name, label) => `<button type="button" class="pw-button" aria-pressed="${view === name}" onclick="window.setPlannerView('${name}')">${label}</button>`;
+    const board = !characters.length ? renderEmptyState('플랜을 작성하려면 먼저 캐릭터를 추가하세요.') : !situations.length ? renderEmptyState('플랜을 작성하려면 먼저 상황을 추가하세요.') : planScope === 'situation'
+        ? renderPlannerCharacterGridForSituation(project, characters, selectedSituation)
+        : renderPlannerSituationGrid(project, situations, activeCharacter, meta);
+    return `<div class="pw-panel">
+        <header class="pw-panel-header"><div><h3 class="font-bold">플래너</h3><p id="planner-status" class="text-xs" role="status">${escapeHtml(getPlannerStatusLabel(meta?.status))}</p></div>
+        <div class="flex flex-wrap items-center gap-2"><span data-nai-v5-usage class="text-xs">V5 --%</span><span data-nai-anlas-balance class="text-xs">-- Anlas</span>${renderPlannerBackgroundHealthBadge()}<button type="button" class="pw-button" onclick="window.openPlannerSettingsModal()">공통 설정</button></div></header>
+        <div class="pw-panel-header"><div class="flex gap-1">${scopeButton('character', '캐릭터 기준')}${scopeButton('situation', '상황 기준')}</div>${renderPlannerTargetTrigger(view === 'plan' && planScope === 'situation' ? 'situation' : 'character', project, view === 'plan' && planScope === 'situation' ? selectedSituation : activeCharacter)}</div>
+        <nav class="pw-panel-tabs" aria-label="플래너 화면">${viewButton('plan', '플랜 · 결과')}${viewButton('run', '실행 화면')}<button type="button" class="pw-button pw-refresh" onclick="window.requestPlannerRefresh()" aria-label="새로고침"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button></nav>
+        ${view === 'plan' ? `<div class="pw-panel-header"><h3>전체 플랜</h3><div class="flex flex-wrap gap-2"><button type="button" class="pw-button" onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>누락 플랜 생성</button><button type="button" class="pw-button text-red-600" onclick="window.deleteAllPlannerItems()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>전체 플랜 삭제</button></div></div>${renderPlannerWorkspaceFilters()}` : ''}
+        <div data-planner-scroll="main" data-planner-view="${view}" class="pw-board-scroll">${view === 'run' ? runView : board}</div>
+        ${renderPlannerSettingsModal(settings)}</div>`;
 }
 
 export function renderPlannerSection(section, state = {}) {
@@ -3420,14 +2896,6 @@ export function renderPlannerSectionByState(options = {}) {
     if (focusPolicy === 'preserve' && previousView === currentView) {
         requestAnimationFrame(() => restorePlannerFocusState(focusState));
     }
-}
-
-export function markPlannerDraftDirty() {
-    plannerDraftDirty = true;
-}
-
-function clearPlannerDraftDirty() {
-    plannerDraftDirty = false;
 }
 
 function isCurrentPlannerContext(projectId, characterId) {
@@ -3498,13 +2966,6 @@ function applyPlannerRefreshData(project, data) {
 }
 
 export async function requestPlannerRefresh() {
-    if (
-        (window.PROJECT_PLANNER_VIEW || 'plan') === 'plan'
-        && plannerDraftDirty
-        && !confirm('저장하지 않은 플랜 수정 내용이 있습니다. 서버의 최신 데이터로 새로고침하시겠습니까?')
-    ) {
-        return;
-    }
     await refreshPlannerPanel({ reason: 'manual', preserveScroll: true });
 }
 
@@ -3540,7 +3001,7 @@ export async function refreshPlannerPanel(options = {}) {
         applyPlannerRefreshData(project, data);
         if (reason === 'manual') clearPlannerDraftDirty();
         renderPlannerSectionByState({ preserveScroll });
-        if (['plan', 'result'].includes(window.PROJECT_PLANNER_VIEW || 'plan') && getPlannerPlanScope(project) === 'situation') {
+        if ((window.PROJECT_PLANNER_VIEW || 'plan') === 'plan' && getPlannerPlanScope(project) === 'situation') {
             await loadPlannerSituationScopeData({ force: true });
         }
         syncPlannerBackgroundPolling();
@@ -3554,11 +3015,11 @@ export async function refreshPlannerPanel(options = {}) {
 }
 
 export async function setPlannerView(view = 'plan') {
-    window.PROJECT_PLANNER_VIEW = ['plan', 'run', 'result'].includes(view) ? view : 'plan';
+    window.PROJECT_PLANNER_VIEW = view === 'run' ? 'run' : 'plan';
     renderPlannerSectionByState({ scroll: 'restore-view', focus: 'reset' });
     const project = getActiveProject();
     if (
-        window.PROJECT_PLANNER_VIEW === 'result'
+        window.PROJECT_PLANNER_VIEW === 'plan'
         && getPlannerPlanScope(project) === 'situation'
         && !plannerSituationScopeState.loaded
         && !plannerSituationScopeState.loading
@@ -3635,15 +3096,6 @@ export async function setPlannerPlanScope(scope = 'character') {
     }
 }
 
-export function selectPlannerSituationScope(situationId = '') {
-    const project = getActiveProject();
-    if (!project) return;
-    ensurePlannerPlanScopeProject(project);
-    const situation = getProjectItems(project, 'situations').find(entry => entry.id === situationId);
-    window.PROJECT_PLANNER_SELECTED_SITUATION_ID = situation?.id || getProjectItems(project, 'situations')[0]?.id || '';
-    renderPlannerSectionByState({ preserveScroll: true });
-}
-
 export function setPlannerGenerationMode(mode = 'browser') {
     window.PROJECT_PLANNER_GENERATION_MODE = mode === 'background' ? 'background' : 'browser';
     localStorage.setItem('imggul_planner_generation_mode', window.PROJECT_PLANNER_GENERATION_MODE);
@@ -3673,6 +3125,7 @@ export function closePlannerRunConfirmModal(event) {
     if (event && event.target?.id !== 'planner-run-confirm-modal') return;
     window.PROJECT_PLANNER_RUN_CONFIRM = false;
     renderPlannerRunConfirmOverlay();
+    releasePlannerWorkspaceDialog('execution');
 }
 
 export async function confirmPlannerRunStart() {
@@ -3690,8 +3143,6 @@ export async function loadPlannerForSelectedCharacter() {
     setCachedPlannerCharacterId(project, characterId);
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-    window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     window.PROJECT_PLANNER_RUN_CONFIRM = false;
@@ -3709,11 +3160,8 @@ export async function loadPlannerForSelectedCharacter() {
     ]);
     window.PROJECT_PLANNER_META = meta;
     window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, undefined, { force: true }).catch(() => meta ? [{ character, meta }] : []);
-    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
-    clearPlannerDraftDirty();
-    renderPlannerSituationPlanOverlay();
+    window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';    renderPlannerSituationPlanOverlay();
     renderPlannerResultOverlay();
-    renderPlannerPreviewOverlay();
     renderPlannerRunConfirmOverlay();
     renderPlannerSectionByState();
     syncPlannerBackgroundPolling({ immediate: window.PROJECT_PLANNER_VIEW === 'run' });
@@ -3721,15 +3169,17 @@ export async function loadPlannerForSelectedCharacter() {
 
 export async function openPlannerSituationPlanModal(situationId, characterId = '') {
     const project = getActiveProject();
+    const operation = ++plannerWorkspaceOpenOperation;
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
     const character = getCharacterById(project, targetCharacterId);
     if (!project || !character) return;
     const [meta, projectStyle] = await Promise.all([
-        loadPlannerMeta(project, targetCharacterId, { force: true }).catch(() => null),
+        loadPlannerMeta(project, targetCharacterId, { force: true }),
         loadProjectStylePrompt(project).catch(() => ''),
         loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts()),
         loadCharacterMeta(character).catch(() => ({}))
     ]);
+    if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return;
     plannerSituationScopeState.metas.set(targetCharacterId, meta);
     plannerSituationScopeState.errors.delete(targetCharacterId);
     if (meta) setPlannerMetaForCharacter(project, meta);
@@ -3741,9 +3191,12 @@ export async function openPlannerSituationPlanModal(situationId, characterId = '
 
 export function closePlannerSituationPlanModal(event) {
     if (event && event.target?.id !== 'planner-situation-plan-modal') return;
+    plannerWorkspaceOpenOperation++;
+    capturePlannerEditorDraft();
     window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     renderPlannerSituationPlanOverlay();
+    releasePlannerWorkspaceDialog('editor');
 }
 
 export async function openPlannerResultModal(situationId, characterId = '') {
@@ -3751,14 +3204,11 @@ export async function openPlannerResultModal(situationId, characterId = '') {
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = targetCharacterId;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = situationId;
-    window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     if (project && targetCharacterId && !getPlannerMetaForCharacter(project, targetCharacterId)) {
         const meta = await loadPlannerMeta(project, targetCharacterId, { force: true }).catch(() => null);
         if (meta) setPlannerMetaForCharacter(project, meta);
     }
     renderPlannerResultOverlay();
-    renderPlannerPreviewOverlay();
     const meta = getPlannerMetaForCharacter(project, targetCharacterId);
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background' && meta?.backgroundJobId) {
         refreshPlannerBackgroundStatus(meta.backgroundJobId).catch(() => null);
@@ -3768,27 +3218,8 @@ export async function openPlannerResultModal(situationId, characterId = '') {
 export function closePlannerResultModal() {
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-    window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     renderPlannerResultOverlay();
-    renderPlannerPreviewOverlay();
-}
-
-export function openPlannerImagePreview(key, characterId = '', situationId = '') {
-    window.PLANNER_IMAGE_PREVIEW_KEY = key;
-    window.PLANNER_IMAGE_PREVIEW_CONTEXT = {
-        key,
-        characterId: characterId || window.PLANNER_RESULT_MODAL_CHARACTER_ID || '',
-        situationId: situationId || window.PLANNER_RESULT_MODAL_SITUATION_ID || ''
-    };
-    renderPlannerPreviewOverlay();
-}
-
-export function closePlannerImagePreview(event) {
-    if (event && event.target?.id !== 'planner-image-preview-modal') return;
-    window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
-    renderPlannerPreviewOverlay();
+    releasePlannerWorkspaceDialog('review');
 }
 
 function syncPlannerBasePromptSettingsInputs() {
@@ -3831,6 +3262,7 @@ export function updatePlannerModelCapabilities(options = {}) {
         if (scale) scale.value = String(profile.defaultScale);
         if (sampler) sampler.value = profile.defaultSampler;
     }
+    syncPlannerOptionLabels();
 }
 
 export function openPlannerSettingsModal() {
@@ -3840,6 +3272,7 @@ export function openPlannerSettingsModal() {
     updatePlannerModelCapabilities();
     modal.classList.remove('hidden');
     modal.classList.add('flex');
+    enhancePlannerWorkspaceDialogs();
     refreshProjectIcons();
 }
 
@@ -3849,6 +3282,7 @@ export function closePlannerSettingsModal(event) {
     if (!modal) return;
     modal.classList.add('hidden');
     modal.classList.remove('flex');
+    releasePlannerWorkspaceDialog('settings');
 }
 
 export async function savePlannerSettingsFromModal() {
@@ -3984,39 +3418,7 @@ export async function handlePlannerReferenceDrop(event, target) {
     }
 }
 
-export async function addPlannerV4Prompt(imageNumber) {
-    const project = getActiveProject();
-    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    if (!meta?.items?.length) return;
-    meta = readPlannerEditsFromDom(meta);
-    const item = meta.items.find(entry => String(entry.imageNumber) === String(imageNumber));
-    if (!item) return;
-    if ((item.generation.v4PromptCharacters || []).length >= MAX_V4_PROMPT_CHARACTERS) return alert(`캐릭터 프롬프트는 최대 ${MAX_V4_PROMPT_CHARACTERS}명까지만 추가할 수 있습니다.`);
-    item.generation.v4PromptCharacters = [
-        ...(item.generation.v4PromptCharacters || []),
-        { subject: '', clothing: '', expression: '', action: '', negative: '' }
-    ];
-    item.generation.v4_prompt = item.generation.v4PromptCharacters;
-    window.PROJECT_PLANNER_META = meta;
-    markPlannerDraftDirty();
-    renderPlannerSectionByState();
-}
-
-export async function removePlannerV4Prompt(imageNumber, index) {
-    const project = getActiveProject();
-    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    if (!meta?.items?.length) return;
-    meta = readPlannerEditsFromDom(meta);
-    const item = meta.items.find(entry => String(entry.imageNumber) === String(imageNumber));
-    if (!item) return;
-    item.generation.v4PromptCharacters = (item.generation.v4PromptCharacters || []).filter((_, rowIndex) => rowIndex !== index);
-    item.generation.v4_prompt = item.generation.v4PromptCharacters;
-    window.PROJECT_PLANNER_META = meta;
-    markPlannerDraftDirty();
-    renderPlannerSectionByState();
-}
-
-export async function savePlannerSituationPlan() {
+async function commitPlannerSituationPlan() {
     const project = getActiveProject();
     if (!project) return;
     const situation = getSituationById(project, window.PLANNER_PLAN_MODAL_SITUATION_ID);
@@ -4145,10 +3547,11 @@ export async function savePlannerSituationPlan() {
     setPlannerMetaForCharacter(project, meta);
     plannerSituationScopeState.metas.set(characterId, clonePlannerMetaValue(meta));
     plannerSituationScopeState.errors.delete(characterId);
-    window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
-    window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
-    renderPlannerSituationPlanOverlay();
+    clearPlannerEditorDraft();
     renderPlannerSectionByState({ preserveScroll: true });
+    renderPlannerSituationPlanOverlay();
+    const savedStatus = document.getElementById('planner-plan-modal-status');
+    if (savedStatus) savedStatus.textContent = '저장되었습니다.';
 }
 
 function buildPlannerPlanItemFromSituation({
@@ -4481,31 +3884,8 @@ async function runPlannerBatchPlanCreation(scope) {
     }
 }
 
-export async function createMissingPlannerPlans() {
-    await runPlannerBatchPlanCreation('character');
-}
-
 export async function createAllMissingPlannerPlans() {
     await runPlannerBatchPlanCreation(getPlannerPlanScope());
-}
-
-export async function savePlannerDraft() {
-    const project = getActiveProject();
-    if (!project) return;
-
-    let meta = window.PROJECT_PLANNER_META || await loadPlannerMeta(project).catch(() => null);
-    if (!meta?.items?.length) {
-        setPlannerStatus('저장할 플랜 작성안이 없습니다.');
-        return;
-    }
-
-    meta = readPlannerEditsFromDom(meta);
-    meta.status = 'draft';
-    await persistPlannerGenerationToSituations(project, meta);
-    await savePlannerMeta(project, meta);
-    window.PROJECT_PLANNER_META = meta;
-    clearPlannerDraftDirty();
-    setPlannerStatus('플랜이 저장되었습니다.');
 }
 
 export async function deletePlannerItem(situationId, characterId = '') {
@@ -4517,12 +3897,10 @@ export async function deletePlannerItem(situationId, characterId = '') {
 
     const item = meta.items.find(entry => entry.situationId === situationId);
     if (!item) return;
-    if (!confirm(`'${item.situationName || item.situationId}' 플랜을 삭제하시겠습니까?\n이 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
+    if (!await confirmPlannerWorkspaceAction(`'${item.situationName || item.situationId}' 플랜을 삭제하시겠습니까?\n이 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
 
     if (window.PLANNER_RESULT_MODAL_SITUATION_ID === situationId) {
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-        window.PLANNER_IMAGE_PREVIEW_KEY = null;
-        window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     }
 
     await clearPlannerItemImages(project, item);
@@ -4541,7 +3919,6 @@ export async function deletePlannerItem(situationId, characterId = '') {
     }
     clearFolderDataCaches(getPlannerPrefix(project));
     renderPlannerResultOverlay();
-    renderPlannerPreviewOverlay();
     renderPlannerSectionByState();
 }
 
@@ -4561,7 +3938,7 @@ async function deleteAllPlannerItemsForCharacter() {
         setPlannerStatus('생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
         return;
     }
-    if (!confirm(`현재 캐릭터의 플랜 ${meta.items.length}개를 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
+    if (!await confirmPlannerWorkspaceAction(`현재 캐릭터의 플랜 ${meta.items.length}개를 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
 
     const items = [...meta.items];
     await clearPlannerItemsImages(project, items, meta);
@@ -4569,15 +3946,12 @@ async function deleteAllPlannerItemsForCharacter() {
     await deletePlannerMeta(project, meta.characterId);
     window.PROJECT_PLANNER_META = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-    window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
     window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
     clearFolderDataCaches(getPlannerPrefix(project));
     updatePlannerQueueMetaCache(project, { ...meta, items: [] });
     renderPlannerSituationPlanOverlay();
     renderPlannerResultOverlay();
-    renderPlannerPreviewOverlay();
     renderPlannerSectionByState();
     setPlannerStatus(`${items.length}개 플랜을 삭제했습니다.`);
 }
@@ -4620,7 +3994,7 @@ async function deleteAllPlannerItemsForSituation() {
         setPlannerStatus('생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
         return;
     }
-    if (!confirm(`'${getSituationDisplayName(situation)}' 상황의 플랜 ${targets.length}개를 캐릭터 ${targets.length}명에서 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
+    if (!await confirmPlannerWorkspaceAction(`'${getSituationDisplayName(situation)}' 상황의 플랜 ${targets.length}개를 캐릭터 ${targets.length}명에서 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
 
     plannerBatchPlanDeletionRunning = true;
     renderPlannerSectionByState({ preserveScroll: true });
@@ -4637,14 +4011,11 @@ async function deleteAllPlannerItemsForSituation() {
         plannerSituationScopeState.metas = new Map();
         plannerSituationScopeState.errors = new Map();
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-        window.PLANNER_IMAGE_PREVIEW_KEY = null;
-        window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
         window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
         window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
         clearFolderDataCaches(getPlannerPrefix(project));
         renderPlannerSituationPlanOverlay();
         renderPlannerResultOverlay();
-        renderPlannerPreviewOverlay();
         await refreshPlannerPanel({ reason: 'delete', preserveScroll: true });
 
         const deletedCount = Number(data.deletedCount || 0);
@@ -4686,7 +4057,7 @@ export async function deletePlannerImage(key) {
 
     const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
     if (!item) return;
-    if (!confirm('이 임시 이미지를 삭제하시겠습니까?')) return;
+    if (!await confirmPlannerWorkspaceAction('이 임시 이미지를 삭제하시겠습니까?')) return;
 
     const res = await fetch('/api/manage', {
         method: 'POST',
@@ -5763,7 +5134,7 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
         return;
     }
 
-    meta = readPlannerEditsFromDom(meta);
+    meta = preparePlannerSavedItems(meta);
     await persistPlannerGenerationToSituations(project, meta).catch(() => null);
     const targetItems = getPlannerRunnableItems(meta, situationId, options.clearExisting === true);
     if (!targetItems.length) {
@@ -5879,7 +5250,7 @@ export async function startPlannerResultGeneration(situationId = null) {
         setPlannerStatus('백그라운드 생성은 아직 참조 이미지를 지원하지 않습니다. 브라우저 모드를 사용하세요.');
         return;
     }
-    if (!confirm('이 플랜의 기존 후보 이미지를 삭제하고 다시 생성하시겠습니까?')) return;
+    if (!await confirmPlannerWorkspaceAction('이 플랜의 기존 후보 이미지를 삭제하고 다시 생성하시겠습니까?')) return;
     const costPreparation = await preparePlannerCostForExecution(targetItems.map(item => ({
         generation: item.generation,
         requestCount: getPlannerItemTargetCount(item, meta)
@@ -5892,10 +5263,7 @@ export async function startPlannerResultGeneration(situationId = null) {
         if (result.data?.jobId) startPlannerBackgroundPolling(result.data.jobId);
         setPlannerStatus('백그라운드 생성 작업을 등록했습니다.');
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-        window.PLANNER_IMAGE_PREVIEW_KEY = null;
-        window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
         renderPlannerResultOverlay();
-        renderPlannerPreviewOverlay();
         renderPlannerSectionByState({ scroll: 'restore-view', focus: 'reset' });
         syncPlannerBackgroundPolling({ immediate: true });
         if (result.data?.jobId) await refreshPlannerBackgroundStatus(result.data.jobId).catch(() => null);
@@ -6058,7 +5426,7 @@ export async function startPlannerGeneration(situationId = null, options = {}) {
     }
 
     if (!explicitMeta) {
-        meta = readPlannerEditsFromDom(meta);
+        meta = preparePlannerSavedItems(meta);
         await persistPlannerGenerationToSituations(project, meta).catch(() => null);
     }
     const resumeRun = !!options.resume;
@@ -6114,32 +5482,7 @@ export async function selectPlannerImage(key) {
     meta.updatedAt = Date.now();
     setPlannerMetaForCharacter(project, meta);
     syncPlannerResultModalSelection(item, key);
-    renderPlannerPreviewOverlay();
     renderPlannerSectionByState({ preserveScroll: true });
-}
-
-export async function selectPlannerImageFromPreview(key) {
-    const project = getActiveProject();
-    const previewContext = window.PLANNER_IMAGE_PREVIEW_CONTEXT || {};
-    const meta = previewContext.key === key && previewContext.characterId
-        ? getPlannerMetaForCharacter(project, previewContext.characterId)
-        : findPlannerMetaByImageKey(project, key);
-    if (!project || !meta?.items) return;
-    const item = previewContext.key === key && previewContext.situationId
-        ? getPlannerItemBySituationId(meta, previewContext.situationId)
-        : meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
-    if (item && (!Array.isArray(item.images) || !item.images.includes(key))) return;
-    if (!item) return;
-    item.selectedImage = key;
-    item.selectedAssetId = (item.generatedImages || []).find(asset =>
-        asset?.key === key || asset?.r2Key === key
-    )?.id || '';
-    meta.updatedAt = Date.now();
-    window.PLANNER_IMAGE_PREVIEW_KEY = null;
-    window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
-    setPlannerMetaForCharacter(project, meta);
-    syncPlannerResultModalSelection(item, key);
-    renderPlannerPreviewOverlay();
 }
 
 export function buildPlannerMetadataFallback(item) {
@@ -6439,13 +5782,53 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
         if (shouldCloseResultState) {
             window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
             window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-            window.PLANNER_IMAGE_PREVIEW_KEY = null;
-            window.PLANNER_IMAGE_PREVIEW_CONTEXT = null;
         }
         renderPlannerResultOverlay();
-        renderPlannerPreviewOverlay();
         renderPlannerSectionByState({ scroll: 'preserve', focus: 'reset' });
         if (finalMessage) setPlannerStatus(finalMessage);
         window.PROJECT_PLANNER_CONFIRMING = false;
     }
+}
+
+export async function openPlannerWorkspaceItem(situationId, characterId = '') {
+    const project = getActiveProject();
+    const targetId = characterId || getSelectedPlannerCharacterId(project);
+    const operation = ++plannerWorkspaceOpenOperation;
+    try {
+        const meta = await loadPlannerMeta(project, targetId, { force: true });
+        if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return;
+        if (meta) setPlannerMetaForCharacter(project, meta);
+        const item = getPlannerSituationItem(meta, situationId);
+        if (item?.images?.length) await openPlannerResultModal(situationId, targetId);
+        else await openPlannerSituationPlanModal(situationId, targetId);
+    } catch (error) {
+        setPlannerStatus(error.message || '플랜을 불러오지 못했습니다. 다시 시도하세요.');
+    }
+}
+
+export async function navigatePlannerWorkspaceItem(offset) {
+    const project = getActiveProject();
+    const characterId = window.PLANNER_PLAN_MODAL_CHARACTER_ID || getPlannerResultModalCharacterId(project);
+    const situationId = window.PLANNER_PLAN_MODAL_SITUATION_ID || window.PLANNER_RESULT_MODAL_SITUATION_ID;
+    const bySituation = getPlannerPlanScope(project) === 'situation';
+    const targets = getProjectItems(project, bySituation ? 'characters' : 'situations');
+    const index = targets.findIndex(item => item.id === (bySituation ? characterId : situationId));
+    const next = targets[index + offset];
+    if (!next || index < 0) return;
+    if (window.PLANNER_PLAN_MODAL_SITUATION_ID) closePlannerSituationPlanModal();
+    closePlannerResultModal();
+    await openPlannerWorkspaceItem(bySituation ? situationId : next.id, bySituation ? next.id : characterId);
+}
+
+let plannerEditorSaving = false;
+export async function savePlannerSituationPlan(button = null) {
+    if (plannerEditorSaving) return;
+    plannerEditorSaving = true;
+    if (button) button.disabled = true;
+    try { await commitPlannerSituationPlan(); }
+    catch (error) {
+        const status = document.getElementById('planner-plan-modal-status');
+        if (status) status.textContent = error.message || '플랜 저장에 실패했습니다.';
+        setPlannerStatus(error.message || '플랜 저장에 실패했습니다.');
+    } finally { plannerEditorSaving = false; if (button?.isConnected) button.disabled = false; }
 }

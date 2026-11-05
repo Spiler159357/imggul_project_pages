@@ -11,6 +11,7 @@
     "check:novelai-v5": "node scripts/check-novelai-v5.mjs",
     "check:prompt-metadata": "node scripts/check-prompt-metadata.mjs",
     "check:planner-background-recovery": "node scripts/check-planner-background-recovery.mjs",
+    "check:planner-workspace": "node scripts/check-planner-workspace.mjs",
     "postinstall": "npm run build:version",
     "deploy:background": "wrangler deploy -c wrangler.background.toml"
   },
