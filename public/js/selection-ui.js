@@ -58,9 +58,9 @@ export function prepareSelectionLibrary(modal, gridId) {
 
 export function renderSelectionDialog({ id = '', title, description = '항목을 클릭하면 바로 선택됩니다.', context = '', toolbar = '', body, closeAttributes, backdropAttributes = '', panelAttributes = '' }) {
     return `<div ${id ? `id="${html(id)}"` : ''} class="pw-backdrop selection-backdrop" ${backdropAttributes}><section class="pw-dialog selection-dialog" role="dialog" aria-modal="true" aria-label="${html(title)}" ${panelAttributes}>
-        <header class="pw-dialog-header selection-header"><div><h3>${html(title)}</h3><p>${html(description)}</p></div><button type="button" class="pw-button selection-close" aria-label="닫기" ${closeAttributes}>닫기</button></header>
+        <header class="pw-dialog-header selection-header"><div><h3>${html(title)}</h3><p>${html(description)}</p></div></header>
         <div class="selection-toolbar">${context ? `<nav class="selection-context" aria-label="현재 위치">${context}</nav>` : ''}${toolbar}</div>
-        <div class="selection-content">${body}</div></section></div>`;
+        <div class="selection-content">${body}</div><footer class="pw-dialog-footer"><button type="button" class="pw-button selection-close" aria-label="닫기" ${closeAttributes}>닫기</button></footer></section></div>`;
 }
 
 export function filterSelectionGrid(id, value = '') {

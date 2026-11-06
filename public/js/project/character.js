@@ -1,6 +1,6 @@
-import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, changeCharacterStoragePath, clearFolderDataCacheTree, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderCharacterName, renderEmptyState, renderProjectShell, replaceCachedCraftCharacterPath, replaceCachedPlannerCharacterId, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js?v=planner-workspace-20261106n';
-import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=planner-workspace-20261106n';
-import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js?v=planner-workspace-20261106n';
+import { DEFAULT_PLANNER_RESOLUTION, PROJECT_SECTIONS, changeCharacterStoragePath, clearFolderDataCacheTree, clearProjectCaches, createProjectChildFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveCharacterPromptVariant, getActiveProject, getAssetUrl, getCachedSituationRating, getCharacterById, getFileBaseName, getFileNameFromKey, getItemLabel, getNextSituationFolderName, getNextSituationImageNumber, getProjectById, getProjectItems, getRememberedProjectSectionScroll, getSituationDisplayName, getSituationGeneration, getSituationImageKey, getSituationImageNumber, getSituationRating, getSituationStorageName, getVersionedAssetUrl, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptParts, normalizeCharacterPromptVariants, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, rememberProjectSectionScroll, renderCharacterName, renderEmptyState, renderProjectShell, replaceCachedCraftCharacterPath, replaceCachedPlannerCharacterId, replaceProjectRoute, saveCharacterMeta, saveProjectAlias, saveProjectSituations, setCachedSituationRating, setProjectRoute } from './shared.js?v=planner-workspace-20261106o';
+import { openProjectSection, renderProjectManage, renderSectionHeader } from './manage.js?v=planner-workspace-20261106o';
+import { combinePromptParts, getSituationPrompt, renderSituationSection } from './situation.js?v=planner-workspace-20261106o';
 
 export function getSituationImageCandidates(situation, index) {
     const legacyStorageName = situation?.imageNumber !== undefined && situation?.imageNumber !== null
@@ -709,9 +709,7 @@ export function renderProjectItemCreateModal() {
             <div class="w-full max-w-md bg-white dark:bg-gray-800 rounded-xl shadow-2xl border border-gray-200 dark:border-gray-700 overflow-hidden" onclick="event.stopPropagation()">
                 <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
                     <h3 id="project-item-create-title" class="text-sm font-bold text-gray-900 dark:text-white">항목 추가</h3>
-                    <button type="button" onclick="window.closeProjectItemCreateModal()" class="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:text-red-500 hover:bg-gray-100 dark:hover:bg-gray-700 transition" aria-label="닫기">
-                        <i data-lucide="x" class="w-5 h-5"></i>
-                    </button>
+
                 </div>
 
                 <form id="project-item-create-form" class="p-4 sm:p-5 space-y-4" onsubmit="window.submitProjectItemCreate(event)">
@@ -738,8 +736,9 @@ export function renderProjectItemCreateModal() {
                     <div id="project-item-create-error" class="hidden text-xs text-red-500"></div>
 
                     <div class="flex justify-end gap-2 pt-2">
-                        <button type="button" onclick="window.closeProjectItemCreateModal()" class="px-4 py-2 text-sm font-bold rounded-lg border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition">취소</button>
+
                         <button id="project-item-create-submit" type="submit" class="px-4 py-2 text-sm font-bold rounded-lg bg-indigo-600 text-white hover:bg-indigo-700 dark:bg-indigo-700 dark:hover:bg-indigo-600 transition">생성</button>
+                        <button type="button" onclick="window.closeProjectItemCreateModal()" class="pw-button">닫기</button>
                     </div>
                 </form>
             </div>

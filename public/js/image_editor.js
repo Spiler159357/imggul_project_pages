@@ -1,5 +1,5 @@
-import { filterSelectionGrid, getSelectionFileAlias, getSelectionFolderImage, prepareSelectionLibrary } from './selection-ui.js?v=selection-ui-20261106a';
-import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=selection-ui-20261106a';
+import { filterSelectionGrid, getSelectionFileAlias, getSelectionFolderImage, prepareSelectionLibrary } from './selection-ui.js?v=selection-ui-20261106b';
+import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=selection-ui-20261106b';
 import { ImageEditorCore } from './image_editor/core.js?v=image-editor-history-20260607a';
 import { getDefaultEditedKey, isSupportedImageKey } from './image_editor/document.js?v=image-editor-history-20260607a';
 import { createOrUpdateDocument, deleteEditorDocument, getDocument, listEditorDocuments } from './image_editor/storage.js?v=image-editor-history-20260607a';
@@ -376,9 +376,7 @@ function ensureImageEditorLibraryModal() {
                     <h3 class="text-sm font-bold text-gray-900 dark:text-white">편집할 이미지 선택</h3>
                     <p id="image-editor-library-path" class="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[70vw]">/</p>
                 </div>
-                <button id="close-image-editor-library-btn" type="button" class="pw-button selection-close" aria-label="닫기">
-                    닫기
-                </button>
+
             </div>
             <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/70">
                 <div class="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 p-1">
@@ -396,7 +394,9 @@ function ensureImageEditorLibraryModal() {
                 </div>
                 <div id="image-editor-library-empty" class="hidden items-center justify-center py-12 text-gray-500 text-sm">선택할 수 있는 이미지가 없습니다.</div>
                 <div id="image-editor-library-grid" class="selection-grid"></div>
-            </div>
+            </div><footer class="pw-dialog-footer"><button id="close-image-editor-library-btn" type="button" class="pw-button selection-close" aria-label="닫기">
+                    닫기
+                </button></footer>
         </div>
     `;
     document.body.appendChild(modal);

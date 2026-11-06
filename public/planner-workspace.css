@@ -34,14 +34,16 @@
 .pw-images figure{display:flex;flex-direction:column;overflow:auto;min-height:0;margin:0;align-items:center;background:#f3f4f6;border-radius:6px;overscroll-behavior:contain}
 .dark .pw-images figure{background:#171717}
 .pw-images figcaption{flex:none;font-size:11px;padding:5px;overflow-wrap:anywhere}
-.pw-images img{display:block;width:100%;transform:scale(var(--pw-zoom,1));transform-origin:top left;max-width:none;min-height:0;flex:1;object-fit:contain;touch-action:pan-y}
+.pw-images img{display:block;width:100%;max-width:none;min-height:0;flex:1;object-fit:contain;touch-action:pan-y}
 .pw-thumbnails button[aria-pressed=true]{border-color:#6366f1}
 .pw-review-footer{padding:10px 14px;border-top:1px solid #e5e7eb;display:grid;gap:7px;flex:none}
 .pw-review-footer>div{justify-content:flex-end}
 .pw-review-footer>div:first-child{justify-content:space-between}
 .pw-review-footer p{font-size:11px}
-.pw-review-footer label{font-size:12px}
-.pw-review-footer input{width:60px;padding:6px;background:transparent;border:1px solid #e5e7eb;border-radius:5px}
+.pw-review-footer .pw-delete-plan{margin-right:auto}
+.pw-review-notice:empty{display:none}
+.pw-review-empty{margin:auto;padding:24px;text-align:center;font-size:13px;line-height:1.7;color:#6b7280}
+.dark .pw-review-empty{color:#a3a3a3}
 .pw-option{display:grid;gap:4px;font-size:11px;color:inherit}
 .pw-option-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px}
 .pw-option-grid .pw-button{min-height:65px;overflow-wrap:anywhere}
@@ -74,9 +76,14 @@
 .pw-editor-body .planner-plan-v4-prompt-input{height:44px!important;resize:none}
 .pw-editor-body label>span{font-size:11px}
 
-.pw-confirm-dialog{height:auto;max-width:480px}
-.pw-confirm-message{white-space:pre-wrap}
-.pw-confirm-dialog .pw-dialog-body{flex:initial}
+.pw-confirm-dialog{height:auto;max-width:440px;box-shadow:0 24px 70px #0004}
+.pw-confirm-message{white-space:pre-wrap;font-size:14px;line-height:1.8;overflow-wrap:anywhere}
+.pw-confirm-dialog .pw-dialog-body{flex:initial;padding:22px}
+.pw-confirm-dialog .pw-dialog-header{padding:18px 22px}
+.pw-button.pw-danger{color:#dc2626;border-color:#fecaca}
+.pw-button.pw-danger-primary{background:#dc2626;color:#fff;border-color:#dc2626}
+.pw-button.pw-danger-primary:hover:not(:disabled){background:#b91c1c;border-color:#b91c1c}
+.dark .pw-button.pw-danger{color:#fca5a5;border-color:#7f1d1d}
 /* The allowed prompt options and settings model use native dropdowns. */
 .pw-select{width:100%;min-width:0;min-height:36px;padding:8px;border:1px solid #e5e7eb;border-radius:7px;background:#fff;color:#374151;font:inherit;font-size:12px}
 .pw-select:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
@@ -100,7 +107,7 @@
 @media(pointer:coarse){.pw-select{min-height:44px;font-size:16px}}
 
 /* Match the existing project gray/indigo palette. */
-.pw-button:hover:not(:disabled):not([aria-pressed=true]):not(.pw-primary){background:#f9fafb;border-color:#818cf8}
+.pw-button:hover:not(:disabled):not([aria-pressed=true]):not(.pw-primary):not(.pw-danger-primary){background:#f9fafb;border-color:#818cf8}
 .pw-button.pw-primary:hover:not(:disabled),.pw-button[aria-pressed=true]:hover:not(:disabled){background:#4338ca;border-color:#4338ca}
 .pw-plan-card:hover{border-color:#818cf8}
 .pw-plan-card>span,.pw-plan-card>small,.pw-dialog-header p,.pw-images figcaption,.pw-option>span,.pw-review-footer p{color:#6b7280}
@@ -108,7 +115,9 @@
 .dark .pw-panel,.dark .pw-dialog{color:#fff}
 .dark .pw-button{color:#e5e5e5}
 .dark .pw-button[aria-pressed=true],.dark .pw-button.pw-primary{background:#4f46e5;color:#fff;border-color:#4f46e5}
-.dark .pw-button:hover:not(:disabled):not([aria-pressed=true]):not(.pw-primary){background:#262626;border-color:#525252}
+.dark .pw-button:hover:not(:disabled):not([aria-pressed=true]):not(.pw-primary):not(.pw-danger-primary){background:#262626;border-color:#525252}
+.dark .pw-button.pw-danger-primary{background:#dc2626;color:#fff;border-color:#dc2626}
+.dark .pw-button.pw-danger-primary:hover:not(:disabled){background:#b91c1c;border-color:#b91c1c}
 .dark .pw-button.pw-primary:hover:not(:disabled),.dark .pw-button[aria-pressed=true]:hover:not(:disabled){background:#4338ca;border-color:#4338ca}
 .dark .pw-board-tools input,.dark .pw-dialog-header,.dark .pw-review-footer,.dark .pw-review-footer input{border-color:#404040}
 .dark .pw-plan-card>span,.dark .pw-plan-card>small,.dark .pw-dialog-header p,.dark .pw-images figcaption,.dark .pw-option>span,.dark .pw-review-footer p,.dark .pw-plan-placeholder{color:#a3a3a3}

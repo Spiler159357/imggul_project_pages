@@ -6,6 +6,9 @@
 .selection-header h3{font-size:15px;font-weight:700}
 .selection-header p{font-size:12px;color:#6b7280;margin-top:4px}
 .selection-close{flex:none;min-height:40px}
+.pw-dialog-footer{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:8px;flex:none;padding:12px 18px;border-top:1px solid #e5e7eb;background:inherit}
+.pw-dialog-footer .pw-delete-plan{margin-right:auto}
+.dark .pw-dialog-footer{border-color:#404040}
 .selection-toolbar{display:flex;flex-direction:column;gap:10px;padding:12px 18px;border-bottom:1px solid #e5e7eb;flex:none}
 .selection-toolbar[hidden]{display:none}
 .selection-context{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;overflow-wrap:anywhere}

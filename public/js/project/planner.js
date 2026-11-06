@@ -1,10 +1,10 @@
-import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106a';
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext } from './planner-workspace.js?v=planner-workspace-20261106n';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106n';
+import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106b';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice } from './planner-workspace.js?v=planner-workspace-20261106o';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106o';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106n';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106n';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106n';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106o';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106o';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106o';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -1838,9 +1838,6 @@ export function renderPlannerSettingsModal(settings) {
             <div class="w-full max-w-2xl rounded-xl bg-white dark:bg-gray-900 border border-gray-200 dark:border-gray-700 shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
                 <div class="flex items-center justify-between px-4 py-3 border-b border-gray-200 dark:border-gray-700">
                     <h3 class="text-sm font-bold text-gray-900 dark:text-white">플래너 공통 설정</h3>
-                    <button type="button" onclick="window.closePlannerSettingsModal()" class="p-1.5 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
-                        <i data-lucide="x" class="w-4 h-4"></i>
-                    </button>
                 </div>
                 <div class="p-4 space-y-3 max-h-[76vh] overflow-y-auto">
                     ${renderPlannerSelect('planner-setting-model', 'Model', settings.model, PLANNER_MODEL_OPTIONS, 'onchange="window.updatePlannerModelCapabilities({ applyDefaults: true })"')}
@@ -1875,8 +1872,8 @@ export function renderPlannerSettingsModal(settings) {
                     <p id="planner-settings-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                 </div>
                 <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex justify-end gap-2">
-                    <button type="button" onclick="window.closePlannerSettingsModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">취소</button>
                     <button type="button" onclick="window.savePlannerSettingsFromModal()" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">저장</button>
+                    <button type="button" onclick="window.closePlannerSettingsModal()" class="pw-button">닫기</button>
                 </div>
             </div>
         </div>
@@ -1891,7 +1888,7 @@ export function getPlannerItemBySituationId(meta, situationId) {
 export function renderPlannerResultModal(meta) {
     const item = getPlannerItemBySituationId(meta, window.PLANNER_RESULT_MODAL_SITUATION_ID);
     if (!item) { resetPlannerReviewReferenceContext(); return ''; }
-    return renderPlannerWorkspaceReview(item, meta, window.PROJECT_PLANNER_CONFIRMING || isPlannerConfirmBlocked(meta, item));
+    return renderPlannerWorkspaceReview(item, meta, window.PROJECT_PLANNER_CONFIRMING || plannerResultRegenerating || isPlannerConfirmBlocked(meta, item));
 }
 
 export function renderPlannerRunConfirmModal() {
@@ -1910,8 +1907,8 @@ export function renderPlannerRunConfirmModal() {
                     <p class="text-xs leading-5 text-gray-600 dark:text-gray-300">삭제된 후보 이미지는 되돌릴 수 없습니다. 계속 진행하시겠습니까?</p>
                 </div>
                 <div class="px-4 py-3 border-t border-gray-200 dark:border-gray-700 flex items-center justify-end gap-2">
-                    <button type="button" onclick="window.closePlannerRunConfirmModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200">취소</button>
                     <button type="button" onclick="window.confirmPlannerRunStart()" class="px-3 py-2 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-700">삭제 후 실행</button>
+                    <button type="button" onclick="window.closePlannerRunConfirmModal()" class="pw-button">취소</button>
                 </div>
             </div>
         </div>
@@ -2620,9 +2617,6 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
                         <button type="button" class="pw-button" onclick="window.updatePlannerPlanModalDefaults('all')">기본값</button>
                         ${existingItem?.images?.length ? `<button type="button" class="pw-button" data-pw-action="review-from-editor" data-situation="${escapeHtml(situation.id)}" data-character="${escapeHtml(character.id)}">후보 검수로</button>` : ''}
                     </div>
-                    <button type="button" onclick="window.closePlannerSituationPlanModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500">
-                        <i data-lucide="x" class="w-5 h-5"></i>
-                    </button>
                 </div>
                 <div class="pw-editor-body flex-1 min-h-0 overflow-y-auto p-4 space-y-4">
                     <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
@@ -2658,10 +2652,11 @@ export function renderPlannerSituationPlanModal(project, situation, character, m
                     ${renderPlannerPlanV4PromptSection(generation.v4PromptCharacters || generation.v4_prompt || [])}
                     <p id="planner-plan-modal-status" class="min-h-4 text-[11px] text-gray-400 dark:text-gray-500"></p>
                 </div>
-                <div class="flex items-center justify-start gap-2 px-4 py-3 border-t border-gray-200 dark:border-gray-700">
-                    ${existingItem ? `<button type="button" onclick="window.deletePlannerItemFromModal('${escapeJsString(situation.id)}')" class="px-3 py-2 rounded-lg border border-red-200 dark:border-red-900 text-xs font-bold text-red-600 dark:text-red-300 hover:bg-red-50 dark:hover:bg-red-900/20">플랜 삭제</button>` : ''}
+                <div class="pw-dialog-footer">
+                    ${existingItem ? `<button type="button" onclick="window.deletePlannerItemFromModal('${escapeJsString(situation.id)}')" class="pw-button pw-danger pw-delete-plan">플랜 삭제</button>` : ''}
 
                     <button type="button" onclick="window.savePlannerSituationPlan(this)" class="px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700">${existingItem ? '플랜 저장' : '플랜 추가'}</button>
+                    <button type="button" onclick="window.closePlannerSituationPlanModal()" class="pw-button">닫기</button>
                 </div>
             </div>
         </div>
@@ -2837,6 +2832,7 @@ export function renderPlannerSection(section, state = {}) {
     if (!state.loading && !state.error && (window.PROJECT_PLANNER_VIEW || 'plan') === 'run') {
         requestAnimationFrame(() => refreshPlannerCostEstimate());
     }
+    enhancePlannerWorkspaceDialogs();
 }
 
 export function renderPlannerSectionByState(options = {}) {
@@ -3871,11 +3867,7 @@ export async function deletePlannerItem(situationId, characterId = '') {
 
     const item = meta.items.find(entry => entry.situationId === situationId);
     if (!item) return;
-    if (!await confirmPlannerWorkspaceAction(`'${item.situationName || item.situationId}' 플랜을 삭제하시겠습니까?\n이 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
-
-    if (window.PLANNER_RESULT_MODAL_SITUATION_ID === situationId) {
-        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-    }
+    if (!await confirmPlannerWorkspaceAction(`'${item.situationName || item.situationId}' 플랜을 삭제하시겠습니까?\n이 플랜의 임시 이미지도 함께 삭제됩니다.`, { title: '플랜 삭제', acceptLabel: '플랜 삭제', danger: true })) return false;
 
     await clearPlannerItemImages(project, item);
 
@@ -3892,8 +3884,10 @@ export async function deletePlannerItem(situationId, characterId = '') {
         }
     }
     clearFolderDataCaches(getPlannerPrefix(project));
+    if (window.PLANNER_RESULT_MODAL_SITUATION_ID === situationId && getPlannerResultModalCharacterId(project) === targetCharacterId) closePlannerResultModal();
     renderPlannerResultOverlay();
     renderPlannerSectionByState();
+    return true;
 }
 
 async function deleteAllPlannerItemsForCharacter() {
@@ -3912,7 +3906,7 @@ async function deleteAllPlannerItemsForCharacter() {
         setPlannerStatus('생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
         return;
     }
-    if (!await confirmPlannerWorkspaceAction(`현재 캐릭터의 플랜 ${meta.items.length}개를 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
+    if (!await confirmPlannerWorkspaceAction(`현재 캐릭터의 플랜 ${meta.items.length}개를 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`, { title: '플랜 일괄 삭제', acceptLabel: '전체 삭제', danger: true })) return;
 
     const items = [...meta.items];
     await clearPlannerItemsImages(project, items, meta);
@@ -3968,7 +3962,7 @@ async function deleteAllPlannerItemsForSituation() {
         setPlannerStatus('생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
         return;
     }
-    if (!await confirmPlannerWorkspaceAction(`'${getSituationDisplayName(situation)}' 상황의 플랜 ${targets.length}개를 캐릭터 ${targets.length}명에서 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`)) return;
+    if (!await confirmPlannerWorkspaceAction(`'${getSituationDisplayName(situation)}' 상황의 플랜 ${targets.length}개를 캐릭터 ${targets.length}명에서 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`, { title: '플랜 일괄 삭제', acceptLabel: '전체 삭제', danger: true })) return;
 
     plannerBatchPlanDeletionRunning = true;
     renderPlannerSectionByState({ preserveScroll: true });
@@ -4016,8 +4010,8 @@ export async function deleteAllPlannerItems() {
 
 export async function deletePlannerItemFromModal(situationId) {
     const characterId = getPlannerPlanModalCharacterId();
-    await deletePlannerItem(situationId, characterId);
-    if (window.PLANNER_PLAN_MODAL_SITUATION_ID === situationId) {
+    const deleted = await deletePlannerItem(situationId, characterId);
+    if (deleted && window.PLANNER_PLAN_MODAL_SITUATION_ID === situationId) {
         window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
         window.PLANNER_PLAN_MODAL_SITUATION_ID = null;
         renderPlannerSituationPlanOverlay();
@@ -4031,7 +4025,7 @@ export async function deletePlannerImage(key) {
 
     const item = meta.items.find(entry => Array.isArray(entry.images) && entry.images.includes(key));
     if (!item) return;
-    if (!await confirmPlannerWorkspaceAction('이 임시 이미지를 삭제하시겠습니까?')) return;
+    if (!await confirmPlannerWorkspaceAction('이 임시 이미지를 삭제하시겠습니까?', { title: '후보 이미지 삭제', acceptLabel: '이미지 삭제', danger: true })) return;
 
     const res = await fetch('/api/manage', {
         method: 'POST',
@@ -4134,7 +4128,9 @@ function shouldAutoRefreshPlanner() {
     const plannerRunVisible = isPlannerPanelVisible()
         && (window.PROJECT_PLANNER_VIEW || 'plan') === 'run'
         && window.PROJECT_PLANNER_GENERATION_MODE === 'background';
-    return plannerRunVisible || isProjectPlannerDashboardVisible();
+    const reviewVisible = !!document.getElementById('planner-result-modal')
+        && window.PROJECT_PLANNER_GENERATION_MODE === 'background';
+    return plannerRunVisible || reviewVisible || isProjectPlannerDashboardVisible();
 }
 
 function suspendPlannerBackgroundPolling() {
@@ -4220,6 +4216,7 @@ function startPlannerPollingLoop() {
             return;
         }
         renderPlannerIfVisible();
+        if (window.PLANNER_RESULT_MODAL_SITUATION_ID) renderPlannerResultOverlay();
         plannerPollingState.timerId = setTimeout(poll, 2000);
     };
     void poll();
@@ -5204,7 +5201,20 @@ export async function runPlannerBackgroundGenerationStart(situationId = null, op
     await refreshPlannerBackgroundStatus(data.jobId);
 }
 
+let plannerResultRegenerating = false;
 export async function startPlannerResultGeneration(situationId = null) {
+    if (plannerResultRegenerating) return;
+    plannerResultRegenerating = true;
+    renderPlannerResultOverlay();
+    try {
+        await regeneratePlannerResult(situationId);
+    } finally {
+        plannerResultRegenerating = false;
+        renderPlannerResultOverlay();
+    }
+}
+
+async function regeneratePlannerResult(situationId) {
     const project = getActiveProject();
     const meta = getPlannerResultModalMeta(project);
     if (!project || !meta?.items?.length) {
@@ -5224,7 +5234,7 @@ export async function startPlannerResultGeneration(situationId = null) {
         setPlannerStatus('백그라운드 생성은 아직 참조 이미지를 지원하지 않습니다. 브라우저 모드를 사용하세요.');
         return;
     }
-    if (!await confirmPlannerWorkspaceAction('이 플랜의 기존 후보 이미지를 삭제하고 다시 생성하시겠습니까?')) return;
+    if (!await confirmPlannerWorkspaceAction('이 플랜의 기존 후보 이미지를 삭제하고 다시 생성하시겠습니까?', { title: '후보 다시 생성', acceptLabel: '다시 생성', danger: true })) return;
     const costPreparation = await preparePlannerCostForExecution(targetItems.map(item => ({
         generation: item.generation,
         requestCount: getPlannerItemTargetCount(item, meta)
@@ -5233,16 +5243,18 @@ export async function startPlannerResultGeneration(situationId = null) {
     try {
         await clearPlannerItemsImages(project, targetItems, meta);
         const result = await startPlannerBackgroundRun(project, meta, targetItems, situationId, { clearExisting: true });
-        window.PROJECT_PLANNER_VIEW = 'run';
         if (result.data?.jobId) startPlannerBackgroundPolling(result.data.jobId);
         setPlannerStatus('백그라운드 생성 작업을 등록했습니다.');
-        window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
+        for (const item of targetItems) setPlannerReviewNotice(meta.characterId, item.situationId, '다시 생성 작업을 등록했습니다.');
         renderPlannerResultOverlay();
-        renderPlannerSectionByState({ scroll: 'restore-view', focus: 'reset' });
+        renderPlannerSectionByState({ scroll: 'preserve' });
         syncPlannerBackgroundPolling({ immediate: true });
         if (result.data?.jobId) await refreshPlannerBackgroundStatus(result.data.jobId).catch(() => null);
     } catch (error) {
-        setPlannerStatus(error?.message || '다시 생성에 실패했습니다.');
+        const message = error?.message || '다시 생성에 실패했습니다.';
+        for (const item of targetItems) setPlannerReviewNotice(meta.characterId, item.situationId, message);
+        renderPlannerResultOverlay();
+        setPlannerStatus(message);
     }
 }
 
@@ -5757,10 +5769,10 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
             window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
             window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
         }
+        window.PROJECT_PLANNER_CONFIRMING = false;
         renderPlannerResultOverlay();
         renderPlannerSectionByState({ scroll: 'preserve', focus: 'reset' });
         if (finalMessage) setPlannerStatus(finalMessage);
-        window.PROJECT_PLANNER_CONFIRMING = false;
     }
 }
 
@@ -5792,23 +5804,20 @@ export async function navigatePlannerWorkspaceItem(offset) {
     const project = getActiveProject();
     const characterId = window.PLANNER_PLAN_MODAL_CHARACTER_ID || getPlannerResultModalCharacterId(project);
     const situationId = window.PLANNER_PLAN_MODAL_SITUATION_ID || window.PLANNER_RESULT_MODAL_SITUATION_ID;
-    const bySituation = getPlannerPlanScope(project) === 'situation';
-    const targets = getProjectItems(project, bySituation ? 'characters' : 'situations');
-    const index = targets.findIndex(item => item.id === (bySituation ? characterId : situationId));
-    const next = targets[index + offset];
-    if (!next || index < 0) return;
+    const next = getPlannerWorkspaceNeighbor(offset, characterId, situationId);
+    if (!next) return;
     plannerWorkspaceNavigating = true;
-    const dialog = document.querySelector('#planner-result-modal [role="dialog"]');
+    const dialog = document.querySelector('#planner-result-modal [role="dialog"], #planner-situation-plan-modal [role="dialog"]');
     const controls = [...(dialog?.querySelectorAll('[data-pw-action="previous-plan"], [data-pw-action="next-plan"]') || [])];
     dialog?.setAttribute('aria-busy', 'true');
     controls.forEach(control => { control.disabled = true; });
     try {
         // Leave the current review visible until the next plan has loaded successfully.
-        await openPlannerWorkspaceItem(bySituation ? situationId : next.id, bySituation ? next.id : characterId);
+        await openPlannerWorkspaceItem(next.situationId, next.characterId);
     } finally {
         plannerWorkspaceNavigating = false;
         dialog?.removeAttribute('aria-busy');
-        controls.forEach(control => { if (control.isConnected) control.disabled = false; });
+        enhancePlannerWorkspaceDialogs();
     }
 }
 
