@@ -1,10 +1,10 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice, prunePlannerReviewReferences } from './planner-workspace.js?v=planner-workspace-20261106q';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isVisibleProjectChildFolder, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106q';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice, prunePlannerReviewReferences } from './planner-workspace.js?v=planner-workspace-20261106r';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isVisibleProjectChildFolder, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106r';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106q';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106q';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106q';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106r';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106r';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106r';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -46,6 +46,7 @@ const plannerSituationScopeState = {
 let plannerScrollRestoreId = 0;
 let plannerVisibilityHandlerInstalled = false;
 let plannerPlanScopeProjectId = '';
+const PLANNER_SELECTION_CACHE_KEY = 'imggul_planner_workspace_selection';
 let plannerBatchPlanCreationRunning = false;
 let plannerBatchPlanDeletionRunning = false;
 let plannerBatchConfirmationPending = false;
@@ -79,13 +80,34 @@ function resetPlannerTargetPickerState() {
     if (root) root.innerHTML = '';
 }
 
+function readPlannerSelectionCache() {
+    try {
+        const cache = JSON.parse(localStorage.getItem(PLANNER_SELECTION_CACHE_KEY) || '{}');
+        return cache && typeof cache === 'object' && !Array.isArray(cache) ? cache : {};
+    } catch {
+        return {};
+    }
+}
+
+function savePlannerSelection(project) {
+    if (!project?.id || plannerPlanScopeProjectId !== project.id) return;
+    const cache = readPlannerSelectionCache();
+    cache[project.id] = {
+        scope: window.PROJECT_PLANNER_PLAN_SCOPE === 'situation' ? 'situation' : 'character',
+        situationId: window.PROJECT_PLANNER_SELECTED_SITUATION_ID || ''
+    };
+    try { localStorage.setItem(PLANNER_SELECTION_CACHE_KEY, JSON.stringify(cache)); }
+    catch { /* Keep the current selection usable when storage is unavailable. */ }
+}
+
 function ensurePlannerPlanScopeProject(project) {
     const projectId = project?.id || '';
     if (plannerPlanScopeProjectId === projectId) return;
     plannerPlanScopeProjectId = projectId;
     resetPlannerTargetPickerState();
-    window.PROJECT_PLANNER_PLAN_SCOPE = 'character';
-    window.PROJECT_PLANNER_SELECTED_SITUATION_ID = '';
+    const saved = readPlannerSelectionCache()[projectId];
+    window.PROJECT_PLANNER_PLAN_SCOPE = saved?.scope === 'situation' ? 'situation' : 'character';
+    window.PROJECT_PLANNER_SELECTED_SITUATION_ID = typeof saved?.situationId === 'string' ? saved.situationId : '';
     plannerSituationScopeState.projectId = projectId;
     plannerSituationScopeState.loading = false;
     plannerSituationScopeState.loaded = false;
@@ -102,9 +124,12 @@ export function getPlannerPlanScope(project = getActiveProject()) {
 function getSelectedPlannerSituation(project = getActiveProject()) {
     ensurePlannerPlanScopeProject(project);
     const situations = getProjectItems(project, 'situations');
+    // An initial/failed load must not replace a saved selection with an empty one.
+    if (!project?.situationsLoaded) return situations.find(situation => situation.id === window.PROJECT_PLANNER_SELECTED_SITUATION_ID) || null;
     const selectedId = window.PROJECT_PLANNER_SELECTED_SITUATION_ID || '';
     const selected = situations.find(situation => situation.id === selectedId) || situations[0] || null;
     window.PROJECT_PLANNER_SELECTED_SITUATION_ID = selected?.id || '';
+    if (selectedId !== window.PROJECT_PLANNER_SELECTED_SITUATION_ID) savePlannerSelection(project);
     return selected;
 }
 
@@ -2101,6 +2126,7 @@ export async function applyPlannerTargetPickerSelection(targetId = '') {
             return;
         }
         window.PROJECT_PLANNER_SELECTED_SITUATION_ID = situation.id;
+        savePlannerSelection(project);
         resetPlannerTargetPickerState();
         renderPlannerSectionByState({ preserveScroll: true });
         restorePlannerTargetPickerTriggerFocus(triggerId);
@@ -2998,7 +3024,7 @@ export async function setPlannerView(view = 'plan') {
     syncPlannerBackgroundPolling({ immediate: window.PROJECT_PLANNER_VIEW === 'run' });
 }
 
-async function loadPlannerSituationScopeData({ force = false } = {}) {
+export async function loadPlannerSituationScopeData({ force = false } = {}) {
     const project = getActiveProject();
     if (!project) return;
     ensurePlannerPlanScopeProject(project);
@@ -3041,6 +3067,7 @@ async function loadPlannerSituationScopeData({ force = false } = {}) {
     plannerSituationScopeState.errors = errors;
     plannerSituationScopeState.loading = false;
     plannerSituationScopeState.loaded = true;
+    if (!isPlannerPanelVisible() || getPlannerPlanScope(project) !== 'situation') return;
     renderPlannerSectionByState({ preserveScroll: true });
     setPlannerStatus(errors.size
         ? `${characters.length - errors.size}명의 상태를 불러왔고 ${errors.size}명은 확인이 필요합니다.`
@@ -3052,6 +3079,7 @@ export async function setPlannerPlanScope(scope = 'character') {
     if (!project) return;
     ensurePlannerPlanScopeProject(project);
     window.PROJECT_PLANNER_PLAN_SCOPE = scope === 'situation' ? 'situation' : 'character';
+    savePlannerSelection(project);
     if (window.PROJECT_PLANNER_PLAN_SCOPE === 'situation' && !plannerSituationScopeState.loaded) {
         plannerSituationScopeState.loading = true;
     }

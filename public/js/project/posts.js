@@ -6,7 +6,7 @@ import {
     renderProjectShell,
     rememberProjectRoute,
     setProjectRoute
-} from './shared.js?v=planner-workspace-20261106q';
+} from './shared.js?v=planner-workspace-20261106r';
 
 let postsRefreshInFlight = false;
 let postsVisibilityListenerBound = false;
