@@ -1,5 +1,5 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106p';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106q';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, picker: null, library: null, operation: 0 };
@@ -20,26 +20,63 @@ let referencePending = false;
 let referenceNotice = '';
 const referenceStorageKey = scope => `imggul_planner_reference_bindings_v1:${scope}`;
 
+function readReferenceBindings(scope) {
+    const bindings = new Map();
+    try {
+        const entries = JSON.parse(localStorage.getItem(referenceStorageKey(scope)) || '[]');
+        if (!Array.isArray(entries)) return bindings;
+        for (const entry of entries) {
+            if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
+            const rule = entry[1];
+            if (rule?.kind === 'situation' && typeof rule.situationId === 'string') bindings.set(entry[0], { kind: 'situation', situationId: rule.situationId });
+            else if (rule?.kind === 'file' && typeof rule.characterId === 'string' && typeof rule.key === 'string') bindings.set(entry[0], { kind: 'file', characterId: rule.characterId, key: rule.key });
+        }
+    } catch { /* Keep the in-memory preferences when storage is unavailable. */ }
+    return bindings;
+}
+
 function loadReferenceBindings(project) {
     const scope = project.prefix || project.id;
     if (scope === referenceScope) return;
     referenceScope = scope;
     referenceBindings.clear();
-    try {
-        const entries = JSON.parse(localStorage.getItem(referenceStorageKey(scope)) || '[]');
-        if (!Array.isArray(entries)) return;
-        for (const entry of entries) {
-            if (!Array.isArray(entry) || typeof entry[0] !== 'string') continue;
-            const rule = entry[1];
-            if (rule?.kind === 'situation' && typeof rule.situationId === 'string') referenceBindings.set(entry[0], { kind: 'situation', situationId: rule.situationId });
-            else if (rule?.kind === 'file' && typeof rule.characterId === 'string' && typeof rule.key === 'string') referenceBindings.set(entry[0], { kind: 'file', characterId: rule.characterId, key: rule.key });
-        }
-    } catch { /* Keep the in-memory preferences when storage is unavailable. */ }
+    for (const [id, rule] of readReferenceBindings(scope)) referenceBindings.set(id, rule);
 }
 
-function saveReferenceBindings() {
-    try { localStorage.setItem(referenceStorageKey(referenceScope), JSON.stringify([...referenceBindings])); }
+function saveReferenceBindings(scope = referenceScope, bindings = referenceBindings) {
+    try { localStorage.setItem(referenceStorageKey(scope), JSON.stringify([...bindings])); }
     catch { /* Comparing images must not depend on browser storage availability. */ }
+}
+
+export async function prunePlannerReviewReferences(project, situationIds, loadRemainingSituationIds) {
+    const scope = project.prefix || project.id;
+    const currentBindings = () => scope === referenceScope ? referenceBindings : readReferenceBindings(scope);
+    const snapshot = currentBindings();
+    const bindings = new Map([...new Set(situationIds)].filter(id => snapshot.has(id))
+        .map(id => [id, JSON.stringify(snapshot.get(id))]));
+    if (!bindings.size) return;
+    let remaining;
+    try {
+        remaining = await loadRemainingSituationIds();
+    } catch {
+        // An incomplete lookup cannot prove that the last plan was removed.
+        return;
+    }
+    // The user may have switched projects or changed a comparison while loading.
+    const latestBindings = currentBindings();
+    const removed = new Set();
+    for (const [id, binding] of bindings) {
+        if (!remaining.has(id) && JSON.stringify(latestBindings.get(id)) === binding) {
+            latestBindings.delete(id);
+            removed.add(id);
+        }
+    }
+    if (!removed.size) return;
+    saveReferenceBindings(scope, latestBindings);
+    if (referenceContext?.project.id === project.id && removed.has(referenceContext.situationId)) {
+        resetPlannerReviewReferenceContext();
+        ui.compare = false;
+    }
 }
 
 export function resetPlannerReviewReferenceContext() {
@@ -237,7 +274,7 @@ export function renderPlannerWorkspaceReview(item, meta, blocked) {
     return `<div id="planner-result-modal" class="pw-backdrop" data-pw-dialog="review" data-pw-plan-context="${h(meta.characterId)}|${h(item.situationId)}"><section class="pw-dialog pw-review" role="dialog" aria-modal="true" aria-label="후보 검수">
         <header class="pw-dialog-header"><div><h3>${h(item.situationName || item.situationId)}</h3><p id="planner-result-selected-label" aria-live="polite">후보 ${images.length ? index + 1 : 0} / ${images.length} · 선택 ${item.selectedImage ? images.indexOf(item.selectedImage) + 1 : '없음'}</p></div></header>
         <div class="pw-review-tools">${button('‹ 플랜', 'previous-plan', 'aria-label="이전 플랜"')}${button('플랜 ›', 'next-plan', 'aria-label="다음 플랜"')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}"`)}
-        ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference || referenceBindings.has(item.situationId) ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}${reference || referenceBindings.has(item.situationId) ? button('비교 해제', 'clear-reference') : ''}
+        ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference || referenceBindings.has(item.situationId) ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}
         </div>
         <div class="pw-review-stage"><div class="pw-images ${ui.compare ? 'pw-pair' : ''}">
         ${ui.compare ? `<figure aria-busy="${referencePending}"><figcaption>${h(reference?.name || (referencePending ? '비교 이미지를 불러오는 중입니다.' : referenceNotice || '비교 이미지 미선택'))}</figcaption>${reference ? `<img src="${h(reference.url)}" alt="선택한 비교 이미지" data-pw-reference-image>` : button('비교 이미지 선택', 'reference')}</figure>` : ''}
@@ -393,13 +430,6 @@ async function dispatch(button) {
     if (action === 'review-from-editor') { window.closePlannerSituationPlanModal(); return window.openPlannerResultModal(button.dataset.situation, button.dataset.character); }
     if (action === 'regenerate') return window.startPlannerResultGeneration(button.dataset.situation);
     if (action === 'solo' || action === 'pair') { ui.compare = action === 'pair'; window.renderPlannerResultOverlay(); return; }
-    if (action === 'clear-reference') {
-        if (referenceContext) referenceBindings.delete(referenceContext.situationId);
-        saveReferenceBindings();
-        referenceRequest++; referencePending = false; referenceNotice = '';
-        ui.reference = null; ui.compare = false;
-        window.renderPlannerResultOverlay(); return;
-    }
     if (action === 'reference') {
         const project = getActiveProject();
         if (!project) return;

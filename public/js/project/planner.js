@@ -1,10 +1,10 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice } from './planner-workspace.js?v=planner-workspace-20261106p';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106p';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice, prunePlannerReviewReferences } from './planner-workspace.js?v=planner-workspace-20261106q';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isVisibleProjectChildFolder, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106q';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106p';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106p';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106p';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106q';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106q';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106q';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -3888,6 +3888,26 @@ async function confirmPlannerBatchAction(action) {
     }
 }
 
+async function cleanupPlannerReviewReferences(project, situationIds) {
+    if (!project?.prefix || !situationIds.length) return;
+    await prunePlannerReviewReferences(project, situationIds, async () => {
+        // Fetch the complete character inventory without replacing loaded UI files.
+        const res = await fetch(`/api/list?prefix=${encodeURIComponent(project.prefix)}&_t=${Date.now()}`, { cache: 'no-store' });
+        if (!res.ok) throw new Error('캐릭터 목록을 확인하지 못했습니다.');
+        const data = await res.json();
+        if (!Array.isArray(data.folders) || data.folders.some(prefix => typeof prefix !== 'string')) {
+            throw new Error('캐릭터 목록 응답이 올바르지 않습니다.');
+        }
+        const characterIds = [...new Set([
+            ...getProjectItems(project, 'characters').map(character => character.id),
+            ...data.folders.filter(prefix => isVisibleProjectChildFolder(prefix.split('/').filter(Boolean).at(-1)))
+        ])].filter(Boolean);
+        // Do not use loadPlannerQueueMetas: it suppresses individual lookup errors.
+        const metas = await Promise.all(characterIds.map(id => loadPlannerMeta(project, id, { force: true })));
+        return new Set(metas.flatMap(meta => (meta?.items || []).map(item => item.situationId)));
+    });
+}
+
 export async function deletePlannerItem(situationId, characterId = '') {
     const project = getActiveProject();
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
@@ -3913,6 +3933,7 @@ export async function deletePlannerItem(situationId, characterId = '') {
             window.PROJECT_PLANNER_META = null;
         }
     }
+    await cleanupPlannerReviewReferences(project, [situationId]);
     clearFolderDataCaches(getPlannerPrefix(project));
     if (window.PLANNER_RESULT_MODAL_SITUATION_ID === situationId && getPlannerResultModalCharacterId(project) === targetCharacterId) closePlannerResultModal();
     renderPlannerResultOverlay();
@@ -3940,6 +3961,7 @@ async function deleteAllPlannerItemsForCharacter() {
     await clearPlannerItemsImages(project, items, meta);
 
     await deletePlannerMeta(project, meta.characterId);
+    await cleanupPlannerReviewReferences(project, items.map(item => item.situationId));
     window.PROJECT_PLANNER_META = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
@@ -3997,6 +4019,7 @@ async function deleteAllPlannerItemsForSituation() {
             situation.id,
             targets.map(target => target.characterId)
         );
+        await cleanupPlannerReviewReferences(project, [situation.id]);
         clearPlannerCachesForProject(project);
         plannerSituationScopeState.loaded = false;
         plannerSituationScopeState.metas = new Map();
@@ -5718,10 +5741,10 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
     const confirmButton = triggerButton || document.getElementById('planner-result-confirm-button');
     if (confirmButton) confirmButton.disabled = true;
     const results = [];
+    const project = getActiveProject();
     let finalMessage = '';
     let shouldCloseResultState = false;
     try {
-        const project = getActiveProject();
         const targetCharacterId = getPlannerResultModalCharacterId(project);
         let meta = getPlannerMetaForCharacter(project, targetCharacterId);
         if (!meta && project && targetCharacterId) {
@@ -5796,6 +5819,7 @@ export async function confirmPlannerSelection(situationId = null, triggerButton 
             ? `${succeededCount}개 항목은 확정되었지만 화면 동기화에 실패했습니다: ${error?.message || '동기화 실패'}`
             : (error?.message || '플랜 확정에 실패했습니다.');
     } finally {
+        await cleanupPlannerReviewReferences(project, results.filter(result => result.success).map(result => result.item.situationId));
         if (shouldCloseResultState) {
             window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
             window.PLANNER_RESULT_MODAL_SITUATION_ID = null;

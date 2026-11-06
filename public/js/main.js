@@ -6,7 +6,7 @@ import * as Explorer from './explorer.js?v=file-path-change-20261005a';
 import * as Craft from './craft.js?v=generation-feedback-20261105b';
 import * as TempGallery from './temp_gallery.js?v=selection-ui-20261106c';
 import * as Modals from './modals.js?v=selection-ui-20261106c';
-import * as Project from './project.js?v=planner-workspace-20261106p';
+import * as Project from './project.js?v=planner-workspace-20261106q';
 import * as ImageEditor from './image_editor.js?v=selection-ui-20261106c';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=prompt-tab-20261005a';
 
