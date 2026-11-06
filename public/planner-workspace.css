@@ -38,7 +38,7 @@
 .pw-thumbnails button[aria-pressed=true]{border-color:#6366f1}
 .pw-review-footer{padding:10px 14px;border-top:1px solid #e5e7eb;display:grid;gap:7px;flex:none}
 .pw-review-footer>div{justify-content:flex-end}
-.pw-review-footer>div:first-child{justify-content:space-between}
+.pw-review-footer>div:first-child{justify-content:flex-start}
 .pw-review-footer p{font-size:11px}
 .pw-review-footer .pw-delete-plan{margin-right:auto}
 .pw-review-notice:empty{display:none}

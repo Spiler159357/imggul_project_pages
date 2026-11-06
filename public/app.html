@@ -6,9 +6,9 @@
     <title>ImgGul Admin</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="/style.css?v=selection-ui-20261106b">
-    <link rel="stylesheet" href="/planner-workspace.css?v=planner-workspace-20261106o">
-    <link rel="stylesheet" href="/selection-ui.css?v=selection-ui-20261106b">
+    <link rel="stylesheet" href="/style.css?v=selection-ui-20261106c">
+    <link rel="stylesheet" href="/planner-workspace.css?v=planner-workspace-20261106p">
+    <link rel="stylesheet" href="/selection-ui.css?v=selection-ui-20261106c">
     <script src="https://unpkg.com/lucide@latest"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
     <script>
@@ -595,10 +595,12 @@
 
     <!-- Modals -->
     <div id="gallery-upload-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeGalleryUploadModal(event)">
-        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md max-h-[calc(100dvh-32px)] flex flex-col overflow-hidden transition-colors duration-200">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-md transition-colors duration-200">
             <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white">현재 폴더에 업로드</h3>
-
+                <button id="close-gallery-btn" onclick="window.closeGalleryUploadModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
             </div>
             <div class="p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
                 <p class="text-sm text-gray-600 dark:text-gray-400 mb-4">저장 경로: <span id="gallery-upload-path" class="font-mono text-indigo-600 dark:text-indigo-400 font-medium"></span></p>
@@ -629,7 +631,6 @@
                     업로드 하기
                 </button>
             </div>
-            <footer class="pw-dialog-footer"><button id="close-gallery-btn" type="button" class="pw-button selection-close" onclick="window.closeGalleryUploadModal()">닫기</button></footer>
         </div>
     </div>
 
@@ -639,7 +640,9 @@
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white flex items-center">
                     <i data-lucide="upload-cloud" class="w-5 h-5 mr-2 text-indigo-500"></i> 생성 이미지 업로드
                 </h3>
-
+                <button id="close-craft-upload-btn" onclick="window.closeCraftUploadModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
             </div>
             <div class="p-4 sm:p-6 flex-1 min-h-0 overflow-hidden flex flex-col">
                 <div class="flex gap-4 mb-4 flex-shrink-0">
@@ -715,7 +718,6 @@
                     업로드하기
                 </button>
             </div>
-            <footer class="pw-dialog-footer"><button id="close-craft-upload-btn" type="button" class="pw-button selection-close" onclick="window.closeCraftUploadModal()">닫기</button></footer>
         </div>
     </div>
 
@@ -725,7 +727,9 @@
                 <h3 class="text-base sm:text-lg font-bold text-gray-900 dark:text-white flex items-center">
                     <i data-lucide="sliders-horizontal" class="w-5 h-5 mr-2 text-indigo-500"></i> 기본 생성 태그 관리
                 </h3>
-
+                <button type="button" onclick="window.closeCraftBasePromptModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
             </div>
             <div class="p-4 sm:p-6 space-y-4">
                 <div>
@@ -755,15 +759,13 @@
                 <button type="button" onclick="window.resetCraftBasePromptDefaults()" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-indigo-400 transition">
                     <i data-lucide="rotate-ccw" class="w-4 h-4"></i> 기본값 복원
                 </button>
-                <div class="flex items-center justify-end gap-2">
-
+                <div class="flex items-center gap-2">
+                    <button type="button" onclick="window.closeCraftBasePromptModal()" class="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 text-xs font-bold text-gray-700 dark:text-gray-200 hover:border-gray-400 transition">닫기</button>
                     <button type="button" onclick="window.saveCraftBasePromptDefaults()" class="inline-flex items-center justify-center gap-1.5 px-4 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 transition">
                         <i data-lucide="save" class="w-4 h-4"></i> 저장
                     </button>
-                    <button type="button" class="pw-button selection-close" onclick="window.closeCraftBasePromptModal()">닫기</button>
                 </div>
             </div>
-
         </div>
     </div>
 
@@ -773,7 +775,9 @@
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white flex items-center">
                     <i data-lucide="save" class="w-5 h-5 mr-2 text-indigo-500"></i> 프롬프트 저장
                 </h3>
-
+                <button id="close-craft-prompt-save-btn" onclick="window.closeCraftPromptSaveModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
             </div>
             <div class="p-4 sm:p-6 flex-1 min-h-0 overflow-hidden flex flex-col">
                 <div class="grid grid-cols-3 gap-2 mb-4 flex-shrink-0">
@@ -840,15 +844,16 @@
                     저장하기
                 </button>
             </div>
-            <footer class="pw-dialog-footer"><button id="close-craft-prompt-save-btn" type="button" class="pw-button selection-close" onclick="window.closeCraftPromptSaveModal()">닫기</button></footer>
         </div>
     </div>
 
     <div id="memo-create-modal" class="fixed inset-0 z-50 hidden bg-black bg-opacity-75 flex items-center justify-center p-4 backdrop-blur-sm" onclick="window.closeMemoCreateModal(event)">
-        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg max-h-[calc(100dvh-32px)] flex flex-col overflow-hidden transition-colors duration-200">
+        <div class="relative bg-white dark:bg-gray-800 rounded-xl shadow-2xl w-full max-w-lg transition-colors duration-200">
             <div class="flex justify-between items-center p-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800 rounded-t-xl">
                 <h3 class="text-lg font-bold text-gray-900 dark:text-white">새 텍스트 메모</h3>
-
+                <button id="close-memo-btn" onclick="window.closeMemoCreateModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
             </div>
             <div class="p-4 sm:p-6 max-h-[80vh] overflow-y-auto">
                 <div class="mb-4 flex flex-col">
@@ -867,7 +872,6 @@
                     저장하기
                 </button>
             </div>
-            <footer class="pw-dialog-footer"><button id="close-memo-btn" type="button" class="pw-button selection-close" onclick="window.closeMemoCreateModal()">닫기</button></footer>
         </div>
     </div>
 
@@ -884,7 +888,9 @@
                         <p id="import-modal-subtitle" class="text-[11px] text-gray-500 dark:text-gray-400 truncate">불러올 데이터의 출처를 선택하세요.</p>
                     </div>
                 </div>
-
+                <button id="close-import-btn" onclick="window.closeImportModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
             </div>
 
             <div id="import-hub" class="flex-1 overflow-y-auto p-4 sm:p-6 bg-gray-50 dark:bg-gray-900/30">
@@ -1080,7 +1086,6 @@
                     </div>
                 </div>
             </div>
-            <footer class="pw-dialog-footer"><button id="close-import-btn" type="button" class="pw-button selection-close" onclick="window.closeImportModal()">닫기</button></footer>
         </div>
     </div>
 
@@ -1091,7 +1096,9 @@
                     <h3 id="modal-title" class="text-base sm:text-lg font-bold text-gray-900 dark:text-white truncate leading-tight">파일명</h3>
                     <p id="modal-key" class="text-[10px] sm:text-xs text-gray-500 dark:text-gray-400 truncate"></p>
                 </div>
-
+                <button id="close-btn" onclick="window.closeModal()" class="text-gray-500 hover:text-red-500 dark:text-gray-400 dark:hover:text-red-400 flex-shrink-0 p-1">
+                    <i data-lucide="x" class="w-6 h-6 pointer-events-none"></i>
+                </button>
             </div>
 
             <div id="modal-content-area" class="flex-grow bg-gray-100 dark:bg-gray-900 overflow-auto flex items-center justify-center p-2 sm:p-4">
@@ -1155,7 +1162,6 @@
                     </button>
                 </div>
             </div>
-            <footer class="pw-dialog-footer"><button id="close-btn" type="button" class="pw-button selection-close" onclick="window.closeModal()">닫기</button></footer>
         </div>
     </div>
 
@@ -1166,7 +1172,9 @@
                     <h3 id="file-path-change-title" class="text-base font-bold text-gray-900 dark:text-white sm:text-lg">파일 경로 변경</h3>
                     <p id="file-path-change-description" class="mt-0.5 text-[11px] text-gray-500 dark:text-gray-400 sm:text-xs">프로젝트 안에서 이동할 폴더를 선택하고 파일명을 수정할 수 있습니다.</p>
                 </div>
-
+                <button id="file-path-change-close-btn" type="button" onclick="window.closeFilePathChangeModal()" class="flex-shrink-0 rounded-lg p-2 text-gray-500 transition hover:bg-gray-100 hover:text-red-500 dark:text-gray-400 dark:hover:bg-gray-800 dark:hover:text-red-400" aria-label="경로 변경 닫기">
+                    <i data-lucide="x" class="h-5 w-5"></i>
+                </button>
             </div>
 
             <div class="min-h-0 flex-1 overflow-y-auto p-3 sm:p-5">
@@ -1219,13 +1227,11 @@
             </div>
 
             <div class="flex flex-shrink-0 items-center justify-end gap-2 border-t border-gray-200 bg-gray-50 px-4 py-3 dark:border-gray-700 dark:bg-gray-900/70 sm:px-5">
-
+                <button type="button" onclick="window.closeFilePathChangeModal()" class="rounded-lg border border-gray-300 bg-white px-4 py-2 text-sm font-bold text-gray-700 transition hover:bg-gray-100 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700">취소</button>
                 <button id="file-path-change-submit" type="button" onclick="window.applyFilePathChange()" disabled class="inline-flex items-center justify-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm font-bold text-white transition hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-indigo-700 dark:hover:bg-indigo-600">
                     <i data-lucide="check" class="h-4 w-4"></i><span>변경 적용</span>
                 </button>
-                <button id="file-path-change-close-btn" type="button" class="pw-button selection-close" onclick="window.closeFilePathChangeModal()">닫기</button>
             </div>
-
         </div>
     </div>
 
@@ -1236,7 +1242,9 @@
                     <h3 class="text-sm font-bold text-gray-900 dark:text-white">인페인트 영역 편집</h3>
                     <p class="text-[11px] text-gray-500 dark:text-gray-400">흰색으로 칠한 영역만 NovelAI가 다시 생성합니다.</p>
                 </div>
-
+                <button id="close-inpaint-editor-btn" type="button" onclick="window.closeInpaintEditorModal()" class="p-2 rounded hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-500 transition">
+                    <i data-lucide="x" class="w-5 h-5"></i>
+                </button>
             </div>
 
             <div class="flex-1 min-h-0 grid grid-cols-1 lg:grid-cols-[1fr_240px]">
@@ -1260,10 +1268,9 @@
                     <button type="button" onclick="window.clearInpaintMask()" class="w-full px-2 py-2 text-[11px] font-bold rounded border bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:border-indigo-300 transition flex items-center justify-center gap-1">
                         <i data-lucide="rotate-ccw" class="w-4 h-4"></i> 마스크 지우기
                     </button>
-
+                    <button type="button" onclick="window.closeInpaintEditorModal()" class="mt-auto w-full px-3 py-2 text-xs font-bold rounded bg-indigo-600 text-white hover:bg-indigo-700 transition">완료</button>
                 </div>
             </div>
-            <footer class="pw-dialog-footer"><button id="close-inpaint-editor-btn" type="button" class="pw-button selection-close" onclick="window.closeInpaintEditorModal()">닫기</button></footer>
         </div>
     </div>
 
@@ -1274,7 +1281,9 @@
                     <h3 id="inpaint-library-title" class="text-sm font-bold text-gray-900 dark:text-white">인페인트 이미지 선택</h3>
                     <p id="inpaint-library-path" class="text-[11px] text-gray-500 dark:text-gray-400 truncate max-w-[70vw]">/</p>
                 </div>
-
+                <button id="close-inpaint-library-btn" type="button" onclick="window.closeInpaintLibraryModal()" aria-label="닫기" class="pw-button selection-close">
+                    닫기
+                </button>
             </div>
             <div class="selection-content">
                 <div id="inpaint-library-loading" class="hidden items-center justify-center py-12 text-gray-500 text-sm">
@@ -1283,7 +1292,6 @@
                 <div id="inpaint-library-empty" class="hidden items-center justify-center py-12 text-gray-500 text-sm">선택할 수 있는 이미지가 없습니다.</div>
                 <div id="inpaint-library-grid" class="selection-grid"></div>
             </div>
-            <footer class="pw-dialog-footer"><button id="close-inpaint-library-btn" type="button" class="pw-button selection-close" onclick="window.closeInpaintLibraryModal()">닫기</button></footer>
         </div>
     </div>
 
@@ -1291,6 +1299,6 @@
         window.IS_ADMIN = {{IS_ADMIN}};
         window.INITIAL_PATH = "{{INITIAL_PATH}}";
     </script>
-    <script type="module" src="/js/main.js?v=planner-workspace-20261106o"></script>
+    <script type="module" src="/js/main.js?v=planner-workspace-20261106p"></script>
 </body>
 </html>

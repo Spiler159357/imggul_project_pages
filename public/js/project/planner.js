@@ -1,10 +1,10 @@
-import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106b';
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice } from './planner-workspace.js?v=planner-workspace-20261106o';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106o';
+import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice } from './planner-workspace.js?v=planner-workspace-20261106p';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106p';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106o';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106o';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106o';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106p';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106p';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106p';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -48,6 +48,7 @@ let plannerVisibilityHandlerInstalled = false;
 let plannerPlanScopeProjectId = '';
 let plannerBatchPlanCreationRunning = false;
 let plannerBatchPlanDeletionRunning = false;
+let plannerBatchConfirmationPending = false;
 let plannerCostEstimateOperationId = 0;
 let plannerWorkspaceOpenOperation = 0;
 
@@ -2805,7 +2806,7 @@ export function renderPlannerPanel(project, situations) {
         <div class="flex flex-wrap items-center gap-2"><span data-nai-v5-usage class="text-xs">V5 --%</span><span data-nai-anlas-balance class="text-xs">-- Anlas</span>${renderPlannerBackgroundHealthBadge()}<button type="button" class="pw-button" onclick="window.openPlannerSettingsModal()">공통 설정</button></div></header>
         <div class="pw-panel-header"><div class="flex gap-1">${scopeButton('character', '캐릭터 기준')}${scopeButton('situation', '상황 기준')}</div>${renderPlannerTargetTrigger(view === 'plan' && planScope === 'situation' ? 'situation' : 'character', project, view === 'plan' && planScope === 'situation' ? selectedSituation : activeCharacter)}</div>
         <nav class="pw-panel-tabs" aria-label="플래너 화면">${viewButton('plan', '플랜 · 결과')}${viewButton('run', '실행 화면')}<button type="button" class="pw-button pw-refresh" onclick="window.requestPlannerRefresh()" aria-label="새로고침"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button></nav>
-        ${view === 'plan' ? `<div class="pw-panel-header"><h3>전체 플랜</h3><div class="flex flex-wrap gap-2"><button type="button" class="pw-button" onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>누락 플랜 생성</button><button type="button" class="pw-button text-red-600" onclick="window.deleteAllPlannerItems()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>전체 플랜 삭제</button></div></div>${renderPlannerWorkspaceFilters()}` : ''}
+        ${view === 'plan' ? `<div class="pw-panel-header"><h3>전체 플랜</h3><div class="flex flex-wrap gap-2"><button type="button" class="pw-button" data-planner-batch-action onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>누락 플랜 생성</button><button type="button" class="pw-button text-red-600" data-planner-batch-action onclick="window.deleteAllPlannerItems()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>전체 플랜 삭제</button></div></div>${renderPlannerWorkspaceFilters()}` : ''}
         <div data-planner-scroll="main" data-planner-view="${view}" class="pw-board-scroll">${view === 'run' ? runView : board}</div>
         ${renderPlannerSettingsModal(settings)}</div>`;
 }
@@ -3836,7 +3837,7 @@ async function createMissingPlannerPlansForSituation() {
 }
 
 async function runPlannerBatchPlanCreation(scope) {
-    if (plannerBatchPlanCreationRunning) return;
+    if (plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning) return;
     plannerBatchPlanCreationRunning = true;
     renderPlannerSectionByState({ preserveScroll: true });
     setPlannerStatus('누락된 플랜을 확인하고 있습니다.');
@@ -3855,7 +3856,36 @@ async function runPlannerBatchPlanCreation(scope) {
 }
 
 export async function createAllMissingPlannerPlans() {
-    await runPlannerBatchPlanCreation(getPlannerPlanScope());
+    const scope = await confirmPlannerBatchAction('create');
+    if (scope) await runPlannerBatchPlanCreation(scope);
+}
+
+async function confirmPlannerBatchAction(action) {
+    if (plannerBatchConfirmationPending || plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning) return null;
+    const project = getActiveProject();
+    if (!project) return null;
+    const scope = getPlannerPlanScope(project);
+    const targetId = scope === 'situation' ? getSelectedPlannerSituation(project)?.id : getSelectedPlannerCharacterId(project);
+    const target = scope === 'situation' ? getSelectedPlannerSituation(project) : getCharacterById(project, targetId);
+    if (!target) return null;
+    const name = scope === 'situation' ? getSituationDisplayName(target) : (target.name || target.folderName);
+    const label = `'${name}' ${scope === 'situation' ? '상황의 전체 캐릭터' : '캐릭터의 전체 상황'}`;
+    const creating = action === 'create';
+    plannerBatchConfirmationPending = true;
+    try {
+        const accepted = await confirmPlannerWorkspaceAction(creating
+            ? `${label}에서 누락된 플랜을 생성하시겠습니까?\n기존 플랜이나 최종 이미지가 있는 항목은 건너뜁니다.`
+            : `${label}에 저장된 플랜을 모두 삭제하시겠습니까?\n각 플랜의 임시 후보 이미지도 함께 삭제됩니다.`, {
+            title: creating ? '누락 플랜 생성' : '전체 플랜 삭제',
+            acceptLabel: creating ? '플랜 생성' : '전체 삭제', danger: !creating
+        });
+        const currentProject = getActiveProject();
+        if (!accepted || currentProject?.id !== project.id || getPlannerPlanScope(currentProject) !== scope) return null;
+        const currentTargetId = scope === 'situation' ? getSelectedPlannerSituation(currentProject)?.id : getSelectedPlannerCharacterId(currentProject);
+        return currentTargetId === targetId ? scope : null;
+    } finally {
+        plannerBatchConfirmationPending = false;
+    }
 }
 
 export async function deletePlannerItem(situationId, characterId = '') {
@@ -3906,8 +3936,6 @@ async function deleteAllPlannerItemsForCharacter() {
         setPlannerStatus('생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
         return;
     }
-    if (!await confirmPlannerWorkspaceAction(`현재 캐릭터의 플랜 ${meta.items.length}개를 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`, { title: '플랜 일괄 삭제', acceptLabel: '전체 삭제', danger: true })) return;
-
     const items = [...meta.items];
     await clearPlannerItemsImages(project, items, meta);
 
@@ -3940,8 +3968,6 @@ async function deleteAllPlannerItemsForSituation() {
         setPlannerStatus('삭제할 상황을 선택하세요.');
         return;
     }
-    if (plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning) return;
-
     await loadPlannerSituationScopeData({ force: true });
     if (plannerSituationScopeState.errors.size) {
         setPlannerStatus('일부 캐릭터의 플랜 상태를 확인하지 못했습니다. 새로고침 후 다시 시도하세요.');
@@ -3962,9 +3988,6 @@ async function deleteAllPlannerItemsForSituation() {
         setPlannerStatus('생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
         return;
     }
-    if (!await confirmPlannerWorkspaceAction(`'${getSituationDisplayName(situation)}' 상황의 플랜 ${targets.length}개를 캐릭터 ${targets.length}명에서 모두 삭제하시겠습니까?\n각 플랜의 임시 이미지도 함께 삭제됩니다.`, { title: '플랜 일괄 삭제', acceptLabel: '전체 삭제', danger: true })) return;
-
-    plannerBatchPlanDeletionRunning = true;
     renderPlannerSectionByState({ preserveScroll: true });
     setPlannerStatus('선택한 상황의 전체 플랜을 삭제하고 있습니다.');
     let message = '';
@@ -3994,18 +4017,26 @@ async function deleteAllPlannerItemsForSituation() {
     } catch (error) {
         message = error?.message || '상황의 전체 플랜 삭제에 실패했습니다.';
     } finally {
-        plannerBatchPlanDeletionRunning = false;
         renderPlannerSectionByState({ preserveScroll: true });
         setPlannerStatus(message);
     }
 }
 
 export async function deleteAllPlannerItems() {
-    if (getPlannerPlanScope() === 'situation') {
-        await deleteAllPlannerItemsForSituation();
-        return;
+    const scope = await confirmPlannerBatchAction('delete');
+    if (!scope || plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning) return;
+    plannerBatchPlanDeletionRunning = true;
+    renderPlannerSectionByState({ preserveScroll: true });
+    try {
+        if (scope === 'situation') await deleteAllPlannerItemsForSituation();
+        else await deleteAllPlannerItemsForCharacter();
+    } catch (error) {
+        setPlannerStatus(error?.message || '전체 플랜 삭제에 실패했습니다.');
+    } finally {
+        plannerBatchPlanDeletionRunning = false;
+        // Update controls without discarding the operation's status message.
+        document.querySelectorAll('[data-planner-batch-action]').forEach(button => { button.disabled = false; });
     }
-    await deleteAllPlannerItemsForCharacter();
 }
 
 export async function deletePlannerItemFromModal(situationId) {

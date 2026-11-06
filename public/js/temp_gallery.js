@@ -1,6 +1,6 @@
-import { filterSelectionGrid, getSelectionFileAlias, getSelectionFolderImage, prepareSelectionLibrary } from './selection-ui.js?v=selection-ui-20261106b';
-import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=selection-ui-20261106b';
-import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from './picker-list.js?v=selection-ui-20261106b';
+import { filterSelectionGrid, getSelectionFileAlias, getSelectionFolderImage, prepareSelectionLibrary } from './selection-ui.js?v=selection-ui-20261106c';
+import { createAssetParentCard, createAssetFolderCard, createAssetImageCard } from './asset-picker-cards.js?v=selection-ui-20261106c';
+import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from './picker-list.js?v=selection-ui-20261106c';
 // 6. temp_gallery.js: 임시 보관함 및 변환 유예 관리
 import { getProjectByPrefix, getProjectItems, loadProjectCharacters, loadProjectSituations, loadProjects } from './project/shared.js?v=novelai-v5-20260823d';
 /**

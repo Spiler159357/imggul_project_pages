@@ -1,4 +1,4 @@
-import { createSelectionCard } from './selection-ui.js?v=selection-ui-20261106b';
+import { createSelectionCard } from './selection-ui.js?v=selection-ui-20261106c';
 // Shared presentation for project/character/situation lists. Callers own selection state and actions.
 export function createPickerListItem({ type, label, subLabel = '', active = false, onClick, trackSelection = false, image = '' }) {
     const button = createSelectionCard({

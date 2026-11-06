@@ -1,5 +1,5 @@
-import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106b';
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106o';
+import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106p';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, picker: null, library: null, operation: 0 };
@@ -199,12 +199,12 @@ export function renderPlannerWorkspaceCard({ image, item, title, fallbackText, s
     const images = Array.isArray(item?.images) ? item.images : [];
     const selectedKey = typeof item?.selectedImage === 'string' && images.includes(item.selectedImage) ? item.selectedImage : '';
     const state = !item ? (image ? '최종 이미지 있음' : '미작성') : error ? '확인 필요' : selectedKey ? '후보 선택됨' : images.length ? '검토 대기' : '실행 대기';
-    const missing = !item && !image;
-    const visible = title.toLocaleLowerCase().includes(ui.query.toLocaleLowerCase()) && (ui.filter === 'all' || (ui.filter === 'missing' ? missing : !!item && images.length > 0));
+    const missing = !item;
+    const visible = title.toLocaleLowerCase().includes(ui.query.toLocaleLowerCase()) && (ui.filter === 'all' || (ui.filter === 'missing' ? missing : !!item));
     // Candidates are storage keys; finalized images are versioned file objects.
     // Unreviewed candidates must not become a representative image implicitly.
     const src = selectedKey ? getAssetUrl(selectedKey) : image?.key ? getVersionedAssetUrl(image) : '';
-    return `<button type="button" class="pw-plan-card" data-pw-plan data-has-plan="${!!item}" data-title="${h(title.toLocaleLowerCase())}" data-missing="${missing}" data-review="${!!item && images.length > 0}" ${visible ? '' : 'hidden'} data-pw-action="open" data-situation="${h(situationId)}" data-character="${h(characterId)}">
+    return `<button type="button" class="pw-plan-card" data-pw-plan data-has-plan="${!!item}" data-title="${h(title.toLocaleLowerCase())}" data-missing="${missing}" data-review="${!!item}" ${visible ? '' : 'hidden'} data-pw-action="open" data-situation="${h(situationId)}" data-character="${h(characterId)}">
         ${src ? `<img src="${h(src)}" alt="" loading="lazy" data-pw-cover>` : ''}<span class="pw-plan-placeholder" data-pw-cover-placeholder ${src ? 'hidden' : ''}>${h(fallbackText)}</span>
         <strong>${h(title)}</strong><span>${h(state)} · ${images.length}장</span>${error ? `<small>${h(error)}</small>` : ''}</button>`;
 }

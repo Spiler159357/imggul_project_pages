@@ -1,4 +1,4 @@
-import { createSelectionCard } from './selection-ui.js?v=selection-ui-20261106b';
+import { createSelectionCard } from './selection-ui.js?v=selection-ui-20261106c';
 
 // URL policy, filtering and selection actions stay with the caller.
 export function createAssetParentCard(onClick) {
