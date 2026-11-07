@@ -1,5 +1,5 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261106r';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261108a';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, picker: null, library: null, operation: 0 };
@@ -181,7 +181,7 @@ export function releasePlannerWorkspaceDialog(type) {
     });
 }
 export function enhancePlannerWorkspaceDialogs() {
-    syncPlannerWorkspaceNavigation();
+    filterCards();
     for (const [id, type] of [['planner-situation-plan-modal', 'editor'], ['planner-settings-modal', 'settings'], ['planner-run-confirm-modal', 'execution']]) {
         const backdrop = document.getElementById(id);
         if (!backdrop) continue;
@@ -228,22 +228,24 @@ export function resetPlannerWorkspace(project) {
     closeAuxiliary();
 }
 
-export function renderPlannerWorkspaceFilters() {
-    return `<div class="pw-board-tools"><input type="search" aria-label="플랜 검색" placeholder="이름으로 검색" value="${h(ui.query)}" data-pw-search>${[['all', '전체'], ['missing', '미작성'], ['review', '검토']].map(([key, label]) => button(label, 'filter', `data-filter="${key}" aria-pressed="${ui.filter === key}"`)).join('')}</div>`;
+export function renderPlannerWorkspaceFilters(scope = 'character') {
+    if (scope === 'all' && ui.filter === 'missing') ui.filter = 'all';
+    return `<div class="pw-board-tools"><input type="search" aria-label="플랜 검색" placeholder="${scope === 'all' ? '캐릭터명 또는 상황명으로 검색' : '이름으로 검색'}" value="${h(ui.query)}" data-pw-search>${[['all', '전체'], ['missing', '미작성'], ['review', '검토']].filter(([key]) => scope !== 'all' || key !== 'missing').map(([key, label]) => button(label, 'filter', `data-filter="${key}" aria-pressed="${ui.filter === key}"`)).join('')}</div>`;
 }
 
-export function renderPlannerWorkspaceCard({ image, item, title, fallbackText, situationId, characterId, error = '' }) {
+export function renderPlannerWorkspaceCard({ image, item, title, subtitle = '', fallbackText, situationId, characterId, error = '' }) {
     const images = Array.isArray(item?.images) ? item.images : [];
     const selectedKey = typeof item?.selectedImage === 'string' && images.includes(item.selectedImage) ? item.selectedImage : '';
     const state = !item ? (image ? '최종 이미지 있음' : '미작성') : error ? '확인 필요' : selectedKey ? '후보 선택됨' : images.length ? '검토 대기' : '실행 대기';
     const missing = !item;
-    const visible = title.toLocaleLowerCase().includes(ui.query.toLocaleLowerCase()) && (ui.filter === 'all' || (ui.filter === 'missing' ? missing : !!item));
+    const searchTitle = `${title} ${subtitle}`.toLocaleLowerCase();
+    const visible = searchTitle.includes(ui.query.toLocaleLowerCase()) && (ui.filter === 'all' || (ui.filter === 'missing' ? missing : !!item));
     // Candidates are storage keys; finalized images are versioned file objects.
     // Unreviewed candidates must not become a representative image implicitly.
     const src = selectedKey ? getAssetUrl(selectedKey) : image?.key ? getVersionedAssetUrl(image) : '';
-    return `<button type="button" class="pw-plan-card" data-pw-plan data-has-plan="${!!item}" data-title="${h(title.toLocaleLowerCase())}" data-missing="${missing}" data-review="${!!item}" ${visible ? '' : 'hidden'} data-pw-action="open" data-situation="${h(situationId)}" data-character="${h(characterId)}">
+    return `<button type="button" class="pw-plan-card" data-pw-plan data-has-plan="${!!item}" data-title="${h(searchTitle)}" data-missing="${missing}" data-review="${!!item}" ${visible ? '' : 'hidden'} data-pw-action="open" data-situation="${h(situationId)}" data-character="${h(characterId)}">
         ${src ? `<img src="${h(src)}" alt="" loading="lazy" data-pw-cover>` : ''}<span class="pw-plan-placeholder" data-pw-cover-placeholder ${src ? 'hidden' : ''}>${h(fallbackText)}</span>
-        <strong>${h(title)}</strong><span>${h(state)} · ${images.length}장</span>${error ? `<small>${h(error)}</small>` : ''}</button>`;
+        <strong>${h(title)}</strong>${subtitle ? `<span class="pw-plan-subtitle">${h(subtitle)}</span>` : ''}<span>${h(state)} · ${images.length}장</span>${error ? `<small>${h(error)}</small>` : ''}</button>`;
 }
 
 export function renderPlannerOption(id, label, value, options, attrs = '') {
@@ -470,6 +472,8 @@ function filterCards() {
     document.querySelectorAll('[data-pw-plan]').forEach(card => {
         card.hidden = !card.dataset.title.includes(ui.query.toLocaleLowerCase()) || (ui.filter === 'missing' && card.dataset.missing !== 'true') || (ui.filter === 'review' && card.dataset.review !== 'true');
     });
+    const empty = document.querySelector('[data-pw-board-empty]');
+    if (empty) empty.hidden = !!document.querySelector('[data-pw-plan]:not([hidden])');
     syncPlannerWorkspaceNavigation();
 }
 

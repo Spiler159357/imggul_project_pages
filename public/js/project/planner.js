@@ -1,10 +1,10 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice, prunePlannerReviewReferences } from './planner-workspace.js?v=planner-workspace-20261106r';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isVisibleProjectChildFolder, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261106r';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice, prunePlannerReviewReferences } from './planner-workspace.js?v=planner-workspace-20261108a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isVisibleProjectChildFolder, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261108a';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261106r';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261106r';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261106r';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261108a';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261108a';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261108a';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -35,10 +35,11 @@ const plannerPollingState = {
     running: false
 };
 const plannerScrollStates = new Map();
-const plannerSituationScopeState = {
+const plannerMultiScopeState = {
     projectId: '',
     loading: false,
     loaded: false,
+    detailsLoaded: false,
     operationId: 0,
     metas: new Map(),
     errors: new Map()
@@ -93,7 +94,7 @@ function savePlannerSelection(project) {
     if (!project?.id || plannerPlanScopeProjectId !== project.id) return;
     const cache = readPlannerSelectionCache();
     cache[project.id] = {
-        scope: window.PROJECT_PLANNER_PLAN_SCOPE === 'situation' ? 'situation' : 'character',
+        scope: normalizePlannerPlanScope(window.PROJECT_PLANNER_PLAN_SCOPE),
         situationId: window.PROJECT_PLANNER_SELECTED_SITUATION_ID || ''
     };
     try { localStorage.setItem(PLANNER_SELECTION_CACHE_KEY, JSON.stringify(cache)); }
@@ -106,19 +107,37 @@ function ensurePlannerPlanScopeProject(project) {
     plannerPlanScopeProjectId = projectId;
     resetPlannerTargetPickerState();
     const saved = readPlannerSelectionCache()[projectId];
-    window.PROJECT_PLANNER_PLAN_SCOPE = saved?.scope === 'situation' ? 'situation' : 'character';
+    window.PROJECT_PLANNER_PLAN_SCOPE = normalizePlannerPlanScope(saved?.scope);
     window.PROJECT_PLANNER_SELECTED_SITUATION_ID = typeof saved?.situationId === 'string' ? saved.situationId : '';
-    plannerSituationScopeState.projectId = projectId;
-    plannerSituationScopeState.loading = false;
-    plannerSituationScopeState.loaded = false;
-    plannerSituationScopeState.operationId += 1;
-    plannerSituationScopeState.metas = new Map();
-    plannerSituationScopeState.errors = new Map();
+    plannerMultiScopeState.projectId = projectId;
+    plannerMultiScopeState.loading = false;
+    plannerMultiScopeState.loaded = false;
+    plannerMultiScopeState.detailsLoaded = false;
+    plannerMultiScopeState.operationId += 1;
+    plannerMultiScopeState.metas = new Map();
+    plannerMultiScopeState.errors = new Map();
+}
+
+function normalizePlannerPlanScope(scope) {
+    return ['character', 'situation', 'all'].includes(scope) ? scope : 'character';
 }
 
 export function getPlannerPlanScope(project = getActiveProject()) {
     ensurePlannerPlanScopeProject(project);
-    return window.PROJECT_PLANNER_PLAN_SCOPE === 'situation' ? 'situation' : 'character';
+    return normalizePlannerPlanScope(window.PROJECT_PLANNER_PLAN_SCOPE);
+}
+
+// Bound multi-character reads for both the board and execution queue.
+async function mapPlannerCharacters(characters, load) {
+    const entries = new Array(characters.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(4, characters.length) }, async () => {
+        while (next < characters.length) {
+            const index = next++;
+            entries[index] = await load(characters[index]);
+        }
+    }));
+    return entries;
 }
 
 function getSelectedPlannerSituation(project = getActiveProject()) {
@@ -177,6 +196,14 @@ export function clearPlannerCachesForProject(project) {
     if (!project?.prefix) return;
     for (const key of plannerMetaMemoryCache.keys()) {
         if (key.startsWith(project.prefix)) plannerMetaMemoryCache.delete(key);
+    }
+    if (plannerMultiScopeState.projectId === project.id) {
+        plannerMultiScopeState.operationId += 1;
+        plannerMultiScopeState.loading = false;
+        plannerMultiScopeState.loaded = false;
+        plannerMultiScopeState.detailsLoaded = false;
+        plannerMultiScopeState.metas = new Map();
+        plannerMultiScopeState.errors = new Map();
     }
     if (window.PROJECT_ACTIVE_PROJECT_ID === project.id) {
         window.PROJECT_PLANNER_META = null;
@@ -307,10 +334,10 @@ export async function loadPlannerMeta(project, characterId = '', options = {}) {
         cache: 'no-store',
         signal
     });
-    if (res.status === 404) return null;
+    if (res.status === 404) { deletePlannerMetaCache(targetKey); return null; }
     if (!res.ok) throw new Error('플래너 메타데이터를 불러오지 못했습니다.');
     const payload = await res.json();
-    if (!payload.data) return null;
+    if (!payload.data) { deletePlannerMetaCache(targetKey); return null; }
     const meta = normalizePlannerStoredMeta(payload.data);
     if (targetCharacterId && meta?.characterId && meta.characterId !== targetCharacterId) return null;
     writePlannerMetaCache(targetKey, meta);
@@ -319,14 +346,14 @@ export async function loadPlannerMeta(project, characterId = '', options = {}) {
 
 export async function loadPlannerQueueMetas(project, characters = getProjectItems(project, 'characters'), options = {}) {
     const selectedCharacterId = getSelectedPlannerCharacterId(project);
-    const metas = await Promise.all(characters.map(async character => {
+    const metas = await mapPlannerCharacters(characters, async character => {
         const meta = await loadPlannerMeta(project, character.id, options).catch(error => {
             if (error?.name === 'AbortError') throw error;
             return null;
         });
         if (meta && !meta.characterId && characters.length > 1 && character.id !== selectedCharacterId) return null;
         return meta?.items?.length ? { character, meta } : null;
-    }));
+    });
     return metas.filter(Boolean);
 }
 
@@ -1279,9 +1306,9 @@ function updatePlannerQueueMetaCache(project, meta) {
     if (index >= 0) queueMetas[index] = entry;
     else if (meta.items?.length) queueMetas.push(entry);
     window.PROJECT_PLANNER_QUEUE_METAS = queueMetas.filter(entry => entry.meta?.items?.length);
-    if (plannerSituationScopeState.projectId === project.id) {
-        plannerSituationScopeState.metas.set(character.id, meta.items?.length ? clonePlannerMetaValue(meta) : null);
-        plannerSituationScopeState.errors.delete(character.id);
+    if (plannerMultiScopeState.projectId === project.id) {
+        plannerMultiScopeState.metas.set(character.id, meta.items?.length ? clonePlannerMetaValue(meta) : null);
+        plannerMultiScopeState.errors.delete(character.id);
     }
 }
 
@@ -2161,8 +2188,8 @@ function getPlannerPlanModalCharacterId(project = getActiveProject()) {
 }
 
 function getPlannerPlanModalMeta(project, characterId) {
-    if (plannerSituationScopeState.projectId === project?.id && plannerSituationScopeState.metas.has(characterId)) {
-        return plannerSituationScopeState.metas.get(characterId);
+    if (plannerMultiScopeState.projectId === project?.id && plannerMultiScopeState.metas.has(characterId)) {
+        return plannerMultiScopeState.metas.get(characterId);
     }
     return getPlannerMetaForCharacter(project, characterId);
 }
@@ -2574,14 +2601,49 @@ export function renderPlannerSituationGrid(project, situations, character, meta)
 function renderPlannerCharacterGridForSituation(project, characters, situation) {
     if (!situation) return renderEmptyState('상황을 선택하세요.');
     if (!characters.length) return renderEmptyState('먼저 캐릭터를 추가하세요.');
-    if (plannerSituationScopeState.loading && !plannerSituationScopeState.loaded) return renderEmptyState('캐릭터별 플랜을 불러오는 중입니다.');
+    if (plannerMultiScopeState.loading && !plannerMultiScopeState.loaded) return renderEmptyState('캐릭터별 플랜을 불러오는 중입니다.');
     const index = getProjectItems(project, 'situations').findIndex(entry => entry.id === situation.id);
     return renderPlannerPlanCardGrid(characters.map(character => renderPlannerPlanCard({
         image: getPlannerSituationImage(character, situation, index),
-        item: getPlannerSituationItem(plannerSituationScopeState.metas.get(character.id) || getPlannerMetaForCharacter(project, character.id), situation.id),
+        item: getPlannerSituationItem(plannerMultiScopeState.metas.get(character.id) || getPlannerMetaForCharacter(project, character.id), situation.id),
         title: character.name || character.folderName, fallbackText: getSituationImageNumber(project, situation),
-        situationId: situation.id, characterId: character.id, error: plannerSituationScopeState.errors.get(character.id) || ''
+        situationId: situation.id, characterId: character.id, error: plannerMultiScopeState.errors.get(character.id) || ''
     })));
+}
+
+function getPlannerCreatedPlanEntries(project) {
+    const situations = getProjectItems(project, 'situations');
+    const situationById = new Map(situations.map((situation, index) => [situation.id, { situation, index }]));
+    return getProjectItems(project, 'characters').flatMap(character => {
+        // A completed shared snapshot is authoritative, including empty runs.
+        const meta = plannerMultiScopeState.metas.has(character.id)
+            ? plannerMultiScopeState.metas.get(character.id)
+            : getPlannerMetaForCharacter(project, character.id);
+        const seen = new Set();
+        return (meta?.items || []).flatMap(item => {
+            const match = situationById.get(item.situationId);
+            if (!match || seen.has(item.situationId)) return [];
+            seen.add(item.situationId);
+            return [{ character, ...match, item, meta }];
+        }).sort((a, b) => a.index - b.index);
+    });
+}
+
+function renderPlannerCreatedPlanGrid(project, entries) {
+    if (!plannerMultiScopeState.loaded) return renderEmptyState('저장된 플랜을 불러오는 중입니다.');
+    const errors = [...plannerMultiScopeState.errors.entries()];
+    const notice = errors.length ? `<div class="pw-board-notice" role="status"><p>확인된 플랜 ${entries.length}개 · 일부 정보 조회 실패</p><p>${errors.map(([id, error]) => `${escapeHtml(getCharacterById(project, id)?.name || getCharacterById(project, id)?.folderName || id)}: ${escapeHtml(error)}`).join('<br>')}</p><button type="button" class="pw-button" onclick="window.requestPlannerRefresh()">다시 불러오기</button></div>` : '';
+    if (!entries.length) return notice + renderEmptyState(errors.length
+        ? '일부 플랜을 확인하지 못했습니다. 다시 불러오기를 시도하세요.'
+        : '생성된 플랜이 없습니다. 캐릭터 기준 또는 상황 기준에서 플랜을 작성하세요.');
+    return notice + renderPlannerPlanCardGrid(entries.map(({ character, situation, index, item }) => renderPlannerPlanCard({
+        image: getPlannerSituationImage(character, situation, index), item,
+        title: character.name || character.alias || character.folderName,
+        subtitle: getSituationDisplayName(situation),
+        fallbackText: getSituationImageNumber(project, situation),
+        situationId: situation.id, characterId: character.id,
+        error: plannerMultiScopeState.errors.get(character.id) || ''
+    }))) + '<p class="pw-board-empty" data-pw-board-empty hidden role="status">검색 조건에 맞는 플랜이 없습니다.</p>';
 }
 
 export function renderPlannerSituationPlanModal(project, situation, character, meta) {
@@ -2790,6 +2852,12 @@ export function renderPlannerPanel(project, situations) {
     const activeCharacter = getCharacterById(project, getSelectedPlannerCharacterId(project)) || characters[0];
     const view = window.PROJECT_PLANNER_VIEW === 'run' ? 'run' : 'plan';
     const planScope = getPlannerPlanScope(project);
+    const createdEntries = planScope === 'all' ? getPlannerCreatedPlanEntries(project) : [];
+    const scopeSummary = !plannerMultiScopeState.loaded || plannerMultiScopeState.loading
+        ? '저장된 플랜 조회 중'
+        : plannerMultiScopeState.errors.size
+            ? `확인된 플랜 ${createdEntries.length}개 · 일부 정보 조회 실패`
+            : `현재 프로젝트의 저장된 플랜 ${createdEntries.length}개`;
     const selectedSituation = getSelectedPlannerSituation(project);
     const settings = normalizePlannerSettings(window.PROJECT_PLANNER_SETTINGS || {});
     const queueMetas = window.PROJECT_PLANNER_QUEUE_METAS?.length ? window.PROJECT_PLANNER_QUEUE_METAS : (meta?.items?.length ? [{ character: activeCharacter, meta }] : []);
@@ -2824,15 +2892,15 @@ export function renderPlannerPanel(project, situations) {
 
     const scopeButton = (scope, label) => `<button type="button" class="pw-button" aria-pressed="${planScope === scope}" onclick="window.setPlannerPlanScope('${scope}')">${label}</button>`;
     const viewButton = (name, label) => `<button type="button" class="pw-button" aria-pressed="${view === name}" onclick="window.setPlannerView('${name}')">${label}</button>`;
-    const board = !characters.length ? renderEmptyState('플랜을 작성하려면 먼저 캐릭터를 추가하세요.') : !situations.length ? renderEmptyState('플랜을 작성하려면 먼저 상황을 추가하세요.') : planScope === 'situation'
+    const board = planScope === 'all' ? renderPlannerCreatedPlanGrid(project, createdEntries) : !characters.length ? renderEmptyState('플랜을 작성하려면 먼저 캐릭터를 추가하세요.') : !situations.length ? renderEmptyState('플랜을 작성하려면 먼저 상황을 추가하세요.') : planScope === 'situation'
         ? renderPlannerCharacterGridForSituation(project, characters, selectedSituation)
         : renderPlannerSituationGrid(project, situations, activeCharacter, meta);
     return `<div class="pw-panel">
         <header class="pw-panel-header"><div><h3 class="font-bold">플래너</h3><p id="planner-status" class="text-xs" role="status">${escapeHtml(getPlannerStatusLabel(meta?.status))}</p></div>
         <div class="flex flex-wrap items-center gap-2"><span data-nai-v5-usage class="text-xs">V5 --%</span><span data-nai-anlas-balance class="text-xs">-- Anlas</span>${renderPlannerBackgroundHealthBadge()}<button type="button" class="pw-button" onclick="window.openPlannerSettingsModal()">공통 설정</button></div></header>
-        <div class="pw-panel-header"><div class="flex gap-1">${scopeButton('character', '캐릭터 기준')}${scopeButton('situation', '상황 기준')}</div>${renderPlannerTargetTrigger(view === 'plan' && planScope === 'situation' ? 'situation' : 'character', project, view === 'plan' && planScope === 'situation' ? selectedSituation : activeCharacter)}</div>
+        <div class="pw-panel-header"><div class="flex flex-wrap gap-1">${scopeButton('character', '캐릭터 기준')}${scopeButton('situation', '상황 기준')}${scopeButton('all', '생성된 플랜 전체')}</div>${view === 'plan' && planScope === 'all' ? `<p class="text-xs" role="status">${scopeSummary}</p>` : renderPlannerTargetTrigger(view === 'plan' && planScope === 'situation' ? 'situation' : 'character', project, view === 'plan' && planScope === 'situation' ? selectedSituation : activeCharacter)}</div>
         <nav class="pw-panel-tabs" aria-label="플래너 화면">${viewButton('plan', '플랜 · 결과')}${viewButton('run', '실행 화면')}<button type="button" class="pw-button pw-refresh" onclick="window.requestPlannerRefresh()" aria-label="새로고침"><i data-lucide="refresh-cw" class="w-4 h-4"></i></button></nav>
-        ${view === 'plan' ? `<div class="pw-panel-header"><h3>전체 플랜</h3><div class="flex flex-wrap gap-2"><button type="button" class="pw-button" data-planner-batch-action onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>누락 플랜 생성</button><button type="button" class="pw-button text-red-600" data-planner-batch-action onclick="window.deleteAllPlannerItems()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>전체 플랜 삭제</button></div></div>${renderPlannerWorkspaceFilters()}` : ''}
+        ${view === 'plan' ? `<div class="pw-panel-header"><h3>${planScope === 'all' ? '생성된 플랜' : '전체 플랜'}</h3>${planScope === 'all' ? '' : `<div class="flex flex-wrap gap-2"><button type="button" class="pw-button" data-planner-batch-action onclick="window.createAllMissingPlannerPlans()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>누락 플랜 생성</button><button type="button" class="pw-button text-red-600" data-planner-batch-action onclick="window.deleteAllPlannerItems()" ${plannerBatchPlanCreationRunning || plannerBatchPlanDeletionRunning ? 'disabled' : ''}>전체 플랜 삭제</button></div>`}</div>${renderPlannerWorkspaceFilters(planScope)}` : ''}
         <div data-planner-scroll="main" data-planner-view="${view}" class="pw-board-scroll">${view === 'run' ? runView : board}</div>
         ${renderPlannerSettingsModal(settings)}</div>`;
 }
@@ -2996,8 +3064,8 @@ export async function refreshPlannerPanel(options = {}) {
         }
         applyPlannerRefreshData(project, data);
         renderPlannerSectionByState({ preserveScroll });
-        if ((window.PROJECT_PLANNER_VIEW || 'plan') === 'plan' && getPlannerPlanScope(project) === 'situation') {
-            await loadPlannerSituationScopeData({ force: true });
+        if ((window.PROJECT_PLANNER_VIEW || 'plan') === 'plan' && getPlannerPlanScope(project) !== 'character') {
+            await loadPlannerMultiScopeData({ force: true });
         }
         syncPlannerBackgroundPolling();
         setPlannerStatus('최신 정보를 불러왔습니다.');
@@ -3015,59 +3083,74 @@ export async function setPlannerView(view = 'plan') {
     const project = getActiveProject();
     if (
         window.PROJECT_PLANNER_VIEW === 'plan'
-        && getPlannerPlanScope(project) === 'situation'
-        && !plannerSituationScopeState.loaded
-        && !plannerSituationScopeState.loading
+        && getPlannerPlanScope(project) !== 'character'
+        && !plannerMultiScopeState.loading
     ) {
-        await loadPlannerSituationScopeData();
+        await loadPlannerMultiScopeData();
     }
     syncPlannerBackgroundPolling({ immediate: window.PROJECT_PLANNER_VIEW === 'run' });
 }
 
-export async function loadPlannerSituationScopeData({ force = false } = {}) {
+export async function loadPlannerMultiScopeData({ force = false } = {}) {
     const project = getActiveProject();
     if (!project) return;
     ensurePlannerPlanScopeProject(project);
-    if (!force && plannerSituationScopeState.loaded && plannerSituationScopeState.projectId === project.id) return;
+    const scope = getPlannerPlanScope(project);
+    const needsDetails = scope === 'situation';
+    if (!force && plannerMultiScopeState.loaded && (!needsDetails || plannerMultiScopeState.detailsLoaded)) return;
 
     const characters = getProjectItems(project, 'characters');
-    const operationId = ++plannerSituationScopeState.operationId;
-    plannerSituationScopeState.projectId = project.id;
-    plannerSituationScopeState.loading = true;
-    plannerSituationScopeState.errors = new Map();
+    const operationId = ++plannerMultiScopeState.operationId;
+    const snapshots = new Map(plannerMultiScopeState.metas);
+    plannerMultiScopeState.projectId = project.id;
+    plannerMultiScopeState.loading = true;
+    plannerMultiScopeState.errors = new Map();
     renderPlannerSectionByState({ preserveScroll: true });
-    setPlannerStatus('캐릭터별 플랜과 이미지 상태를 불러오는 중입니다.');
+    setPlannerStatus('캐릭터별 저장 플랜을 불러오는 중입니다.');
 
-    const entries = await Promise.all(characters.map(async character => {
-        const results = await Promise.allSettled([
-            loadCharacterFiles(character, { force }),
-            loadCharacterMeta(character, { force }),
-            loadPlannerMeta(project, character.id, { force })
-        ]);
+    const entries = await mapPlannerCharacters(characters, async character => {
+        const [planResult] = await Promise.allSettled([loadPlannerMeta(project, character.id, { force })]);
+        const meta = planResult.status === 'fulfilled' ? planResult.value : null;
         const failedLabels = [];
-        if (results[0].status === 'rejected') failedLabels.push('이미지');
-        if (results[1].status === 'rejected') failedLabels.push('캐릭터 설정');
-        if (results[2].status === 'rejected') failedLabels.push('플랜');
+        if (planResult.status === 'rejected') failedLabels.push('플랜');
+        // All view only needs image data for characters with stored plans.
+        if (needsDetails || meta?.items?.length) {
+            const results = await Promise.allSettled([
+                loadCharacterFiles(character, { force }),
+                needsDetails ? loadCharacterMeta(character, { force }) : Promise.resolve()
+            ]);
+            if (results[0].status === 'rejected') failedLabels.push('이미지');
+            if (results[1].status === 'rejected') failedLabels.push('캐릭터 설정');
+        }
         return {
             character,
-            meta: results[2].status === 'fulfilled' ? results[2].value : null,
+            meta,
+            planFailed: planResult.status === 'rejected',
             error: failedLabels.length ? `${failedLabels.join(', ')} 정보를 불러오지 못했습니다.` : ''
         };
-    }));
+    });
 
-    if (operationId !== plannerSituationScopeState.operationId || project.id !== getActiveProject()?.id) return;
+    if (operationId !== plannerMultiScopeState.operationId || project.id !== getActiveProject()?.id) return;
     const metas = new Map();
     const errors = new Map();
-    entries.forEach(({ character, meta, error }) => {
+    entries.forEach(({ character, meta, error, planFailed }) => {
+        // Saves, deletions and generation polling may finish while images load.
+        if (plannerMultiScopeState.metas.get(character.id) !== snapshots.get(character.id)) {
+            meta = plannerMultiScopeState.metas.get(character.id);
+            error = plannerMultiScopeState.errors.get(character.id) || '';
+            planFailed = false;
+        }
         metas.set(character.id, meta);
         if (error) errors.set(character.id, error);
-        if (meta?.items?.length) updatePlannerQueueMetaCache(project, meta);
+        // Replace missing runs as well, so removed plans cannot survive in the queue cache.
+        if (!planFailed) updatePlannerQueueMetaCache(project, meta || { characterId: character.id, items: [] });
     });
-    plannerSituationScopeState.metas = metas;
-    plannerSituationScopeState.errors = errors;
-    plannerSituationScopeState.loading = false;
-    plannerSituationScopeState.loaded = true;
-    if (!isPlannerPanelVisible() || getPlannerPlanScope(project) !== 'situation') return;
+    plannerMultiScopeState.metas = metas;
+    plannerMultiScopeState.errors = errors;
+    plannerMultiScopeState.loading = false;
+    plannerMultiScopeState.loaded = true;
+    plannerMultiScopeState.detailsLoaded = needsDetails;
+    if (!isPlannerPanelVisible() || getPlannerPlanScope(project) === 'character') return;
     renderPlannerSectionByState({ preserveScroll: true });
     setPlannerStatus(errors.size
         ? `${characters.length - errors.size}명의 상태를 불러왔고 ${errors.size}명은 확인이 필요합니다.`
@@ -3078,18 +3161,16 @@ export async function setPlannerPlanScope(scope = 'character') {
     const project = getActiveProject();
     if (!project) return;
     ensurePlannerPlanScopeProject(project);
-    window.PROJECT_PLANNER_PLAN_SCOPE = scope === 'situation' ? 'situation' : 'character';
+    window.PROJECT_PLANNER_PLAN_SCOPE = normalizePlannerPlanScope(scope);
+    resetPlannerTargetPickerState();
     savePlannerSelection(project);
-    if (window.PROJECT_PLANNER_PLAN_SCOPE === 'situation' && !plannerSituationScopeState.loaded) {
-        plannerSituationScopeState.loading = true;
-    }
-    if (window.PROJECT_PLANNER_PLAN_SCOPE === 'character' && plannerSituationScopeState.loading) {
-        plannerSituationScopeState.operationId += 1;
-        plannerSituationScopeState.loading = false;
+    if (plannerMultiScopeState.loading) {
+        plannerMultiScopeState.operationId += 1;
+        plannerMultiScopeState.loading = false;
     }
     renderPlannerSectionByState({ scroll: 'preserve', focus: 'reset' });
-    if (window.PROJECT_PLANNER_PLAN_SCOPE === 'situation') {
-        await loadPlannerSituationScopeData();
+    if (window.PROJECT_PLANNER_PLAN_SCOPE !== 'character') {
+        await loadPlannerMultiScopeData();
     }
 }
 
@@ -3178,8 +3259,8 @@ export async function openPlannerSituationPlanModal(situationId, characterId = '
         loadCharacterMeta(character).catch(() => ({}))
     ]);
     if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return;
-    plannerSituationScopeState.metas.set(targetCharacterId, meta);
-    plannerSituationScopeState.errors.delete(targetCharacterId);
+    plannerMultiScopeState.metas.set(targetCharacterId, meta);
+    plannerMultiScopeState.errors.delete(targetCharacterId);
     if (meta) setPlannerMetaForCharacter(project, meta);
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     window.PLANNER_PLAN_MODAL_CHARACTER_ID = targetCharacterId;
@@ -3544,8 +3625,8 @@ async function commitPlannerSituationPlan() {
     meta.updatedAt = Date.now();
     await savePlannerItem(project, meta, item);
     setPlannerMetaForCharacter(project, meta);
-    plannerSituationScopeState.metas.set(characterId, clonePlannerMetaValue(meta));
-    plannerSituationScopeState.errors.delete(characterId);
+    plannerMultiScopeState.metas.set(characterId, clonePlannerMetaValue(meta));
+    plannerMultiScopeState.errors.delete(characterId);
     clearPlannerEditorDraft();
     renderPlannerSectionByState({ preserveScroll: true });
     renderPlannerSituationPlanOverlay();
@@ -3782,9 +3863,9 @@ async function createMissingPlannerPlansForSituation() {
             ]);
             characterMeta = values[1] || {};
             meta = values[2] || null;
-            plannerSituationScopeState.errors.delete(character.id);
+            plannerMultiScopeState.errors.delete(character.id);
         } catch (error) {
-            plannerSituationScopeState.errors.set(character.id, error?.message || '정보를 불러오지 못했습니다.');
+            plannerMultiScopeState.errors.set(character.id, error?.message || '정보를 불러오지 못했습니다.');
             summary.failed += 1;
             continue;
         }
@@ -3792,7 +3873,7 @@ async function createMissingPlannerPlansForSituation() {
         let eligibility = getPlannerPlanEligibility({ character, situation, situationIndex, meta });
         if (!eligibility.eligible) {
             addPlannerBatchReason(summary, eligibility);
-            plannerSituationScopeState.metas.set(character.id, meta);
+            plannerMultiScopeState.metas.set(character.id, meta);
             continue;
         }
 
@@ -3811,7 +3892,7 @@ async function createMissingPlannerPlansForSituation() {
             count: defaultCount
         });
         if (!item) {
-            plannerSituationScopeState.errors.set(character.id, '플랜 기본값을 구성하지 못했습니다.');
+            plannerMultiScopeState.errors.set(character.id, '플랜 기본값을 구성하지 못했습니다.');
             summary.failed += 1;
             continue;
         }
@@ -3823,7 +3904,7 @@ async function createMissingPlannerPlansForSituation() {
             await savePlannerItem(project, meta, item);
         } catch (error) {
             if (error?.status !== 409) {
-                plannerSituationScopeState.errors.set(character.id, error?.message || '플랜을 저장하지 못했습니다.');
+                plannerMultiScopeState.errors.set(character.id, error?.message || '플랜을 저장하지 못했습니다.');
                 summary.failed += 1;
                 continue;
             }
@@ -3831,7 +3912,7 @@ async function createMissingPlannerPlansForSituation() {
             eligibility = getPlannerPlanEligibility({ character, situation, situationIndex, meta: latestMeta });
             if (!eligibility.eligible) {
                 addPlannerBatchReason(summary, eligibility);
-                plannerSituationScopeState.metas.set(character.id, latestMeta);
+                plannerMultiScopeState.metas.set(character.id, latestMeta);
                 if (latestMeta) setPlannerMetaForCharacter(project, latestMeta);
                 continue;
             }
@@ -3841,7 +3922,7 @@ async function createMissingPlannerPlansForSituation() {
             try {
                 await savePlannerItem(project, meta, item);
             } catch (retryError) {
-                plannerSituationScopeState.errors.set(character.id, retryError?.message || '플랜을 저장하지 못했습니다.');
+                plannerMultiScopeState.errors.set(character.id, retryError?.message || '플랜을 저장하지 못했습니다.');
                 summary.failed += 1;
                 continue;
             }
@@ -3851,15 +3932,16 @@ async function createMissingPlannerPlansForSituation() {
         meta.lastSituationId = situation.id;
         meta.status = 'draft';
         meta.updatedAt = Date.now();
-        plannerSituationScopeState.metas.set(character.id, clonePlannerMetaValue(meta));
-        plannerSituationScopeState.errors.delete(character.id);
+        plannerMultiScopeState.metas.set(character.id, clonePlannerMetaValue(meta));
+        plannerMultiScopeState.errors.delete(character.id);
         setPlannerMetaForCharacter(project, meta);
         summary.created += 1;
     }
 
-    plannerSituationScopeState.projectId = project.id;
-    plannerSituationScopeState.loading = false;
-    plannerSituationScopeState.loaded = true;
+    plannerMultiScopeState.projectId = project.id;
+    plannerMultiScopeState.loading = false;
+    plannerMultiScopeState.loaded = true;
+    plannerMultiScopeState.detailsLoaded = true;
     window.PROJECT_PLANNER_PROJECT_STYLE = projectStyle || '';
     return formatPlannerBatchCreationResult(summary);
 }
@@ -3893,6 +3975,7 @@ async function confirmPlannerBatchAction(action) {
     const project = getActiveProject();
     if (!project) return null;
     const scope = getPlannerPlanScope(project);
+    if (scope === 'all') return null;
     const targetId = scope === 'situation' ? getSelectedPlannerSituation(project)?.id : getSelectedPlannerCharacterId(project);
     const target = scope === 'situation' ? getSelectedPlannerSituation(project) : getCharacterById(project, targetId);
     if (!target) return null;
@@ -4004,7 +4087,7 @@ async function deleteAllPlannerItemsForCharacter() {
 
 function getPlannerSituationPlanTargets(situationId) {
     if (!situationId) return [];
-    return [...plannerSituationScopeState.metas.entries()].flatMap(([characterId, meta]) => {
+    return [...plannerMultiScopeState.metas.entries()].flatMap(([characterId, meta]) => {
         const item = meta?.items?.find(entry => entry.situationId === situationId);
         return item ? [{ characterId, meta, item }] : [];
     });
@@ -4018,8 +4101,8 @@ async function deleteAllPlannerItemsForSituation() {
         setPlannerStatus('삭제할 상황을 선택하세요.');
         return;
     }
-    await loadPlannerSituationScopeData({ force: true });
-    if (plannerSituationScopeState.errors.size) {
+    await loadPlannerMultiScopeData({ force: true });
+    if (plannerMultiScopeState.errors.size) {
         setPlannerStatus('일부 캐릭터의 플랜 상태를 확인하지 못했습니다. 새로고침 후 다시 시도하세요.');
         return;
     }
@@ -4049,9 +4132,6 @@ async function deleteAllPlannerItemsForSituation() {
         );
         await cleanupPlannerReviewReferences(project, [situation.id]);
         clearPlannerCachesForProject(project);
-        plannerSituationScopeState.loaded = false;
-        plannerSituationScopeState.metas = new Map();
-        plannerSituationScopeState.errors = new Map();
         window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
         window.PLANNER_PLAN_MODAL_CHARACTER_ID = null;
         window.PLANNER_PLAN_MODAL_SITUATION_ID = null;

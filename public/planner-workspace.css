@@ -18,6 +18,10 @@
 .pw-plan-card strong{font-size:13px;overflow-wrap:anywhere}
 .pw-plan-card span,.pw-plan-card small{font-size:11px}
 .pw-plan-card[hidden]{display:none}
+.pw-plan-subtitle{overflow-wrap:anywhere}
+.pw-board-notice{border:1px solid #d97706;border-radius:8px;padding:12px;margin-bottom:12px;font-size:12px;overflow-wrap:anywhere}
+.pw-board-notice p{margin-bottom:8px}
+.pw-board-empty{padding:24px;text-align:center;font-size:13px}
 .dark .pw-plan-card{border-color:#404040}
 .dark .pw-plan-card img,.dark .pw-plan-placeholder{background:#0a0a0a}
 .pw-backdrop{position:fixed;inset:0;z-index:60;padding:24px;display:flex;align-items:center;justify-content:center;background:#0009;backdrop-filter:blur(3px)}

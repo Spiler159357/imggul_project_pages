@@ -1,8 +1,8 @@
 import { createPickerListItem, setPickerListMessage, filterPickerList, getPickerSituationLabel } from '../picker-list.js?v=selection-ui-20261106c';
-import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-workspace-20261106r';
-import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-workspace-20261106r';
-import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-workspace-20261106r';
-import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-workspace-20261106r';
+import { getCharacterById, getDefaultProjectId, getProjectByPrefix, getProjectItems, getSituationGeneration, loadCharacterMeta, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeCharacterPromptVariants, normalizePlannerV4PromptRows, normalizeSituationPromptVariants, saveCharacterMeta, saveProjectSituations, uploadProjectStylePrompt } from './shared.js?v=planner-workspace-20261108a';
+import { openProjectDetail, openProjectSection, renderProjectManage } from './manage.js?v=planner-workspace-20261108a';
+import { applyCraftPromptValues, openCharacterDetail } from './character.js?v=planner-workspace-20261108a';
+import { combinePromptParts, getSituationById, getSituationPrompt, openSituationDetail } from './situation.js?v=planner-workspace-20261108a';
 
 export function getCraftPromptFields() {
     return {

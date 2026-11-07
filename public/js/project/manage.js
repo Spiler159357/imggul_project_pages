@@ -1,7 +1,7 @@
-import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=planner-workspace-20261106r';
-import { renderCharacterSection } from './character.js?v=planner-workspace-20261106r';
-import { getPlannerPlanScope, loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, loadPlannerSituationScopeData, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=planner-workspace-20261106r';
-import { renderSituationSection } from './situation.js?v=planner-workspace-20261106r';
+import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootProjectCache, createProjectFolder, createPromptVariantId, deleteProjectFolder, escapeHtml, escapeJsString, getActiveProject, getCharacterById, getDefaultProjectId, getItemLabel, getProjectBackgroundPromptData, getProjectBasePrefix, getProjectById, getProjectItems, getProjectPromptFieldConfig, getProjectPromptFieldValues, getProjects, getSelectedPlannerCharacterId, hydrateProjectPromptInput, hydrateProjectStylePromptInput, initProjectPromptMarkdownToggle, initPromptSectionInput, isInvalidProjectFolderName, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, loadProjects, normalizeProjectBackgroundPrompts, normalizeProjectFolderName, refreshProjectIcons, rememberProjectRoute, renameProjectFolder, renderEmptyState, renderProjectShell, replaceProjectRoute, saveProjectAlias, saveProjectBackgroundPrompts, setProjectRoute, switchProjectPromptField, uploadProjectMarkdownFile, uploadProjectStylePrompt } from './shared.js?v=planner-workspace-20261108a';
+import { renderCharacterSection } from './character.js?v=planner-workspace-20261108a';
+import { getPlannerPlanScope, loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, loadPlannerMultiScopeData, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=planner-workspace-20261108a';
+import { renderSituationSection } from './situation.js?v=planner-workspace-20261108a';
 import { renderImageEditor } from '../image_editor.js';
 
 export async function renderProjectManage(skipHistory = true) {
@@ -715,7 +715,7 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
         window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(project, getProjectItems(project, 'characters'), { force: true }).catch(() => []);
         if (window.PROJECT_ACTIVE_SECTION === 'planner' && getActiveProject()?.id === project?.id) {
             renderPlannerSection(section);
-            if (getPlannerPlanScope(project) === 'situation') await loadPlannerSituationScopeData();
+            if (getPlannerPlanScope(project) !== 'character') await loadPlannerMultiScopeData({ force: true });
             window.syncPlannerBackgroundPolling?.({
                 immediate: window.PROJECT_PLANNER_VIEW === 'run'
             });
