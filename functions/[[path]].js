@@ -18,6 +18,7 @@ import {
 } from "../src/image-serving.js";
 import {
     cancelPlannerCompactGeneration,
+    cancelPlannerCompactRegeneration,
     cleanupPlannerCompactAssets,
     completePlannerCompactBrowserQueue,
     confirmPlannerCompactAsset,
@@ -35,6 +36,7 @@ import {
     putPlannerCompactRunFromMeta,
     putPlannerCompactSettings,
     recoverPlannerCompactGeneration,
+    reservePlannerCompactRegeneration,
     resumePlannerCompactGeneration,
     startPlannerCompactGeneration,
     updatePlannerCompactItem
@@ -2504,6 +2506,26 @@ export async function onRequest(context) {
             return jsonResponse(data);
         } catch (e) {
             await writeBackgroundErrorLog(env, e, { route: path, method, stage: "planner_compact_start_api" });
+            return plannerApiErrorResponse(e);
+        }
+    }
+
+    if (path === "/api/planner/compact/generate/regenerate" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const data = await reservePlannerCompactRegeneration(env, await request.json());
+            return jsonResponse(data);
+        } catch (e) {
+            return plannerApiErrorResponse(e);
+        }
+    }
+
+    if (path === "/api/planner/compact/generate/cancel-regeneration" && method === "POST") {
+        if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
+        try {
+            const data = await cancelPlannerCompactRegeneration(env, await request.json());
+            return jsonResponse(data);
+        } catch (e) {
             return plannerApiErrorResponse(e);
         }
     }

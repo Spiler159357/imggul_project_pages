@@ -1,5 +1,5 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261108a';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261108b';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, picker: null, library: null, operation: 0 };
@@ -236,7 +236,7 @@ export function renderPlannerWorkspaceFilters(scope = 'character') {
 export function renderPlannerWorkspaceCard({ image, item, title, subtitle = '', fallbackText, situationId, characterId, error = '' }) {
     const images = Array.isArray(item?.images) ? item.images : [];
     const selectedKey = typeof item?.selectedImage === 'string' && images.includes(item.selectedImage) ? item.selectedImage : '';
-    const state = !item ? (image ? '최종 이미지 있음' : '미작성') : error ? '확인 필요' : selectedKey ? '후보 선택됨' : images.length ? '검토 대기' : '실행 대기';
+    const state = !item ? (image ? '최종 이미지 있음' : '미작성') : error ? '확인 필요' : item.regenerationReservation ? '재생성 대기' : selectedKey ? '후보 선택됨' : images.length ? '검토 대기' : '실행 대기';
     const missing = !item;
     const searchTitle = `${title} ${subtitle}`.toLocaleLowerCase();
     const visible = searchTitle.includes(ui.query.toLocaleLowerCase()) && (ui.filter === 'all' || (ui.filter === 'missing' ? missing : !!item));
@@ -266,7 +266,7 @@ export function syncPlannerOptionLabels() {
     });
 }
 
-export function renderPlannerWorkspaceReview(item, meta, blocked) {
+export function renderPlannerWorkspaceReview(item, meta, permissions) {
     ensureReferenceContext(item, meta);
     const images = item.images || [];
     if (!images.includes(ui.preview)) ui.preview = item.selectedImage || images[0] || '';
@@ -275,7 +275,7 @@ export function renderPlannerWorkspaceReview(item, meta, blocked) {
     const reference = ui.reference;
     return `<div id="planner-result-modal" class="pw-backdrop" data-pw-dialog="review" data-pw-plan-context="${h(meta.characterId)}|${h(item.situationId)}"><section class="pw-dialog pw-review" role="dialog" aria-modal="true" aria-label="후보 검수">
         <header class="pw-dialog-header"><div><h3>${h(item.situationName || item.situationId)}</h3><p id="planner-result-selected-label" aria-live="polite">후보 ${images.length ? index + 1 : 0} / ${images.length} · 선택 ${item.selectedImage ? images.indexOf(item.selectedImage) + 1 : '없음'}</p></div></header>
-        <div class="pw-review-tools">${button('‹ 플랜', 'previous-plan', 'aria-label="이전 플랜"')}${button('플랜 ›', 'next-plan', 'aria-label="다음 플랜"')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}"`)}
+        <div class="pw-review-tools">${button('‹ 플랜', 'previous-plan', 'aria-label="이전 플랜"')}${button('플랜 ›', 'next-plan', 'aria-label="다음 플랜"')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${permissions.editBlocked ? 'disabled' : ''}`)}
         ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference || referenceBindings.has(item.situationId) ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}
         </div>
         <div class="pw-review-stage"><div class="pw-images ${ui.compare ? 'pw-pair' : ''}">
@@ -283,8 +283,9 @@ export function renderPlannerWorkspaceReview(item, meta, blocked) {
         <figure><figcaption>${images.length ? `후보 ${index + 1}` : '후보 대기'}${item.selectedImage === ui.preview ? ' · 선택됨' : ''}</figcaption>${image ? `<img src="${h(image)}" alt="후보 ${index + 1}" draggable="false">` : '<p class="pw-review-empty" role="status">후보 이미지를 기다리고 있습니다. 생성 상태는 실행 화면에서 확인할 수 있습니다.</p>'}</figure></div>
         <div class="pw-thumbnails" aria-label="전체 후보 이미지">${images.map((key, i) => `<button type="button" data-pw-action="preview" data-key="${h(key)}" aria-label="후보 ${i + 1} 보기${item.selectedImage === key ? ' · 선택됨' : ''}" aria-pressed="${ui.preview === key}" class="${item.selectedImage === key ? 'pw-picked' : ''}"><img src="${h(getAssetUrl(key))}" alt="" loading="lazy" draggable="false">${item.selectedImage === key ? '<span class="pw-thumbnail-check" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div></div>
         <footer class="pw-review-footer"><div>${button('‹ 이전', 'previous', index <= 0 ? 'disabled' : '')}${button('다음 ›', 'next', index >= images.length - 1 ? 'disabled' : '')}</div>
+        ${permissions.reservation ? `<p class="pw-review-notice" role="status">${h(meta.status === 'paused' ? '재생성 예약이 일시정지되어 있습니다. 실행 화면에서 재개할 수 있습니다.' : '재생성 대기 · 현재 캐릭터의 앞선 작업이 끝나면 실행합니다.')}</p>` : ''}
         <p class="pw-review-notice" role="status" aria-live="polite">${h(reviewNotices.get(`${meta.characterId}|${item.situationId}`) || '')}</p>
-        <div><button type="button" class="pw-button pw-danger pw-delete-plan" data-pw-action="delete-plan" data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${blocked ? 'disabled' : ''}>플랜 삭제</button>${button('다시 생성', 'regenerate', `data-situation="${h(item.situationId)}" ${blocked ? 'disabled' : ''}`)}${button('이 후보 선택', 'select', !ui.preview || item.selectedImage === ui.preview || blocked ? 'disabled' : '')}<button id="planner-result-confirm-button" type="button" class="pw-button pw-primary" data-pw-action="confirm" data-situation="${h(item.situationId)}" ${!item.selectedImage || blocked ? 'disabled' : ''}>최종 선택 완료</button>${button('닫기', 'close-review')}</div></footer>
+        <div><button type="button" class="pw-button pw-danger pw-delete-plan" data-pw-action="delete-plan" data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${permissions.editBlocked ? 'disabled' : ''}>플랜 삭제</button>${permissions.reservation ? button('재생성 예약 취소', 'cancel-regeneration', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${permissions.cancelReservationBlocked ? 'disabled' : ''}`) : button('다시 생성', 'regenerate', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${permissions.regenerateBlocked ? 'disabled' : ''}`)}${button('이 후보 선택', 'select', !ui.preview || item.selectedImage === ui.preview || permissions.selectBlocked ? 'disabled' : '')}<button id="planner-result-confirm-button" type="button" class="pw-button pw-primary" data-pw-action="confirm" data-situation="${h(item.situationId)}" ${!item.selectedImage || permissions.confirmBlocked ? 'disabled' : ''}>최종 선택 완료</button>${button('닫기', 'close-review')}</div></footer>
     </section></div>`;
 }
 
@@ -430,7 +431,8 @@ async function dispatch(button) {
     if (action === 'delete-plan') return window.deletePlannerItem(button.dataset.situation, button.dataset.character);
     if (action === 'previous-plan' || action === 'next-plan') return window.navigatePlannerWorkspaceItem(action === 'next-plan' ? 1 : -1);
     if (action === 'review-from-editor') { window.closePlannerSituationPlanModal(); return window.openPlannerResultModal(button.dataset.situation, button.dataset.character); }
-    if (action === 'regenerate') return window.startPlannerResultGeneration(button.dataset.situation);
+    if (action === 'regenerate') return window.startPlannerResultGeneration(button.dataset.situation, button.dataset.character);
+    if (action === 'cancel-regeneration') return window.cancelPlannerResultRegeneration(button.dataset.situation, button.dataset.character);
     if (action === 'solo' || action === 'pair') { ui.compare = action === 'pair'; window.renderPlannerResultOverlay(); return; }
     if (action === 'reference') {
         const project = getActiveProject();

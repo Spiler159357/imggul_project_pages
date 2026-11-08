@@ -569,6 +569,8 @@ function normalizeRunItems(meta, ids, existingPayload = null) {
             targetCount: variants.reduce((total, variant) => total + variant.targetCount, 0),
             completedCount,
             failedCount,
+            generationSequence: asNonNegativeInteger(existingItem?.generationSequence || sourceItem.generationSequence || uniqueCandidates[0]?.generationSequence, 0),
+            lastRegenerationRequestId: asString(existingItem?.lastRegenerationRequestId),
             generation: normalizeGeneration(sourceItem.generation || variants[0]?.generation),
             variants,
             candidates: uniqueCandidates
@@ -603,13 +605,17 @@ function normalizeRunPayload(meta = {}, existingPayload = null) {
         projectPrefix: source.projectPrefix,
         characterId,
         characterPrefix: source.characterPrefix,
-        status: activeJob
+        status: existingPayload?.regenerationPaused && asArray(existingPayload.pendingRegenerations).length ? "paused" : activeJob
             ? runStatusFromJob(activeJob.status)
             : runStatusFromJob(asString(source.status, "draft")),
         mode: asString(source.mode, "background"),
         defaultCount: clampTargetCount(source.defaultCount, 1),
         items,
         activeJob,
+        pendingRegenerations: cloneJson(asArray(existingPayload?.pendingRegenerations)),
+        pendingCleanupKeys: cloneJson(asArray(existingPayload?.pendingCleanupKeys)),
+        regenerationPaused: existingPayload?.regenerationPaused === true,
+        confirmingOperation: existingPayload?.confirmingOperation ? cloneJson(existingPayload.confirmingOperation) : null,
         updatedAt: nowIso()
     };
 }
@@ -627,9 +633,34 @@ function generationStructureSignature(payload) {
 }
 
 function assertRunEditable(currentPayload, nextPayload) {
-    if (!ACTIVE_JOB_STATUSES.has(currentPayload?.activeJob?.status)) return;
+    if (currentPayload?.confirmingOperation) {
+        throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "플랜 확정 처리 중입니다.");
+    }
+    if (!hasPlannerCompactWork(currentPayload)) return;
     if (generationStructureSignature(currentPayload) !== generationStructureSignature(nextPayload)) {
         throw plannerError("PLANNER_RUN_ACTIVE", 409, "Planner run is active.");
+    }
+    // Browser metadata may predate an image completion. Preserve server-owned results.
+    for (const item of nextPayload.items) {
+        const current = currentPayload.items.find(entry => entry.itemId === item.itemId);
+        if (current) Object.assign(item, {
+            candidates: cloneJson(current.candidates),
+            completedCount: current.completedCount,
+            failedCount: current.failedCount,
+            generationSequence: current.generationSequence,
+            lastRegenerationRequestId: current.lastRegenerationRequestId,
+            status: current.status
+        });
+    }
+}
+
+function hasPlannerCompactWork(payload = {}) {
+    return ACTIVE_JOB_STATUSES.has(payload.activeJob?.status) || asArray(payload.pendingRegenerations).length > 0;
+}
+
+function assertPlannerCompactIdle(payload) {
+    if (hasPlannerCompactWork(payload)) {
+        throw plannerError("PLANNER_RUN_ACTIVE", 409, "생성 또는 재생성 예약이 남아 있어 플랜을 확정하거나 변경할 수 없습니다.");
     }
 }
 
@@ -647,7 +678,9 @@ function compactStatusFromRun(payload) {
         jobId: job?.jobId || "",
         projectId: payload.projectId,
         characterId: payload.characterId,
-        status: job?.status || payload.status || "draft",
+        status: payload.regenerationPaused && asArray(payload.pendingRegenerations).length ? "paused" : (job?.status || payload.status || "draft"),
+        pendingRegenerations: cloneJson(asArray(payload.pendingRegenerations)),
+        regenerationPaused: payload.regenerationPaused === true,
         mode: job?.mode || payload.mode || "background",
         totalCount: asNonNegativeInteger(job?.totalCount, 0),
         completedCount: asNonNegativeInteger(job?.completedCount, 0),
@@ -701,11 +734,12 @@ export function plannerCompactRunToClient(record) {
         );
         return {
             ...item,
+            regenerationReservation: asArray(payload.pendingRegenerations).find(entry => entry.itemId === item.itemId) || null,
             status: item.status === "complete" ? "completed" : item.status,
             id: item.itemId,
             count: item.targetCount,
             generationSequence: asNonNegativeInteger(
-                generatedImages[0]?.generationSequence,
+                item.generationSequence || generatedImages[0]?.generationSequence,
                 activeJobTargetsItem ? payload.activeJob?.generationSequence : 0
             ),
             images: generatedImages.map(candidate => candidate.r2Key),
@@ -877,7 +911,7 @@ export async function putPlannerCompactItemFromMeta(env, input = {}) {
         });
     }
     const updated = await mutateRunWithRetry(env, lookup, payload => {
-        if (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status)) {
+        if (hasPlannerCompactWork(payload) || payload.confirmingOperation) {
             throw plannerError("PLANNER_RUN_ACTIVE", 409, "Planner run is active.");
         }
         const itemIds = makePlannerCompactIds({ ...payload, ...item });
@@ -895,7 +929,7 @@ export async function updatePlannerCompactItem(env, itemId, patch = {}) {
         ? { runKey: patch.runKey }
         : { projectId: patch.projectId, characterId: patch.characterId };
     const updated = await mutateRunWithRetry(env, lookup, payload => {
-        if (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status)) {
+        if (hasPlannerCompactWork(payload) || payload.confirmingOperation) {
             throw plannerError("PLANNER_RUN_ACTIVE", 409, "Planner run is active.");
         }
         const index = payload.items.findIndex(item => item.itemId === itemId);
@@ -910,7 +944,7 @@ export async function updatePlannerCompactItem(env, itemId, patch = {}) {
 export async function deletePlannerCompactItem(env, itemId, lookup = {}) {
     let candidateKeys = [];
     const updated = await mutateRunWithRetry(env, lookup, payload => {
-        if (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status)) {
+        if (hasPlannerCompactWork(payload) || payload.confirmingOperation) {
             throw plannerError("PLANNER_RUN_ACTIVE", 409, "Planner run is active.");
         }
         const targetItem = payload.items.find(item => item.itemId === itemId);
@@ -931,7 +965,7 @@ export async function deletePlannerCompactRun(env, lookup = {}) {
     for (let attempt = 0; attempt < MAX_OPTIMISTIC_RETRIES; attempt += 1) {
         const current = await getPlannerCompactRunRecord(env, typeof lookup === "string" ? { runId: lookup } : lookup);
         if (!current) return { deleted: false };
-        if (ACTIVE_JOB_STATUSES.has(current.payload.activeJob?.status)) {
+        if (hasPlannerCompactWork(current.payload) || current.payload.confirmingOperation) {
             throw plannerError("PLANNER_RUN_ACTIVE", 409, "Planner run is active.");
         }
         const candidateKeys = current.payload.items
@@ -1109,6 +1143,9 @@ function recalculateJob(payload, job) {
 }
 
 function applyJobStatusToItems(payload) {
+    for (const item of payload.items) {
+        item.generationSequence = asNonNegativeInteger(item.generationSequence || item.candidates[0]?.generationSequence, 0);
+    }
     const job = payload.activeJob;
     if (!job) return;
     const slots = enumerateRunSlots(payload, job.targetSituationId, job.generationSequence);
@@ -1117,6 +1154,7 @@ function applyJobStatusToItems(payload) {
     const executionItemId = slots.find(slot => slot.assetId === executionAssetId)?.itemId || "";
     for (const item of payload.items) {
         if (!targetIds.has(item.itemId)) continue;
+        item.generationSequence = job.generationSequence;
         item.completedCount = item.candidates.length;
         item.failedCount = asArray(job.failedSlots).filter(slot => slot.itemId === item.itemId).length;
         const itemTargetCount = slots.filter(slot => slot.itemId === item.itemId).length;
@@ -1139,6 +1177,141 @@ function applyJobStatusToItems(payload) {
         }
     }
     payload.status = runStatusFromJob(job.status);
+    if (payload.regenerationPaused && asArray(payload.pendingRegenerations).length) payload.status = "paused";
+}
+
+// Reservations refer to the existing item. Its immutable generation settings stay
+// in that item while the run is locked; no duplicate plan or asset rows are created.
+function promotePlannerCompactRegeneration(payload, revision) {
+    if (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status) || payload.regenerationPaused || payload.confirmingOperation) return false;
+    const reservation = asArray(payload.pendingRegenerations)[0];
+    if (!reservation) return false;
+    const item = payload.items.find(entry => entry.itemId === reservation.itemId);
+    if (!item || asNonNegativeInteger(item.generationSequence, 0) !== reservation.sourceGenerationSequence) {
+        throw plannerError("PLANNER_REGENERATION_CONFLICT", 409, "예약한 플랜의 생성 결과가 변경되었습니다.");
+    }
+    const generationSequence = Math.max(revision + 1, reservation.sourceGenerationSequence + 1);
+    payload.pendingCleanupKeys = [...new Set([
+        ...asArray(payload.pendingCleanupKeys),
+        ...asArray(item.candidates).map(candidate => candidate.r2Key)
+    ].filter(Boolean))];
+    item.candidates = [];
+    item.completedCount = 0;
+    item.failedCount = 0;
+    item.generationSequence = generationSequence;
+    item.lastRegenerationRequestId = reservation.requestId;
+    payload.pendingRegenerations = payload.pendingRegenerations.slice(1);
+    const slots = enumerateRunSlots(payload, item.itemId, generationSequence);
+    const timestamp = nowIso();
+    payload.activeJob = {
+        jobId: makePlannerCompactIds({ ...payload, targetSituationId: item.itemId, mode: "background", generationSequence }).jobId,
+        generationSequence,
+        regenerationRequestId: reservation.requestId,
+        mode: "background",
+        status: "queued",
+        targetSituationId: item.itemId,
+        totalCount: slots.length,
+        completedCount: 0,
+        failedCount: 0,
+        failedSlots: [],
+        next: pointerFromSlot(slots[0]),
+        startedAt: timestamp,
+        lastProgressAt: timestamp,
+        lastDispatchAt: timestamp,
+        updatedAt: timestamp,
+        stage: "queued",
+        stageLabel: "Queued",
+        lastError: ""
+    };
+    applyJobStatusToItems(payload);
+    return true;
+}
+
+async function dispatchPlannerCompactRegeneration(env, record) {
+    const job = record.payload.activeJob;
+    const slot = job?.regenerationRequestId && job.mode === "background" ? nextRunnableSlot(record.payload, job) : null;
+    if (!slot) return;
+    try {
+        await env.GENERATION_QUEUE.send(makePlannerCompactQueueMessage(record.recordKey, job, slot, { dispatchReason: "regeneration" }));
+    } catch (error) {
+        // The queued job remains durable. The watchdog retries a missing delivery.
+        console.error(JSON.stringify({ event: "planner_regeneration_dispatch_failed", runKey: record.recordKey, error: error?.message }));
+    }
+}
+
+export async function reservePlannerCompactRegeneration(env, body = {}) {
+    if (!env.GENERATION_QUEUE) throw plannerError("PLANNER_QUEUE_UNAVAILABLE", 503, "Generation queue is unavailable.");
+    const itemId = asString(body.itemId);
+    const sourceGenerationSequence = Number(body.sourceGenerationSequence);
+    if (!body.runKey || !itemId || !Number.isSafeInteger(sourceGenerationSequence) || sourceGenerationSequence <= 0) {
+        throw plannerError("PLANNER_INVALID_INPUT", 400, "runKey, itemId and sourceGenerationSequence are required.");
+    }
+    const requestId = `regenerate:${itemId}:${sourceGenerationSequence}`;
+    const updated = await mutateRunWithRetry(env, { runKey: body.runKey }, (payload, current) => {
+        if (payload.confirmingOperation) throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "플랜 확정 처리 중입니다.");
+        applyJobStatusToItems(payload);
+        const item = payload.items.find(entry => entry.itemId === itemId);
+        if (!item) throw plannerError("PLANNER_ITEM_NOT_FOUND", 404, "Planner item not found.");
+        if (item.lastRegenerationRequestId === requestId || asArray(payload.pendingRegenerations).some(entry => entry.requestId === requestId)) {
+            return { noWrite: true, duplicate: true };
+        }
+        if (asNonNegativeInteger(item.generationSequence, 0) !== sourceGenerationSequence) {
+            throw plannerError("PLANNER_REGENERATION_CONFLICT", 409, "후보가 변경되었습니다. 최신 결과를 확인한 뒤 다시 생성하세요.");
+        }
+        if (!["complete", "completed", "done", "failed", "partial_failed"].includes(item.status)
+            || payload.activeJob?.status === "cancel_requested"
+            || (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status) && payload.activeJob.mode !== "background")) {
+            throw plannerError("PLANNER_RUN_ACTIVE", 409, "이 플랜의 생성이 끝난 뒤 다시 생성할 수 있습니다.");
+        }
+        payload.pendingRegenerations = [...asArray(payload.pendingRegenerations), { itemId, sourceGenerationSequence, requestId }];
+        promotePlannerCompactRegeneration(payload, current.revision);
+        return payload;
+    }, "run:regeneration:reserve");
+    if (!updated.result?.noWrite && updated.record.payload.activeJob?.regenerationRequestId === requestId) {
+        await dispatchPlannerCompactRegeneration(env, updated.record);
+    }
+    return {
+        data: plannerCompactRunToClient(updated.record),
+        requestId,
+        duplicate: Boolean(updated.result?.duplicate),
+        queued: asArray(updated.record.payload.pendingRegenerations).some(entry => entry.requestId === requestId)
+    };
+}
+
+export async function cancelPlannerCompactRegeneration(env, body = {}) {
+    if (!body.runKey || !body.itemId || !body.requestId) throw plannerError("PLANNER_INVALID_INPUT", 400, "Reservation identity is required.");
+    const updated = await mutateRunWithRetry(env, { runKey: body.runKey }, payload => {
+        const reservations = asArray(payload.pendingRegenerations);
+        const pending = reservations.some(entry => entry.itemId === body.itemId && entry.requestId === body.requestId);
+        if (!pending) {
+            if (payload.activeJob?.regenerationRequestId === body.requestId) {
+                throw plannerError("PLANNER_RUN_ACTIVE", 409, "재생성이 이미 시작되어 예약을 취소할 수 없습니다.");
+            }
+            return { noWrite: true };
+        }
+        payload.pendingRegenerations = reservations.filter(entry => entry.requestId !== body.requestId);
+        if (!payload.pendingRegenerations.length) {
+            payload.regenerationPaused = false;
+            payload.status = runStatusFromJob(payload.activeJob?.status || "draft");
+        }
+        return payload;
+    }, "run:regeneration:cancel");
+    return { data: plannerCompactRunToClient(updated.record) };
+}
+
+async function cleanupRetiredPlannerCompactCandidates(env, record) {
+    if (record.payload.confirmingOperation) return;
+    const keys = asArray(record.payload.pendingCleanupKeys).slice(0, 1000);
+    if (!keys.length) return;
+    const cleanup = await cleanupPlannerCompactAssets(env, { keys });
+    const failed = new Set(cleanup.failedKeys);
+    const removed = new Set(keys.filter(key => !failed.has(key)));
+    if (!removed.size) return;
+    await mutateRunWithRetry(env, { runKey: record.recordKey }, payload => {
+        if (payload.confirmingOperation || !asArray(payload.pendingCleanupKeys).some(key => removed.has(key))) return { noWrite: true };
+        payload.pendingCleanupKeys = asArray(payload.pendingCleanupKeys).filter(key => !removed.has(key));
+        return payload;
+    }, "run:regeneration:cleanup");
 }
 
 export async function startPlannerCompactGeneration(env, body = {}) {
@@ -1157,6 +1330,7 @@ export async function startPlannerCompactGeneration(env, body = {}) {
         });
     }
     if (!record) throw plannerError("PLANNER_RUN_NOT_FOUND", 404, "Planner run not found.");
+    if (record.payload.confirmingOperation) throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "플랜 확정 처리 중입니다.");
 
     if (ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
         let recovery = null;
@@ -1178,6 +1352,8 @@ export async function startPlannerCompactGeneration(env, body = {}) {
     const mode = body.mode === "browser" ? "browser" : "background";
     const targetSituationId = asString(body.targetSituationId);
     const updated = await mutateRunWithRetry(env, { runKey: record.recordKey }, async (payload, current) => {
+        if (payload.confirmingOperation) throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "플랜 확정 처리 중입니다.");
+        if (asArray(payload.pendingRegenerations).length) throw plannerError("PLANNER_RUN_ACTIVE", 409, "재생성 예약을 재개하거나 취소한 뒤 실행하세요.");
         if (ACTIVE_JOB_STATUSES.has(payload.activeJob?.status)) return { noWrite: true };
         const targetItems = payload.items.filter(item =>
             !targetSituationId || item.situationId === targetSituationId || item.itemId === targetSituationId
@@ -1207,6 +1383,7 @@ export async function startPlannerCompactGeneration(env, body = {}) {
                 }
             }
         }
+        for (const item of targetItems) item.generationSequence = generationSequence;
         const slots = enumerateRunSlots(payload, targetSituationId, generationSequence);
         const completed = getCompletedAssetIds(payload);
         const runnable = slots.find(slot => !completed.has(slot.assetId));
@@ -1313,8 +1490,21 @@ async function controlPlannerCompactGeneration(env, lookup, action) {
         cancel: { from: new Set(["queued", "running", "paused"]), to: "cancel_requested" }
     };
     const transition = transitions[action];
-    const updated = await mutateRunWithRetry(env, lookup, payload => {
+    const updated = await mutateRunWithRetry(env, lookup, (payload, current) => {
         const job = payload.activeJob;
+        if (action === "cancel") {
+            payload.pendingRegenerations = [];
+            payload.regenerationPaused = false;
+            if (!job || TERMINAL_JOB_STATUSES.has(job.status)) {
+                payload.status = runStatusFromJob(job?.status || "draft");
+                return payload;
+            }
+        }
+        if (action === "resume" && payload.regenerationPaused) {
+            payload.regenerationPaused = false;
+            promotePlannerCompactRegeneration(payload, current.revision);
+            return payload;
+        }
         if (!job) return { noWrite: true };
         if (!transition.from.has(job.status)) return { noWrite: true };
         const nextStatus = action === "cancel" && job.mode === "browser" ? "cancelled" : transition.to;
@@ -1402,6 +1592,7 @@ export async function preparePlannerCompactQueueSlot(env, message = {}) {
     const expected = asNonNegativeInteger(message.expectedGlobalImageIndex, slot.globalImageIndex);
     if (expected < slot.globalImageIndex) return { disposition: "ack", reason: "duplicate" };
     if (expected > slot.globalImageIndex) return { disposition: "retry", delaySeconds: 15, reason: "future_slot" };
+    await cleanupRetiredPlannerCompactCandidates(env, record);
     return {
         disposition: "process",
         runKey: record.recordKey,
@@ -1434,6 +1625,11 @@ export async function markPlannerCompactQueueExecution(env, message = {}, input 
         }
         const timestamp = nowIso();
         const previous = normalizeExecutionState(job.execution);
+        const slot = nextRunnableSlot(payload, job);
+        if (!slot || slot.assetId !== input.assetId) return { noWrite: true, stale: true };
+        if (previous.claimedAt && previous.traceId !== input.traceId && Date.parse(previous.leaseUntil) > Date.now()) {
+            return { noWrite: true, stale: true };
+        }
         job.execution = {
             assetId: asString(input.assetId || previous.assetId),
             globalImageIndex: asNonNegativeInteger(input.globalImageIndex, previous.globalImageIndex),
@@ -1461,7 +1657,7 @@ export async function markPlannerCompactQueueExecution(env, message = {}, input 
 }
 
 export async function commitPlannerCompactQueueSlot(env, message = {}, outcome = {}) {
-    const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
+    const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, (payload, current) => {
         const job = payload.activeJob;
         if (!job || job.jobId !== message.jobId) return { noWrite: true, stale: true };
         if (asNonNegativeInteger(message.generationSequence, job.generationSequence)
@@ -1543,6 +1739,7 @@ export async function commitPlannerCompactQueueSlot(env, message = {}, outcome =
         payload.activeJob = recalculateJob(payload, job);
         payload.status = runStatusFromJob(payload.activeJob.status);
         applyJobStatusToItems(payload);
+        promotePlannerCompactRegeneration(payload, current.revision);
         return payload;
     }, outcome.errorMessage ? "run:generation:slot-failed" : "run:generation:slot-complete");
     const record = updated.record;
@@ -1618,7 +1815,7 @@ export async function recordPlannerCompactSlotFailure(env, message = {}, failure
         failure.maxAttempts,
         DEFAULT_SLOT_REGENERATION_ATTEMPTS
     ));
-    const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
+    const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, (payload, current) => {
         const job = payload.activeJob;
         if (!job || job.jobId !== message.jobId) return { noWrite: true, stale: true };
         if (asNonNegativeInteger(message.generationSequence, job.generationSequence)
@@ -1680,6 +1877,7 @@ export async function recordPlannerCompactSlotFailure(env, message = {}, failure
         payload.activeJob = recalculateJob(payload, job);
         payload.status = runStatusFromJob(payload.activeJob.status);
         applyJobStatusToItems(payload);
+        promotePlannerCompactRegeneration(payload, current.revision);
         return payload;
     }, "run:generation:slot-failure");
     const record = updated.record;
@@ -1701,6 +1899,7 @@ export async function failPlannerCompactGeneration(env, message = {}, failure = 
     const updated = await mutateRunWithRetry(env, { runKey: message.runKey }, payload => {
         const job = payload.activeJob;
         if (!job || job.jobId !== message.jobId) return { noWrite: true, stale: true };
+        if (!["queued", "running"].includes(job.status)) return { noWrite: true, stale: true };
         if (asNonNegativeInteger(message.generationSequence, job.generationSequence)
             !== asNonNegativeInteger(job.generationSequence, 0)) {
             return { noWrite: true, stale: true };
@@ -1725,6 +1924,7 @@ export async function failPlannerCompactGeneration(env, message = {}, failure = 
             });
         }
         job.failedSlots = [...previousByAssetId.values()];
+        payload.regenerationPaused = asArray(payload.pendingRegenerations).length > 0;
         job.retryState = null;
         job.lastError = errorMessage;
         job.execution = null;
@@ -1757,7 +1957,9 @@ export async function recoverPlannerCompactGeneration(env, lookup = {}, options 
         };
     }
     const health = evaluatePlannerRunHealth(job);
-    if (!options.force && !health.canRecover) {
+    const waitingRegeneration = health.health === "queued" && job.regenerationRequestId && !job.execution?.claimedAt
+        && Date.now() - Date.parse(job.lastDispatchAt || job.startedAt) > 300_000;
+    if (!options.force && !health.canRecover && !waitingRegeneration) {
         return {
             requeued: false,
             reason: health.health,
@@ -1767,13 +1969,15 @@ export async function recoverPlannerCompactGeneration(env, lookup = {}, options 
     }
     const slot = nextRunnableSlot(record.payload, job);
     if (!slot) {
-        const reconciled = await mutateRunWithRetry(env, { runKey: record.recordKey }, payload => {
+        const reconciled = await mutateRunWithRetry(env, { runKey: record.recordKey }, (payload, current) => {
             if (!payload.activeJob || payload.activeJob.jobId !== job.jobId) return { noWrite: true, stale: true };
             payload.activeJob = recalculateJob(payload, payload.activeJob);
             payload.status = runStatusFromJob(payload.activeJob.status);
             applyJobStatusToItems(payload);
+            promotePlannerCompactRegeneration(payload, current.revision);
             return payload;
         }, "run:generation:recover-reconcile");
+        await dispatchPlannerCompactRegeneration(env, reconciled.record);
         return {
             requeued: false,
             reason: "terminal",
@@ -1829,12 +2033,16 @@ export async function recoverStalledPlannerCompactRuns(env, options = {}) {
                    payload_json, revision, created_at, updated_at, expires_at
             FROM planner_compact_records
             WHERE record_type = 'run'
-              AND status IN ('queued', 'running')
-              AND json_extract(payload_json, '$.activeJob.execution.claimedAt') IS NOT NULL
-              AND json_extract(payload_json, '$.activeJob.execution.leaseUntil') < ?
-            ORDER BY json_extract(payload_json, '$.activeJob.execution.leaseUntil')
+              AND ((status IN ('queued', 'running') AND (
+                (json_extract(payload_json, '$.activeJob.execution.claimedAt') IS NOT NULL
+                 AND json_extract(payload_json, '$.activeJob.execution.leaseUntil') < ?)
+                OR (json_extract(payload_json, '$.activeJob.regenerationRequestId') IS NOT NULL
+                    AND json_extract(payload_json, '$.activeJob.execution.claimedAt') IS NULL
+                    AND json_extract(payload_json, '$.activeJob.lastDispatchAt') < ?)
+              )) OR json_array_length(payload_json, '$.pendingCleanupKeys') > 0)
+            ORDER BY CASE WHEN status IN ('queued', 'running') THEN 0 ELSE 1 END, updated_at
             LIMIT ?
-        `).bind(timestamp, limit).all();
+        `).bind(timestamp, new Date(Date.now() - 300_000).toISOString(), limit).all();
         rows = result.results || [];
     } catch (error) {
         throw translateSchemaError(error);
@@ -1842,8 +2050,16 @@ export async function recoverStalledPlannerCompactRuns(env, options = {}) {
     const results = [];
     for (const row of rows) {
         const record = parsePlannerCompactRow(row, "run");
+        try {
+            await cleanupRetiredPlannerCompactCandidates(env, record);
+        } catch (error) {
+            console.warn(JSON.stringify({ event: "planner_regeneration_cleanup_retry", runKey: record.recordKey, error: error?.message }));
+        }
         const health = evaluatePlannerRunHealth(record.payload.activeJob || {});
-        if (!health.canRecover) {
+        const job = record.payload.activeJob;
+        const waitingRegeneration = health.health === "queued" && job?.regenerationRequestId && !job.execution?.claimedAt
+            && Date.now() - Date.parse(job.lastDispatchAt || job.startedAt) > 300_000;
+        if (!health.canRecover && !waitingRegeneration) {
             results.push({ runKey: record.recordKey, requeued: false, reason: health.health });
             continue;
         }
@@ -1967,6 +2183,8 @@ async function removeConfirmedItemFromRun(env, runKey, itemId, assetId) {
         if (!current) return null;
         const item = current.payload.items.find(entry => entry.itemId === itemId);
         if (!item) return current;
+        assertPlannerCompactIdle(current.payload);
+        if (current.payload.confirmingOperation) throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "플랜 확정 처리 중입니다.");
         if (!item.candidates.some(candidate => candidate.assetId === assetId)) {
             throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner item candidates changed during confirm.");
         }
@@ -2164,7 +2382,8 @@ async function commitPlannerCompactConfirmation(env, {
     runKey,
     targetFileName,
     targetFolderPrefix,
-    timestamp
+    timestamp,
+    confirmationRevision
 }) {
     const [currentConfirm, currentRun] = await Promise.all([
         getPlannerCompactRecord(env, confirmKey, "confirm"),
@@ -2172,6 +2391,11 @@ async function commitPlannerCompactConfirmation(env, {
     ]);
     if (!currentConfirm || currentConfirm.payload.status !== "pending") {
         throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner confirmation is no longer pending.");
+    }
+    assertPlannerCompactIdle(currentRun?.payload);
+    if (currentRun?.payload.confirmingOperation?.operationId !== completedPayload.operationId
+        || currentRun.payload.confirmingOperation.ownerRevision !== confirmationRevision) {
+        throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner confirmation ownership changed.");
     }
     const currentItem = currentRun?.payload.items.find(entry => entry.itemId === itemId);
     if (!currentItem?.candidates.some(candidate => candidate.assetId === assetId)) {
@@ -2182,6 +2406,7 @@ async function commitPlannerCompactConfirmation(env, {
     nextRunPayload.items = nextRunPayload.items.filter(entry => entry.itemId !== itemId);
     nextRunPayload.status = nextRunPayload.items.length ? "draft" : "confirmed";
     nextRunPayload.activeJob = null;
+    nextRunPayload.confirmingOperation = null;
     nextRunPayload.updatedAt = timestamp;
 
     const nextConfirmPayload = {
@@ -2310,6 +2535,7 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
     }
     const run = await getPlannerCompactRunRecord(env, { runKey });
     if (!run) throw plannerError("PLANNER_RUN_NOT_FOUND", 404, "Planner run not found.");
+    assertPlannerCompactIdle(run.payload);
     const item = run.payload.items.find(entry => entry.itemId === itemId);
     if (!item) throw plannerError("PLANNER_ITEM_NOT_FOUND", 404, "Planner item not found.");
     if (!isSafePathSegment(item.imageNumber)) {
@@ -2362,20 +2588,41 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
         completedAt: "",
         expiresAt: futureIso(CONFIRM_RETENTION_MS)
     };
-    if (!confirm || !sameConfirmOperation || confirm.payload.status === "failed") {
-        confirm = await putPlannerCompactRecord(env, {
-            recordKey: confirmKey,
-            recordType: "confirm",
-            projectId: run.projectId,
-            characterId: run.characterId,
-            status: "pending",
-            payload: confirmPayload,
-            createdAt: confirm?.createdAt,
-            expiresAt: confirmPayload.expiresAt
-        });
-    }
+    const reserved = await mutateRunWithRetry(env, { runKey }, (payload, current) => {
+        assertPlannerCompactIdle(payload);
+        const currentItem = payload.items.find(entry => entry.itemId === itemId);
+        if (!currentItem?.candidates.some(entry => entry.assetId === assetId)) {
+            throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "Planner candidate changed during confirm.");
+        }
+        const owner = payload.confirmingOperation;
+        if (owner && (owner.operationId !== confirmPayload.operationId || owner.assetId !== assetId || owner.targetR2Key !== targetR2Key)) {
+            throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "다른 플랜 확정 처리 중입니다.");
+        }
+        if (owner && Date.parse(owner.leaseUntil) > Date.now()) {
+            throw plannerError("PLANNER_CONFIRM_CONFLICT", 409, "이미 최종 확정을 처리 중입니다. 잠시 후 상태를 새로고침하세요.");
+        }
+        payload.confirmingOperation = {
+            operationId: confirmPayload.operationId, itemId, assetId, targetR2Key,
+            ownerRevision: current.revision + 1,
+            leaseUntil: futureIso(10 * 60 * 1000)
+        };
+        return payload;
+    }, "run:confirm:reserve");
+    const confirmationRevision = reserved.record.payload.confirmingOperation.ownerRevision;
     let targetWrite = null;
     try {
+        if (!confirm || !sameConfirmOperation || confirm.payload.status === "failed") {
+            confirm = await putPlannerCompactRecord(env, {
+                recordKey: confirmKey,
+                recordType: "confirm",
+                projectId: run.projectId,
+                characterId: run.characterId,
+                status: "pending",
+                payload: confirmPayload,
+                createdAt: confirm?.createdAt,
+                expiresAt: confirmPayload.expiresAt
+            });
+        }
         targetWrite = await preparePlannerCompactTargetWrite(env, {
             candidate,
             generationSequence,
@@ -2398,7 +2645,8 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
             runKey,
             targetFileName,
             targetFolderPrefix,
-            timestamp: nowIso()
+            timestamp: nowIso(),
+            confirmationRevision
         });
         const cleanup = await cleanupPlannerCompactAssets(env, {
             keys: [...candidateKeys, targetWrite.backupR2Key]
@@ -2452,6 +2700,13 @@ export async function confirmPlannerCompactAsset(env, body = {}) {
         }
         if (rollbackError) throw rollbackError;
         throw error;
+    } finally {
+        await mutateRunWithRetry(env, { runKey }, payload => {
+            if (payload.confirmingOperation?.operationId !== confirmPayload.operationId
+                || payload.confirmingOperation.ownerRevision !== confirmationRevision) return { noWrite: true };
+            payload.confirmingOperation = null;
+            return payload;
+        }, "run:confirm:release");
     }
 }
 
@@ -2474,7 +2729,7 @@ export async function prepareCharacterPathPlannerMigration(env, input = {}) {
     `).bind(projectId, oldCharacterId).all()).results || [];
     const records = rows.map(row => parsePlannerCompactRow(row));
     for (const record of records) {
-        if (record.recordType === 'run' && ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
+        if (record.recordType === 'run' && (hasPlannerCompactWork(record.payload) || record.payload.confirmingOperation)) {
             throw makePlannerMigrationError('PLANNER_RUN_ACTIVE', '플래너 실행 중에는 캐릭터 경로를 변경할 수 없습니다.');
         }
         if (record.recordType === 'confirm' && record.payload.status === 'pending') {
@@ -2577,7 +2832,7 @@ export async function prepareSituationPathPlannerMigration(env, input = {}) {
         const record = parsePlannerCompactRow(row, 'run');
         const hasSituation = asArray(record.payload.items).some(item => item.situationId === situationId);
         if (!hasSituation) continue;
-        if (ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
+        if (hasPlannerCompactWork(record.payload) || record.payload.confirmingOperation) {
             throw makePlannerMigrationError('PLANNER_RUN_ACTIVE', '플래너 실행 중에는 상황 경로를 변경할 수 없습니다.');
         }
         const nextPayload = cloneJson(record.payload);
@@ -2642,7 +2897,7 @@ export async function deletePlannerCompactItemsBySituation(env, input = {}) {
     }
 
     for (const { record } of targetRuns) {
-        if (ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
+        if (hasPlannerCompactWork(record.payload) || record.payload.confirmingOperation) {
             throw plannerError('PLANNER_RUN_ACTIVE', 409, '생성 작업이 남아 있을 때는 전체 플랜을 삭제할 수 없습니다. 작업을 취소한 후 삭제하세요.');
         }
     }
@@ -2760,7 +3015,7 @@ export async function prepareSituationDeletePlannerMigration(env, input = {}) {
     for (const record of records.filter(entry => entry.recordType === 'run')) {
         const targetItems = asArray(record.payload.items).filter(item => item.situationId === situationId);
         if (!targetItems.length) continue;
-        if (ACTIVE_JOB_STATUSES.has(record.payload.activeJob?.status)) {
+        if (hasPlannerCompactWork(record.payload) || record.payload.confirmingOperation) {
             throw makePlannerMigrationError('PLANNER_RUN_ACTIVE', '플래너 실행 중에는 상황을 삭제할 수 없습니다.');
         }
         targetItems.forEach(item => removedItemIds.add(item.itemId));
