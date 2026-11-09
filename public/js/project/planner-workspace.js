@@ -1,5 +1,5 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
-import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261108b';
+import { escapeHtml as h, getActiveProject, getCharacterById, getAssetUrl, getVersionedAssetUrl, getFileNameFromKey, getSituationDisplayName, getProjectItems, loadCharacterFiles } from './shared.js?v=planner-workspace-20261109a';
 
 // Presentation state only. Generation, persistence and confirmation stay in planner.js.
 const ui = { project: '', filter: 'all', query: '', preview: '', compare: false, reference: null, picker: null, library: null, operation: 0 };
@@ -214,7 +214,9 @@ function syncPlannerWorkspaceNavigation() {
     const situationId = window.PLANNER_PLAN_MODAL_SITUATION_ID || window.PLANNER_RESULT_MODAL_SITUATION_ID;
     for (const [action, offset] of [['previous-plan', -1], ['next-plan', 1]]) {
         document.querySelectorAll(`[data-pw-action="${action}"]`).forEach(control => {
-            control.disabled = !getPlannerWorkspaceNeighbor(offset, characterId, situationId);
+            control.disabled = !!window.PROJECT_PLANNER_CONFIRMING
+                || !!control.closest('[data-pw-navigation-blocked="true"]')
+                || !getPlannerWorkspaceNeighbor(offset, characterId, situationId);
         });
     }
 }
@@ -273,7 +275,7 @@ export function renderPlannerWorkspaceReview(item, meta, permissions) {
     const index = images.indexOf(ui.preview);
     const image = ui.preview ? getAssetUrl(ui.preview) : '';
     const reference = ui.reference;
-    return `<div id="planner-result-modal" class="pw-backdrop" data-pw-dialog="review" data-pw-plan-context="${h(meta.characterId)}|${h(item.situationId)}"><section class="pw-dialog pw-review" role="dialog" aria-modal="true" aria-label="후보 검수">
+    return `<div id="planner-result-modal" class="pw-backdrop" data-pw-dialog="review" data-pw-navigation-blocked="${!!permissions.navigationBlocked}" data-pw-plan-context="${h(meta.characterId)}|${h(item.situationId)}"><section class="pw-dialog pw-review" role="dialog" aria-modal="true" aria-label="후보 검수" aria-busy="${!!permissions.busy}">
         <header class="pw-dialog-header"><div><h3>${h(item.situationName || item.situationId)}</h3><p id="planner-result-selected-label" aria-live="polite">후보 ${images.length ? index + 1 : 0} / ${images.length} · 선택 ${item.selectedImage ? images.indexOf(item.selectedImage) + 1 : '없음'}</p></div></header>
         <div class="pw-review-tools">${button('‹ 플랜', 'previous-plan', 'aria-label="이전 플랜"')}${button('플랜 ›', 'next-plan', 'aria-label="다음 플랜"')}${button('프롬프트 수정', 'edit', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${permissions.editBlocked ? 'disabled' : ''}`)}
         ${button(ui.compare ? '후보만 보기' : '나란히 비교', ui.compare ? 'solo' : 'pair')}${button(reference || referenceBindings.has(item.situationId) ? '비교 이미지 변경' : '비교 이미지 선택', 'reference')}
@@ -284,7 +286,8 @@ export function renderPlannerWorkspaceReview(item, meta, permissions) {
         <div class="pw-thumbnails" aria-label="전체 후보 이미지">${images.map((key, i) => `<button type="button" data-pw-action="preview" data-key="${h(key)}" aria-label="후보 ${i + 1} 보기${item.selectedImage === key ? ' · 선택됨' : ''}" aria-pressed="${ui.preview === key}" class="${item.selectedImage === key ? 'pw-picked' : ''}"><img src="${h(getAssetUrl(key))}" alt="" loading="lazy" draggable="false">${item.selectedImage === key ? '<span class="pw-thumbnail-check" aria-hidden="true">✓</span>' : ''}</button>`).join('')}</div></div>
         <footer class="pw-review-footer"><div>${button('‹ 이전', 'previous', index <= 0 ? 'disabled' : '')}${button('다음 ›', 'next', index >= images.length - 1 ? 'disabled' : '')}</div>
         ${permissions.reservation ? `<p class="pw-review-notice" role="status">${h(meta.status === 'paused' ? '재생성 예약이 일시정지되어 있습니다. 실행 화면에서 재개할 수 있습니다.' : '재생성 대기 · 현재 캐릭터의 앞선 작업이 끝나면 실행합니다.')}</p>` : ''}
-        <p class="pw-review-notice" role="status" aria-live="polite">${h(reviewNotices.get(`${meta.characterId}|${item.situationId}`) || '')}</p>
+        <p class="pw-review-notice" role="status" aria-live="polite">${h(permissions.confirmationNotice || reviewNotices.get(`${meta.characterId}|${item.situationId}`) || '')}</p>
+        ${permissions.confirmationRetry ? button(permissions.confirmationRetryLabel, 'retry-confirmation') : ''}
         <div><button type="button" class="pw-button pw-danger pw-delete-plan" data-pw-action="delete-plan" data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${permissions.editBlocked ? 'disabled' : ''}>플랜 삭제</button>${permissions.reservation ? button('재생성 예약 취소', 'cancel-regeneration', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${permissions.cancelReservationBlocked ? 'disabled' : ''}`) : button('다시 생성', 'regenerate', `data-situation="${h(item.situationId)}" data-character="${h(meta.characterId)}" ${permissions.regenerateBlocked ? 'disabled' : ''}`)}${button('이 후보 선택', 'select', !ui.preview || item.selectedImage === ui.preview || permissions.selectBlocked ? 'disabled' : '')}<button id="planner-result-confirm-button" type="button" class="pw-button pw-primary" data-pw-action="confirm" data-situation="${h(item.situationId)}" ${!item.selectedImage || permissions.confirmBlocked ? 'disabled' : ''}>최종 선택 완료</button>${button('닫기', 'close-review')}</div></footer>
     </section></div>`;
 }
@@ -417,7 +420,7 @@ async function dispatch(button) {
     if (action === 'close-auxiliary') return closeAuxiliary();
     if (action === 'accept-action') { const resolve = pendingConfirmation; pendingConfirmation = null; closeAuxiliary(); resolve?.(true); return; }
     if (action === 'close-review') return window.closePlannerResultModal();
-    if (action === 'edit') { window.closePlannerResultModal(); return window.openPlannerSituationPlanModal(button.dataset.situation, button.dataset.character); }
+    if (action === 'edit') return window.openPlannerSituationPlanModal(button.dataset.situation, button.dataset.character);
     if (action === 'preview') return updatePreview(button.dataset.key);
     const thumbs = [...document.querySelectorAll('.pw-thumbnails [data-key]')];
     if (['previous', 'next'].includes(action)) {
@@ -428,6 +431,7 @@ async function dispatch(button) {
     }
     if (action === 'select') { await window.selectPlannerImage(ui.preview); window.renderPlannerResultOverlay(); return; }
     if (action === 'confirm') return window.confirmPlannerSelection(button.dataset.situation, button);
+    if (action === 'retry-confirmation') return window.retryPlannerReviewContinuation();
     if (action === 'delete-plan') return window.deletePlannerItem(button.dataset.situation, button.dataset.character);
     if (action === 'previous-plan' || action === 'next-plan') return window.navigatePlannerWorkspaceItem(action === 'next-plan' ? 1 : -1);
     if (action === 'review-from-editor') { window.closePlannerSituationPlanModal(); return window.openPlannerResultModal(button.dataset.situation, button.dataset.character); }

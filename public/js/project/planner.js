@@ -1,10 +1,10 @@
 import { renderSelectionCard, renderSelectionSearch, renderSelectionDialog, filterSelectionGrid } from '../selection-ui.js?v=selection-ui-20261106c';
-import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice, prunePlannerReviewReferences } from './planner-workspace.js?v=planner-workspace-20261108b';
-import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isVisibleProjectChildFolder, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261108b';
+import { resetPlannerWorkspace, renderPlannerWorkspaceFilters, renderPlannerWorkspaceCard, renderPlannerOption, syncPlannerOptionLabels, renderPlannerWorkspaceReview, enhancePlannerWorkspaceDialogs, capturePlannerEditorDraft, restorePlannerEditorDraft, clearPlannerEditorDraft, releasePlannerWorkspaceDialog, confirmPlannerWorkspaceAction, resetPlannerReviewReferenceContext, getPlannerWorkspaceNeighbor, setPlannerReviewNotice, prunePlannerReviewReferences } from './planner-workspace.js?v=planner-workspace-20261109a';
+import { DEFAULT_PLANNER_RESOLUTION, DEFAULT_PLANNER_SETTINGS, MAX_V4_PROMPT_CHARACTERS, PLANNER_MODEL_OPTIONS, PLANNER_RESOLUTION_OPTIONS, PLANNER_SAMPLER_OPTIONS, PROJECT_SECTIONS, clearFolderDataCaches, createDefaultBackgroundPrompt, escapeHtml, escapeJsString, getActiveProject, getAssetUrl, getCachedPlannerCharacterId, getCharacterById, getFileNameFromKey, getPlannerMetaKey, getPlannerPrefix, getPlannerSettingsKey, getProjectBackgroundPromptData, getProjectItems, getSelectedPlannerCharacterId, getSituationDisplayName, getSituationGeneration, getSituationImageNumber, getSituationRating, getVersionedAssetUrl, isVisibleProjectChildFolder, loadCharacterFiles, loadCharacterMeta, loadProjectBackgroundPrompts, loadProjectCharacters, loadProjectSituations, loadProjectStylePrompt, normalizeCharacterPromptVariants, normalizeLoadOptions, normalizePlannerMeta, normalizePlannerV4PromptRows, normalizeProjectBackgroundPrompts, normalizeSituationPromptVariants, refreshProjectIcons, renderEmptyState, renderProjectShell, saveProjectSituations, setCachedPlannerCharacterId, sortPlannerItems } from './shared.js?v=planner-workspace-20261109a';
 import { getNovelAiModelProfile, normalizeNovelAiModelId } from '../nai-models.js?v=novelai-v5-20260823d';
-import { renderSectionHeader } from './manage.js?v=planner-workspace-20261108b';
-import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261108b';
-import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261108b';
+import { renderSectionHeader } from './manage.js?v=planner-workspace-20261109a';
+import { findSituationImage, renderProjectItemCreateModal } from './character.js?v=planner-workspace-20261109a';
+import { combinePromptParts, getSituationById } from './situation.js?v=planner-workspace-20261109a';
 import { PROMPT_COMPONENTS_METADATA_KEY, buildPromptComponentsMetadata } from '../prompt-metadata.js?v=prompt-components-20261005a';
 import { getPlannerGlobalCompletionIntervalSamples } from './planner-eta.js?v=planner-eta-20261006a';
 
@@ -53,6 +53,26 @@ let plannerBatchPlanDeletionRunning = false;
 let plannerBatchConfirmationPending = false;
 let plannerCostEstimateOperationId = 0;
 let plannerWorkspaceOpenOperation = 0;
+let plannerReviewConfirmation = null;
+
+function isPlannerConfirmationContextCurrent(context) {
+    return !!context && getActiveProject()?.id === context.project?.id
+        && plannerWorkspaceOpenOperation === context.operation
+        && window.PLANNER_RESULT_MODAL_CHARACTER_ID === context.characterId
+        && window.PLANNER_RESULT_MODAL_SITUATION_ID === context.situationId;
+}
+
+function getCurrentPlannerReviewConfirmation() {
+    return isPlannerConfirmationContextCurrent(plannerReviewConfirmation) ? plannerReviewConfirmation : null;
+}
+
+export function closePlannerWorkspaceModals() {
+    // Invalidate pending opens even when they have not mounted a modal yet.
+    plannerWorkspaceOpenOperation++;
+    plannerReviewConfirmation = null;
+    if (window.PLANNER_PLAN_MODAL_SITUATION_ID) closePlannerSituationPlanModal();
+    if (window.PLANNER_RESULT_MODAL_SITUATION_ID) closePlannerResultModal();
+}
 
 function createPlannerTargetPickerState() {
     return {
@@ -694,7 +714,8 @@ function getPlannerResultOperationKey(project, meta, item) {
 
 function getPlannerReviewPermissions(meta, item) {
     const requestPending = plannerResultRegenerating.has(getPlannerResultOperationKey(getActiveProject(), meta, item));
-    const confirming = !!window.PROJECT_PLANNER_CONFIRMING;
+    const continuation = getCurrentPlannerReviewConfirmation();
+    const confirming = !!window.PROJECT_PLANNER_CONFIRMING || !!continuation;
     const itemGenerating = isPlannerItemGenerating(item);
     const canRegenerate = ['complete', 'completed', 'done', 'failed', 'partial_failed'].includes(item.status)
         && Number(item.generationSequence || 0) > 0;
@@ -707,7 +728,12 @@ function getPlannerReviewPermissions(meta, item) {
         confirmBlocked: confirming || requestPending || isPlannerConfirmBlocked(meta, item),
         editBlocked: confirming || !!meta.confirmingOperation || requestPending || isPlannerConfirmBlocked(meta, item),
         cancelReservationBlocked: confirming || requestPending || cancelling,
-        reservation
+        reservation,
+        navigationBlocked: confirming,
+        busy: !!window.PROJECT_PLANNER_CONFIRMING,
+        confirmationNotice: continuation?.notice || '',
+        confirmationRetry: !!continuation?.retry && !window.PROJECT_PLANNER_CONFIRMING,
+        confirmationRetryLabel: continuation?.synchronized ? '이동 재시도' : '동기화 재시도'
     };
 }
 
@@ -1999,6 +2025,8 @@ export function getPlannerItemBySituationId(meta, situationId) {
 }
 
 export function renderPlannerResultModal(meta) {
+    // Confirmation removes the live item. Keep its review until continuation commits.
+    meta = getCurrentPlannerReviewConfirmation()?.meta || meta;
     const item = getPlannerItemBySituationId(meta, window.PLANNER_RESULT_MODAL_SITUATION_ID);
     if (!item) { resetPlannerReviewReferenceContext(); return ''; }
     restorePlannerCandidateSelections(getActiveProject(), meta);
@@ -3307,19 +3335,19 @@ export async function loadPlannerForSelectedCharacter() {
     syncPlannerBackgroundPolling({ immediate: window.PROJECT_PLANNER_VIEW === 'run' });
 }
 
-export async function openPlannerSituationPlanModal(situationId, characterId = '') {
+export async function openPlannerSituationPlanModal(situationId, characterId = '', { operation = ++plannerWorkspaceOpenOperation, meta: loadedMeta } = {}) {
     const project = getActiveProject();
-    const operation = ++plannerWorkspaceOpenOperation;
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
     const character = getCharacterById(project, targetCharacterId);
-    if (!project || !character) return;
+    if (!project || !character) throw new Error('플랜의 캐릭터를 찾을 수 없습니다.');
     const [meta, projectStyle] = await Promise.all([
-        loadPlannerMeta(project, targetCharacterId, { force: true }),
+        loadedMeta === undefined ? loadPlannerMeta(project, targetCharacterId, { force: true }) : loadedMeta,
         loadProjectStylePrompt(project).catch(() => ''),
         loadProjectBackgroundPrompts(project).catch(() => normalizeProjectBackgroundPrompts()),
         loadCharacterMeta(character).catch(() => ({}))
     ]);
-    if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return;
+    if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return { status: 'cancelled' };
+    capturePlannerEditorDraft();
     plannerMultiScopeState.metas.set(targetCharacterId, meta);
     plannerMultiScopeState.errors.delete(targetCharacterId);
     if (meta) setPlannerMetaForCharacter(project, meta);
@@ -3327,6 +3355,9 @@ export async function openPlannerSituationPlanModal(situationId, characterId = '
     window.PLANNER_PLAN_MODAL_CHARACTER_ID = targetCharacterId;
     window.PLANNER_PLAN_MODAL_SITUATION_ID = situationId;
     renderPlannerSituationPlanOverlay();
+    // Commit only after editor data is ready, keeping the review visible while loading.
+    if (window.PLANNER_RESULT_MODAL_SITUATION_ID) closePlannerResultModal();
+    return { status: 'opened', operation: plannerWorkspaceOpenOperation };
 }
 
 export function closePlannerSituationPlanModal(event) {
@@ -3339,24 +3370,30 @@ export function closePlannerSituationPlanModal(event) {
     releasePlannerWorkspaceDialog('editor');
 }
 
-export async function openPlannerResultModal(situationId, characterId = '') {
+export async function openPlannerResultModal(situationId, characterId = '', { operation = ++plannerWorkspaceOpenOperation, meta: loadedMeta } = {}) {
     const project = getActiveProject();
     const targetCharacterId = characterId || getSelectedPlannerCharacterId(project);
+    if (!project || !targetCharacterId) return { status: 'cancelled' };
+    const meta = loadedMeta === undefined
+        ? getPlannerMetaForCharacter(project, targetCharacterId) || await loadPlannerMeta(project, targetCharacterId, { force: true })
+        : loadedMeta;
+    if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return { status: 'cancelled' };
+    if (!getPlannerSituationItem(meta, situationId)) throw new Error('플랜을 찾을 수 없습니다. 새로고침 후 다시 시도하세요.');
+    if (meta) setPlannerMetaForCharacter(project, meta);
+    if (window.PLANNER_PLAN_MODAL_SITUATION_ID) closePlannerSituationPlanModal();
+    plannerReviewConfirmation = null;
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = targetCharacterId;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = situationId;
-    if (project && targetCharacterId && !getPlannerMetaForCharacter(project, targetCharacterId)) {
-        const meta = await loadPlannerMeta(project, targetCharacterId, { force: true }).catch(() => null);
-        if (meta) setPlannerMetaForCharacter(project, meta);
-    }
     renderPlannerResultOverlay();
-    const meta = getPlannerMetaForCharacter(project, targetCharacterId);
     if (window.PROJECT_PLANNER_GENERATION_MODE === 'background' && meta?.backgroundJobId) {
         refreshPlannerBackgroundStatus(meta.backgroundJobId).catch(() => null);
     }
+    return { status: 'opened', operation: plannerWorkspaceOpenOperation };
 }
 
 export function closePlannerResultModal() {
     plannerWorkspaceOpenOperation++;
+    plannerReviewConfirmation = null;
     window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
     window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
     renderPlannerResultOverlay();
@@ -5832,7 +5869,7 @@ async function confirmPlannerCompactItem(character, item, asset, metadata, runKe
     return data;
 }
 
-async function confirmLegacyPlannerItem(project, character, item, metadata) {
+async function confirmLegacyPlannerItem(project, character, item, metadata, runKey) {
     const newKey = `${character.prefix}${item.imageNumber}.webp`;
     const imageRes = await fetch(`${getAssetUrl(item.selectedImage)}?_t=${Date.now()}`, { cache: 'no-store' });
     if (!imageRes.ok) throw new Error(`${item.selectedImage} 이미지를 읽지 못했습니다.`);
@@ -5863,7 +5900,7 @@ async function confirmLegacyPlannerItem(project, character, item, metadata) {
         await window.saveMetadataToDB(character.prefix, `${item.imageNumber}.webp`, metadata);
     }
     if (item.id) {
-        const deleteRes = await fetch(`/api/planner/compact/item/${encodeURIComponent(item.id)}?runKey=${encodeURIComponent(window.PROJECT_PLANNER_META?.runKey || '')}`, {
+        const deleteRes = await fetch(`/api/planner/compact/item/${encodeURIComponent(item.id)}?runKey=${encodeURIComponent(runKey)}`, {
             method: 'DELETE',
             cache: 'no-store'
         });
@@ -5876,7 +5913,7 @@ async function confirmLegacyPlannerItem(project, character, item, metadata) {
     return { targetKey: newKey };
 }
 
-async function confirmSinglePlannerItem(project, character, item) {
+async function confirmSinglePlannerItem(project, character, item, runKey) {
     const selectedAsset = findSelectedPlannerAsset(item);
     const selectedVariantId = selectedAsset?.variantId || '';
     const selectedVariant = selectedVariantId
@@ -5894,12 +5931,12 @@ async function confirmSinglePlannerItem(project, character, item) {
     if (selectedAsset) {
         return {
             mode: 'compact',
-            data: await confirmPlannerCompactItem(character, item, selectedAsset, metadata, getPlannerMetaForCharacter(project, character.id)?.runKey || '')
+            data: await confirmPlannerCompactItem(character, item, selectedAsset, metadata, runKey)
         };
     }
     return {
         mode: 'legacy',
-        data: await confirmLegacyPlannerItem(project, character, item, metadata)
+        data: await confirmLegacyPlannerItem(project, character, item, metadata, runKey)
     };
 }
 
@@ -5907,6 +5944,7 @@ function applyPlannerMetaForCharacter(project, characterId, meta) {
     const cacheKey = getPlannerMetaCacheKey(project, characterId);
     if (meta) writePlannerMetaCache(cacheKey, meta);
     else deletePlannerMetaCache(cacheKey);
+    if (getActiveProject()?.id !== project?.id) return;
     if (getSelectedPlannerCharacterId(project) === characterId) {
         window.PROJECT_PLANNER_META = meta || null;
     }
@@ -5926,11 +5964,12 @@ async function reconcilePlannerAfterConfirm(project, character, characterId) {
         loadCharacterFiles(character, { force: true })
     ]);
     applyPlannerMetaForCharacter(project, characterId, latestMeta);
-    window.PROJECT_PLANNER_QUEUE_METAS = await loadPlannerQueueMetas(
+    const queueMetas = await loadPlannerQueueMetas(
         project,
         getProjectItems(project, 'characters'),
         { force: true }
     );
+    if (getActiveProject()?.id === project.id) window.PROJECT_PLANNER_QUEUE_METAS = queueMetas;
     return latestMeta;
 }
 
@@ -5949,127 +5988,191 @@ async function retryPlannerReconciliation(project, character, characterId, attem
     throw lastError;
 }
 
+async function finishPlannerConfirmation(context) {
+    const { project, character, characterId, results } = context;
+    if (!context.synchronized) {
+        try {
+            const latestMeta = await retryPlannerReconciliation(project, character, characterId);
+            const remainingItemIds = new Set((latestMeta?.items || []).map(item => item.id));
+            results.forEach(result => {
+                if (!result.success && result.item?.id && !remainingItemIds.has(result.item.id)) {
+                    result.success = true;
+                    result.recoveredFromServer = true;
+                    delete result.error;
+                }
+            });
+            context.latestMeta = latestMeta;
+            context.synchronized = true;
+        } finally {
+            // Preserve cleanup for known successes even if reconciliation fails.
+            await cleanupPlannerReviewReferences(project, results.filter(result => result.success).map(result => result.item.situationId));
+        }
+    }
+    const succeeded = results.filter(result => result.success);
+    const failed = results.filter(result => !result.success);
+    if (!succeeded.length) {
+        context.notice = failed[0]?.error?.message || '플랜 확정에 실패했습니다.';
+        if (isPlannerConfirmationContextCurrent(context)) setPlannerReviewNotice(characterId, context.situationId, context.notice);
+        return;
+    }
+    const selectedIds = new Set(succeeded.map(result => result.item.situationId));
+    if (getActiveProject()?.id === project.id && Array.isArray(window.GENERATION_QUEUE) && window.GENERATION_QUEUE.length) {
+        window.GENERATION_QUEUE = window.GENERATION_QUEUE.filter(task => !selectedIds.has(task?.planner?.situationId));
+        if (window.saveQueueToStorage) window.saveQueueToStorage();
+    }
+    context.notice = failed.length
+        ? `${succeeded.length}개 확정, ${failed.length}개 실패: ${failed[0].error?.message || '확정 실패'}`
+        : (context.latestMeta?.items?.length
+            ? `${succeeded.length}개 플랜을 확정했습니다. 선택하지 않은 플랜은 남아 있습니다.`
+            : '선택한 플랜이 모두 확정되었습니다.');
+    const cleanupFailedCount = succeeded.reduce((total, result) => total + Number(result.data?.cleanup?.failedCount || 0), 0);
+    if (cleanupFailedCount > 0) context.notice += ` 임시 후보 ${cleanupFailedCount}개는 R2 정리가 필요합니다.`;
+    if (!isPlannerConfirmationContextCurrent(context)) return;
+    if (context.autoNavigate && context.target) {
+        const opened = await openPlannerWorkspaceItem(context.target.situationId, context.target.characterId, { confirmation: context });
+        if (opened.status === 'opened') context.operation = opened.operation;
+        if (opened.status === 'failed' && isPlannerConfirmationContextCurrent(context)) {
+            context.retry = true;
+            context.notice += ` 다음 화면을 열지 못했습니다: ${opened.message} 이동 재시도로 다시 열 수 있습니다.`;
+        }
+    } else {
+        closePlannerResultModal();
+        context.operation = plannerWorkspaceOpenOperation;
+    }
+}
+
+function handlePlannerConfirmationError(context, error) {
+    const succeededCount = context.results.filter(result => result.success).length;
+    context.notice = succeededCount
+        ? `${succeededCount}개 항목은 확정되었지만 화면 동기화에 실패했습니다: ${error?.message || '동기화 실패'}`
+        : (context.results.length
+            ? `확정 결과를 동기화하지 못했습니다: ${error?.message || '동기화 실패'}`
+            : (error?.message || '플랜 확정에 실패했습니다.'));
+    // A retry only reconciles/opens; it must never submit confirmation again.
+    context.retry = context.autoNavigate && context.results.length > 0 && isPlannerConfirmationContextCurrent(context);
+}
+
+function renderPlannerAfterConfirmation(context) {
+    if (plannerReviewConfirmation === context && !context.retry) plannerReviewConfirmation = null;
+    if (getActiveProject()?.id !== context.project?.id) return;
+    renderPlannerResultOverlay();
+    if (isPlannerPanelVisible()) renderPlannerSectionByState({ scroll: 'preserve', focus: 'preserve' });
+    if (context.notice && context.operation === plannerWorkspaceOpenOperation) setPlannerStatus(context.notice);
+}
+
+export async function retryPlannerReviewContinuation() {
+    const context = getCurrentPlannerReviewConfirmation();
+    if (!context?.retry || window.PROJECT_PLANNER_CONFIRMING) return;
+    window.PROJECT_PLANNER_CONFIRMING = true;
+    context.retry = false;
+    try {
+        renderPlannerResultOverlay();
+        await finishPlannerConfirmation(context);
+    } catch (error) {
+        handlePlannerConfirmationError(context, error);
+    } finally {
+        window.PROJECT_PLANNER_CONFIRMING = false;
+        renderPlannerAfterConfirmation(context);
+    }
+}
+
 export async function confirmPlannerSelection(situationId = null, triggerButton = null) {
-    if (window.PROJECT_PLANNER_CONFIRMING) return;
+    if (window.PROJECT_PLANNER_CONFIRMING || plannerWorkspaceNavigating || getCurrentPlannerReviewConfirmation()) return;
     window.PROJECT_PLANNER_CONFIRMING = true;
     const confirmButton = triggerButton || document.getElementById('planner-result-confirm-button');
     if (confirmButton) confirmButton.disabled = true;
-    const results = [];
     const project = getActiveProject();
-    let finalMessage = '';
-    let shouldCloseResultState = false;
+    const characterId = getPlannerResultModalCharacterId(project);
+    const autoNavigate = !!situationId && situationId === window.PLANNER_RESULT_MODAL_SITUATION_ID;
+    // Capture neighbors before confirmation can remove the current card from the board.
+    const context = {
+        project, characterId, situationId: window.PLANNER_RESULT_MODAL_SITUATION_ID,
+        operation: plannerWorkspaceOpenOperation, autoNavigate,
+        target: autoNavigate ? (getPlannerWorkspaceNeighbor(1, characterId, situationId)
+            ?? getPlannerWorkspaceNeighbor(-1, characterId, situationId)) : null,
+        meta: null, results: [], synchronized: false, retry: false, notice: ''
+    };
+    if (autoNavigate) plannerReviewConfirmation = context;
     try {
-        const targetCharacterId = getPlannerResultModalCharacterId(project);
-        let meta = getPlannerMetaForCharacter(project, targetCharacterId);
-        if (!meta && project && targetCharacterId) {
-            meta = await loadPlannerMeta(project, targetCharacterId, { force: true }).catch(() => null);
+        let meta = getPlannerMetaForCharacter(project, characterId);
+        if (!meta && project && characterId) {
+            meta = await loadPlannerMeta(project, characterId, { force: true }).catch(() => null);
         }
         if (!project || !meta?.items?.length) {
-            finalMessage = '확정할 플래너 데이터가 없습니다.';
+            context.notice = '확정할 플래너 데이터가 없습니다.';
             return;
         }
+        const runKey = meta.runKey || '';
+        if (autoNavigate) {
+            context.meta = clonePlannerMetaValue({ ...meta, items: meta.items.filter(item => item.situationId === situationId) });
+            context.notice = '플랜을 확정하고 있습니다.';
+        }
+        renderPlannerResultOverlay();
         await loadProjectCharacters(project).catch(() => []);
+        if (getActiveProject()?.id !== project.id) return;
         const character = getCharacterById(project, meta.characterId) || getCharacterById(project, meta.characterPrefix);
         if (!character) {
-            finalMessage = '플래너 캐릭터를 찾을 수 없습니다.';
+            context.notice = '플래너 캐릭터를 찾을 수 없습니다.';
             return;
         }
+        context.character = character;
         const selectedItems = meta.items.filter(item =>
             item.selectedImage && (!situationId || item.situationId === situationId)
         );
         if (!selectedItems.length) {
-            finalMessage = '확정 전에 상황별 이미지를 하나 이상 선택하세요.';
+            context.notice = '확정 전에 상황별 이미지를 하나 이상 선택하세요.';
             return;
         }
         if (selectedItems.some(item => isPlannerConfirmBlocked(meta, item))) {
-            finalMessage = '생성 또는 재생성 예약이 남아 있어 확정할 수 없습니다. 모든 작업이 끝난 뒤 확정하세요.';
+            context.notice = '생성 또는 재생성 예약이 남아 있어 확정할 수 없습니다. 모든 작업이 끝난 뒤 확정하세요.';
             return;
         }
         for (const item of selectedItems) {
             try {
-                const result = await confirmSinglePlannerItem(project, character, item);
-                results.push({ success: true, item, ...result });
+                const result = await confirmSinglePlannerItem(project, character, item, runKey);
+                context.results.push({ success: true, item, ...result });
             } catch (error) {
-                results.push({ success: false, item, error });
+                context.results.push({ success: false, item, error });
             }
         }
-        const latestMeta = await retryPlannerReconciliation(project, character, meta.characterId);
-        const remainingItemIds = new Set((latestMeta?.items || []).map(item => item.id));
-        results.forEach(result => {
-            if (!result.success && result.item?.id && !remainingItemIds.has(result.item.id)) {
-                result.success = true;
-                result.recoveredFromServer = true;
-                delete result.error;
-            }
-        });
-        const succeeded = results.filter(result => result.success);
-        const failed = results.filter(result => !result.success);
-        if (succeeded.length) {
-            const cleanupFailedCount = succeeded.reduce(
-                (total, result) => total + Number(result.data?.cleanup?.failedCount || 0),
-                0
-            );
-            const selectedIds = new Set(succeeded.map(result => result.item.situationId));
-            if (Array.isArray(window.GENERATION_QUEUE) && window.GENERATION_QUEUE.length) {
-                window.GENERATION_QUEUE = window.GENERATION_QUEUE.filter(task => !selectedIds.has(task?.planner?.situationId));
-                if (window.saveQueueToStorage) window.saveQueueToStorage();
-            }
-            shouldCloseResultState = true;
-            finalMessage = failed.length
-                ? `${succeeded.length}개 확정, ${failed.length}개 실패: ${failed[0].error?.message || '확정 실패'}`
-                : (latestMeta?.items?.length
-                    ? `${succeeded.length}개 플랜을 확정했습니다. 선택하지 않은 플랜은 남아 있습니다.`
-                    : '선택한 플랜이 모두 확정되었습니다.');
-            if (cleanupFailedCount > 0) {
-                finalMessage += ` 임시 후보 ${cleanupFailedCount}개는 R2 정리가 필요합니다.`;
-            }
-        } else {
-            finalMessage = failed[0]?.error?.message || '플랜 확정에 실패했습니다.';
-        }
+        await finishPlannerConfirmation(context);
     } catch (error) {
-        const succeededCount = results.filter(result => result.success).length;
-        if (succeededCount) shouldCloseResultState = true;
-        finalMessage = succeededCount
-            ? `${succeededCount}개 항목은 확정되었지만 화면 동기화에 실패했습니다: ${error?.message || '동기화 실패'}`
-            : (error?.message || '플랜 확정에 실패했습니다.');
+        handlePlannerConfirmationError(context, error);
     } finally {
-        await cleanupPlannerReviewReferences(project, results.filter(result => result.success).map(result => result.item.situationId));
-        if (shouldCloseResultState) {
-            window.PLANNER_RESULT_MODAL_CHARACTER_ID = null;
-            window.PLANNER_RESULT_MODAL_SITUATION_ID = null;
-        }
         window.PROJECT_PLANNER_CONFIRMING = false;
-        renderPlannerResultOverlay();
-        renderPlannerSectionByState({ scroll: 'preserve', focus: 'reset' });
-        if (finalMessage) setPlannerStatus(finalMessage);
+        renderPlannerAfterConfirmation(context);
     }
 }
 
-export async function openPlannerWorkspaceItem(situationId, characterId = '') {
+export async function openPlannerWorkspaceItem(situationId, characterId = '', { confirmation = null } = {}) {
     const project = getActiveProject();
+    if (confirmation && !isPlannerConfirmationContextCurrent(confirmation)) return { status: 'cancelled' };
     const targetId = characterId || getSelectedPlannerCharacterId(project);
     const operation = ++plannerWorkspaceOpenOperation;
+    if (confirmation) confirmation.operation = operation;
     try {
+        if (!project || !getCharacterById(project, targetId) || !getSituationById(project, situationId)) {
+            throw new Error('이동할 플랜의 캐릭터 또는 상황을 찾을 수 없습니다.');
+        }
         const meta = await loadPlannerMeta(project, targetId, { force: true });
-        if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return;
+        if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return { status: 'cancelled' };
         if (meta) setPlannerMetaForCharacter(project, meta);
         const item = getPlannerSituationItem(meta, situationId);
         if (item?.images?.length) {
-            if (window.PLANNER_PLAN_MODAL_SITUATION_ID) closePlannerSituationPlanModal();
-            await openPlannerResultModal(situationId, targetId);
-        } else {
-            if (window.PLANNER_RESULT_MODAL_SITUATION_ID) closePlannerResultModal();
-            capturePlannerEditorDraft();
-            await openPlannerSituationPlanModal(situationId, targetId);
+            return await openPlannerResultModal(situationId, targetId, { operation, meta });
         }
+        return await openPlannerSituationPlanModal(situationId, targetId, { operation, meta });
     } catch (error) {
-        setPlannerStatus(error.message || '플랜을 불러오지 못했습니다. 다시 시도하세요.');
+        if (operation !== plannerWorkspaceOpenOperation || getActiveProject()?.id !== project?.id) return { status: 'cancelled' };
+        const message = error.message || '플랜을 불러오지 못했습니다. 다시 시도하세요.';
+        setPlannerStatus(message);
+        return { status: 'failed', message };
     }
 }
 
 let plannerWorkspaceNavigating = false;
 export async function navigatePlannerWorkspaceItem(offset) {
-    if (plannerWorkspaceNavigating) return;
+    if (plannerWorkspaceNavigating || window.PROJECT_PLANNER_CONFIRMING || getCurrentPlannerReviewConfirmation()) return;
     const project = getActiveProject();
     const characterId = window.PLANNER_PLAN_MODAL_CHARACTER_ID || getPlannerResultModalCharacterId(project);
     const situationId = window.PLANNER_PLAN_MODAL_SITUATION_ID || window.PLANNER_RESULT_MODAL_SITUATION_ID;

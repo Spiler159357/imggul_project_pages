@@ -25,6 +25,24 @@ assert(!cardRenderer.includes('images[0]'), 'Unselected candidates must not beco
 assert(!cardRenderer.includes('getVersionedAssetUrl(src)'), 'Candidate key strings must not use the file-object URL API');
 assert(!planner.includes("modeButton('result'"), 'Separate results tab must be retired');
 assert(planner.includes("item?.images?.length"), 'Entry routing must inspect generated candidates');
+const confirmation = planner.slice(planner.indexOf('export async function confirmPlannerSelection('), planner.indexOf('export async function openPlannerWorkspaceItem('));
+const neighborCapture = confirmation.indexOf('getPlannerWorkspaceNeighbor(1, characterId, situationId)');
+assert(neighborCapture >= 0 && neighborCapture < confirmation.indexOf('await loadPlannerMeta('), 'Confirmation must capture board navigation before asynchronous reads can remove its card');
+assert(confirmation.includes('?? getPlannerWorkspaceNeighbor(-1, characterId, situationId)'), 'Automatic continuation must prefer next and fall back to previous using the existing board order');
+const continuationRetry = planner.slice(planner.indexOf('export async function retryPlannerReviewContinuation('), planner.indexOf('export async function confirmPlannerSelection('));
+assert(continuationRetry.includes('await finishPlannerConfirmation(context)') && !/confirmSinglePlannerItem|confirmPlannerSelection|fetch\(/.test(continuationRetry), 'Continuation retry must reconcile/open without submitting another confirmation');
+assert(planner.includes('meta = getCurrentPlannerReviewConfirmation()?.meta || meta;'), 'The confirmed review must survive live item removal until its next screen is ready');
+const editorOpening = planner.slice(planner.indexOf('export async function openPlannerSituationPlanModal('), planner.indexOf('export function closePlannerSituationPlanModal('));
+assert(editorOpening.indexOf('await Promise.all(') < editorOpening.indexOf('closePlannerResultModal()'), 'Review-to-editor transition must prepare editor data before closing the review');
+const contextGuard = planner.slice(planner.indexOf('function isPlannerConfirmationContextCurrent('), planner.indexOf('function getCurrentPlannerReviewConfirmation('));
+assert(contextGuard.includes('context.project?.id') && contextGuard.includes('plannerWorkspaceOpenOperation === context.operation') && contextGuard.includes('context.characterId') && contextGuard.includes('context.situationId'), 'Late confirmation results must remain scoped to the original project, operation and review');
+for (const entry of ['renderProjectManage', 'openProjectDetail', 'openProjectSection']) {
+    const route = read('public/js/project/manage.js');
+    const routeStart = route.indexOf(`export async function ${entry}(`);
+    const routeBody = route.slice(routeStart, route.indexOf('\n}', routeStart));
+    assert(routeBody.includes('closePlannerWorkspaceModals();'), `Project route ${entry} must cancel pending planner opens`);
+}
+assert(workspace.includes("window.retryPlannerReviewContinuation()") && workspace.includes('[data-pw-navigation-blocked="true"]'), 'Pending continuation must expose a retry and keep plan navigation blocked');
 assert(planner.includes('renderPlannerSituationPlanOverlay();\n    const savedStatus'), 'Save must keep the editor open');
 assert(workspace.includes("['all', '전체'], ['missing', '미작성'], ['review', '검토']"));
 const createdEntries = planner.slice(planner.indexOf('function getPlannerCreatedPlanEntries('), planner.indexOf('function renderPlannerCreatedPlanGrid('));
@@ -67,7 +85,7 @@ assert(workspace.includes("document.addEventListener('click'"));
 assert(workspace.includes('}, true);'), 'Option actions must survive legacy modal stopPropagation handlers');
 assert(css.includes('.pw-refresh{margin-left:auto'), 'Refresh must remain right aligned');
 assert(css.includes('.pw-thumbnails') && css.includes('overflow:auto'), 'Candidates need a bounded scroll area');
-assert(app.includes('/planner-workspace.css?v=planner-workspace-20261108b'));
+assert(app.includes('/planner-workspace.css?v=planner-workspace-20261109a'));
 
 // Catch misspelled module boundaries without evaluating browser modules.
 for (const file of ['public/js/project/planner.js', 'public/js/project/planner-workspace.js']) {
@@ -85,7 +103,7 @@ for (const file of ['public/js/project/planner.js', 'public/js/project/planner-w
 for (const file of ['public/js/project.js', ...['character', 'craft_bridge', 'manage', 'planner', 'posts', 'situation', 'planner-workspace'].map(name => `public/js/project/${name}.js`)]) {
     const source = read(file);
     for (const match of source.matchAll(/(?:\.\/project\/|\.\/)(?:shared|manage|character|planner|situation|craft_bridge|posts|planner-workspace)\.js\?v=([^'"\s]+)/g)) {
-        assert.equal(match[1], 'planner-workspace-20261108b', `Mixed project module version in ${file}`);
+        assert.equal(match[1], 'planner-workspace-20261109a', `Mixed project module version in ${file}`);
     }
 }
 for (const file of ['public/app.html', 'public/js/main.js', 'public/js/project.js', 'public/js/project/planner.js', 'public/js/project/planner-workspace.js', 'public/planner-workspace.css']) {
