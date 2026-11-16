@@ -6,8 +6,8 @@ import * as Explorer from './explorer.js?v=file-path-change-20261005a';
 import * as Craft from './craft.js?v=generation-feedback-20261105b';
 import * as TempGallery from './temp_gallery.js?v=selection-ui-20261106c';
 import * as Modals from './modals.js?v=selection-ui-20261106c';
-import * as Project from './project.js?v=editor-theme-20261117a';
-import * as ImageEditor from './editor/index.js?v=editor-theme-20261117a';
+import * as Project from './project.js?v=editor-color-20261117a';
+import * as ImageEditor from './editor/index.js?v=editor-color-20261117a';
 import { initNaiPromptWeightPreviews } from './prompt_weight.js?v=prompt-tab-20261005a';
 
 // 모든 모듈의 Export 함수들을 window 객체에 바인딩하여 HTML 인라인 속성(onclick 등) 유지

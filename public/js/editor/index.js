@@ -1,4 +1,4 @@
-import { mountEditor } from "./workspace.js?v=editor-theme-20261117a";
+import { mountEditor } from "./workspace.js?v=editor-color-20261117a";
 function renderEditorWorkspace(options = {}) {
   const root = document.getElementById(options.rootId || "project-image-editor-content");
   if (!root) return;

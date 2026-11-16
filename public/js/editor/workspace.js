@@ -5,9 +5,14 @@ import { InpaintSession, MODELS, estimate } from "./ai.js";
 import { PRESETS, BLENDS, uid, clone, newLayer, worldMatrix, inverse, multiply, point, identity, clamp, validateDocument } from "./model.js";
 import { canvas, copy, blobOf, histogram, parseCube, colorSelection, invertMask, maskCombine, blur, maskMorph, decontaminate, traceBezier } from "./bitmap.js";
 import { segmentSubject } from "./subject.js";
+import { colorControl, EditorColorPicker } from "./color-picker.js";
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const button = (action, label, extra = "") => `<button type="button" data-action="${action}" ${extra}>${label}</button>`;
-const field = (path, label, value, type = "number", extra = "") => `<label>${label}<input data-field="${path}" type="${type}" ${type === "checkbox" ? value ? "checked" : "" : `value="${escape(value)}"`} ${extra}></label>`;
+const field = (path, label, value, type = "number", extra = "") => {
+  const input = `<input data-field="${path}" type="${type}" ${type === "checkbox" ? value ? "checked" : "" : `value="${escape(value)}"`} ${extra}>`;
+  const fill = path === "option.fill" || path === "layer.data.fill";
+  return `<label>${label}${type === "color" || fill ? colorControl(input, value, label, fill) : input}</label>`;
+};
 const select = (path, label, value, items) => `<label>${label}<select data-field="${path}">${items.map((item) => {
   const [v, text] = Array.isArray(item) ? item : [item, item];
   return `<option value="${escape(v)}" ${String(v) === String(value) ? "selected" : ""}>${escape(text)}</option>`;
@@ -71,7 +76,7 @@ class EditorWorkspace {
             <details><summary>보정/필터</summary><div>${EFFECTS.map(([id, name]) => button("effect", name, `data-effect="${id}"`)).join("")}${button("histogram", "히스토그램")}</div></details>
             <details><summary>보기</summary><div>${button("fit", "화면 맞춤")}${button("actual", "100%")}${button("compare", "원본 비교")}${button("split", "분할 비교")}${button("grid", "픽셀 격자")}${button("guides", "중앙 가이드")}${button("panel", "패널 접기")}${button("preset-save", "프리셋 저장")}${button("preset-load", "프리셋 적용")}${button("batch-preset", "열린 작업 보정 적용")}</div></details>
             </nav><span class="ed-header-spacer"></span>${button("save", "작업 저장", 'class="ed-primary"')}${button("export", "내보내기")}${button("panel", "패널")}${button("commands", "⌕")}</header>
-            <div class="ed-options" aria-label="도구 옵션"></div><div class="ed-tabs" role="tablist"></div><div class="ed-body"><aside class="ed-tools" aria-label="편집 도구">${TOOLS.map(([name, items], i) => `<details ${i === 0 || i === 1 || i === 3 ? "open" : ""}><summary>${name}</summary>${items.map(([id, label]) => `<button type="button" data-tool="${id}" title="${label}" aria-label="${label}">${label}</button>`).join("")}</details>`).join("")}<input type="color" class="ed-foreground" aria-label="전경색" value="${this.options.color}"></aside>
+            <div class="ed-options" aria-label="도구 옵션"></div><div class="ed-tabs" role="tablist"></div><div class="ed-body"><aside class="ed-tools" aria-label="편집 도구">${TOOLS.map(([name, items], i) => `<details ${i === 0 || i === 1 || i === 3 ? "open" : ""}><summary>${name}</summary>${items.map(([id, label]) => `<button type="button" data-tool="${id}" title="${label}" aria-label="${label}">${label}</button>`).join("")}</details>`).join("")}${colorControl(`<input type="color" class="ed-foreground" aria-label="전경색" value="${this.options.color}">`, this.options.color, "전경색")}</aside>
             <div class="ed-stage" tabindex="0" aria-label="편집 캔버스"><canvas class="ed-image"></canvas><canvas class="ed-overlay"></canvas><div class="ed-start"><h2>AI 이미지 편집</h2><p>이미지를 선택하고, 원하는 부분을 정밀하게 다듬으세요.</p><div>${button("open", "프로젝트 이미지 열기")}${button("local", "파일 열기")}${button("recent", "작업 이어 열기")}</div><p>지원 규격 · 1216×832 · 1024×1024 · 832×1216</p><div>${Object.keys(PRESETS).map((p) => button("preset-new", `${{ landscape: "가로", square: "정사각", portrait: "세로" }[p]} ${PRESETS[p].join("×")}`, `data-preset="${p}"`)).join("")}</div></div></div>
             <aside class="ed-inspector"><div class="ed-width-resizer" role="separator" aria-label="패널 너비 조절"></div><div class="ed-panel-tabs">${button("props-tab", "속성")}${button("ai-tab", "AI 편집")}${button("panel", "접기")}</div><div class="ed-properties"></div><div class="ed-ai" hidden></div><div class="ed-resizer" role="separator" aria-label="패널 높이 조절"></div><div class="ed-layer-tabs">${button("layers-tab", "레이어")}${button("history-tab", "기록")}<canvas class="ed-navigator" width="96" height="64" title="클릭해 화면 이동"></canvas></div><div class="ed-layer-controls">${select("layer.blend", "혼합", "source-over", BLENDS.map((value) => [value, BLEND_LABELS[value]]))}${field("layer.opacity", "불투명도", 1, "number", 'min="0" max="1" step="0.05"')}</div><div class="ed-layers"></div><div class="ed-history" hidden></div><div class="ed-layer-actions">${button("paint", "＋")}${button("duplicate", "복제")}${button("mask", "마스크")}${button("group", "그룹")}${button("delete", "삭제")}</div></aside></div>
             <footer class="ed-status">${button("fit", "맞춤")}${button("actual", "100%")}<span class="ed-document-info"></span><span class="ed-target"></span>${button("compare", "원본 비교")}<span class="ed-save-status" role="status" aria-live="polite"></span></footer></section>`;
@@ -86,6 +91,7 @@ class EditorWorkspace {
       this.draw();
     });
     this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    this.colorPicker = new EditorColorPicker(this);
     const signal = this.abort.signal;
     root.addEventListener("click", (event) => this.click(event), { signal });
     root.addEventListener("input", (event) => this.input(event), { signal });
@@ -194,7 +200,7 @@ class EditorWorkspace {
   }
   update() {
     if (this.destroyed) return;
-    const e = this.engine, focused = e.isEditing || this.root.contains(document.activeElement) && document.activeElement.matches("input,textarea,select");
+    const e = this.engine, focused = e.isEditing || this.colorPicker.isOpen || this.root.contains(document.activeElement) && document.activeElement.matches("input,textarea,select");
     this.root.querySelector(".ed-start").hidden = e.doc.layers.length > 0 || !!this.entry.started;
     this.root.querySelector(".ed-document-info").textContent = `${Math.round(this.viewport.zoom * 100)}% · ${e.doc.width}×${e.doc.height} · ${e.dirty ? "수정됨" : "저장됨"}`;
     this.root.querySelector(".ed-target").textContent = `대상: ${e.target === "mask" ? "마스크" : e.target === "vector" ? "벡터 마스크" : "픽셀"} · ${e.layer()?.name || "선택 없음"}`;
@@ -213,6 +219,7 @@ class EditorWorkspace {
     this.root.querySelector(".ed-tabs").innerHTML = this.session.entries.map((entry, i) => `<button role="tab" aria-selected="${entry === this.entry}" data-entry="${i}">${escape(entry.engine.doc.title)}${entry.engine.dirty ? " •" : ""}${entry.ai.running ? " ◌" : ""}</button>`).join("");
   }
   updateOptions() {
+    if (this.colorPicker.isOpen) return;
     const active = this.root.querySelector(".ed-options");
     if (active.contains(document.activeElement)) return;
     const o = this.options;
@@ -227,6 +234,8 @@ class EditorWorkspace {
     else if (this.tool === "text") keys = ["color"];
     else if (["move", "transform", "warp"].includes(this.tool)) keys = ["snap"];
     active.querySelectorAll("[data-field]").forEach((input) => input.closest("label").hidden = !keys.includes(input.dataset.field.slice(7)));
+    this.root.querySelector(".ed-foreground").value = o.color;
+    this.colorPicker.refresh();
   }
   renderProperties() {
     this.curvePainters = [];
@@ -1684,7 +1693,7 @@ class EditorWorkspace {
   }
   exportDialog() {
     const name = (this.engine.doc.title || "edited").replace(/\.[^.]+$/, "") + "_edited";
-    this.dialog("내보내기", `<form><label>형식<select name="format"><option value="webp">WebP</option><option value="png">PNG · 투명</option><option value="jpeg">JPEG · 배경색</option></select></label><label>품질<input name="quality" type="number" min="0.1" max="1" step="0.01" value="0.92"></label><label>JPEG 배경<input name="background" type="color" value="#ffffff"></label><label>파일명<input name="name" value="${escape(name)}" required></label><label>저장<select name="destination"><option value="download">다운로드</option><option value="project">프로젝트 이미지</option></select></label><label>폴더<input name="folder" value="${escape(this.session.prefix)}" readonly></label><button type="button" data-folder>폴더 선택</button><label><input name="batch" type="checkbox">열린 모든 작업 출력</label><p>현재 작업 규격으로 출력합니다. 각 작업의 편집 상태는 유지됩니다.</p><button>출력</button></form>`, (d) => {
+    this.dialog("내보내기", `<form><label>형식<select name="format"><option value="webp">WebP</option><option value="png">PNG · 투명</option><option value="jpeg">JPEG · 배경색</option></select></label><label>품질<input name="quality" type="number" min="0.1" max="1" step="0.01" value="0.92"></label><label>JPEG 배경${colorControl('<input name="background" type="color" value="#ffffff">', "#ffffff", "JPEG 배경")}</label><label>파일명<input name="name" value="${escape(name)}" required></label><label>저장<select name="destination"><option value="download">다운로드</option><option value="project">프로젝트 이미지</option></select></label><label>폴더<input name="folder" value="${escape(this.session.prefix)}" readonly></label><button type="button" data-folder>폴더 선택</button><label><input name="batch" type="checkbox">열린 모든 작업 출력</label><p>현재 작업 규격으로 출력합니다. 각 작업의 편집 상태는 유지됩니다.</p><button>출력</button></form>`, (d) => {
       d.querySelector("[data-folder]").onclick = () => void this.folderPicker((folder) => d.querySelector('[name="folder"]').value = folder);
       d.querySelector("form").onsubmit = (event) => {
         event.preventDefault();
