@@ -30,4 +30,13 @@ for(const relative of ['public/js/main.js','public/js/project/manage.js','functi
 for(const relative of ['src/image-serving.js','src/guest-api.js','src/path-utils.js']){
     if(!fs.readFileSync(path.join(root,relative),'utf8').includes("'__editor'"))throw new Error(`Internal editor path not protected: ${relative}`);
 }
-console.log(`Editor static checks passed: ${scripts.length} JavaScript files, three import bundles, CSS syntax, UTF-8 encoding, retired imports and internal asset paths.`);
+const runtimeDdl=/\b(?:CREATE|ALTER|DROP)\s+(?:UNIQUE\s+)?(?:TABLE|INDEX|VIEW|TRIGGER)\b|\b(?:ATTACH|DETACH|VACUUM|PRAGMA)\b/i;
+const editorApi=fs.readFileSync(path.join(root,'src/editor/api.js'),'utf8');
+if(runtimeDdl.test(editorApi)||/\bensureJsonDbSchema\s*\(/.test(editorApi))throw new Error('Editor request handler contains runtime schema changes.');
+const router=fs.readFileSync(path.join(root,'functions/[[path]].js'),'utf8');
+for(const name of ['readFileMetadata','putFileMetadataForKey']){
+    const helper=router.match(new RegExp(`async function ${name}\\([^]*?\\n\\}`))?.[0];
+    if(!helper)throw new Error(`Editor metadata helper not found: ${name}`);
+    if(runtimeDdl.test(helper)||/\bensureJsonDbSchema\s*\(/.test(helper))throw new Error(`Editor metadata helper performs runtime schema changes: ${name}`);
+}
+console.log(`Editor static checks passed: ${scripts.length} JavaScript files, three import bundles, CSS syntax, UTF-8 encoding, retired imports, internal asset paths and no runtime DDL in editor handlers.`);

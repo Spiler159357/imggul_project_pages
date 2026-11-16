@@ -96,13 +96,24 @@ function outputSize(bytes, format) {
   }
   fail("이미지 형식 또는 크기를 확인하지 못했습니다.");
 }
-async function schema(env) {
-  await env.DB.batch([
-    env.DB.prepare("CREATE TABLE IF NOT EXISTS editor_workspace_documents (id TEXT PRIMARY KEY, project_id TEXT NOT NULL, title TEXT NOT NULL, revision TEXT NOT NULL, updated_at TEXT NOT NULL, deleted INTEGER NOT NULL DEFAULT 0)"),
-    env.DB.prepare("CREATE INDEX IF NOT EXISTS editor_workspace_project ON editor_workspace_documents(project_id, deleted, updated_at)"),
-    env.DB.prepare("CREATE TABLE IF NOT EXISTS editor_workspace_revisions (id TEXT PRIMARY KEY, document_id TEXT NOT NULL, manifest_key TEXT NOT NULL, state TEXT NOT NULL, created_at TEXT NOT NULL)"),
-    env.DB.prepare("CREATE INDEX IF NOT EXISTS editor_workspace_revision_doc ON editor_workspace_revisions(document_id, created_at)")
-  ]);
+async function assertEditorSchemaReady(env) {
+  if (!env.DB) {
+    throw Object.assign(new Error("편집기 DB 연결이 준비되지 않았습니다."), { status: 503, code: "EDITOR_DB_UNAVAILABLE" });
+  }
+  // Read-only validation. Schema changes belong exclusively to operator-run migrations.
+  try {
+    await env.DB.batch([
+      env.DB.prepare("SELECT id,project_id,title,revision,updated_at,deleted FROM editor_workspace_documents LIMIT 0"),
+      env.DB.prepare("SELECT id,document_id,manifest_key,state,created_at FROM editor_workspace_revisions LIMIT 0"),
+      env.DB.prepare("SELECT folder_prefix,file_name,metadata_json,created_at,updated_at FROM file_metadata LIMIT 0")
+    ]);
+  } catch (error) {
+    const detail = [error.message, error.cause?.message].filter(Boolean).join(" ");
+    if (/no such (?:table|column)\b/i.test(detail)) {
+      throw Object.assign(new Error("편집기 DB 스키마가 준비되지 않았습니다. 관리자가 사전 마이그레이션을 적용해야 합니다."), { status: 503, code: "EDITOR_SCHEMA_REQUIRED" });
+    }
+    throw error;
+  }
 }
 async function reconcile(env, documentId, head) {
   if (!head) return;
@@ -196,7 +207,7 @@ async function handleEditorApi(request, env, isAdmin, services = {}) {
       if (!image) return json({ error: "미리보기가 없습니다." }, 404);
       return new Response(image.body, { headers: { "Content-Type": "image/png", "Cache-Control": "private, no-store" } });
     }
-    await schema(env);
+    await assertEditorSchemaReady(env);
     if (path === "/documents" && method === "GET") {
       const projectId = String(url.searchParams.get("projectId") || "");
       const result = await env.DB.prepare("SELECT id,title,revision,updated_at FROM editor_workspace_documents WHERE project_id=? AND deleted=0 ORDER BY updated_at DESC LIMIT 100").bind(projectId).all();
@@ -314,7 +325,8 @@ async function handleEditorApi(request, env, isAdmin, services = {}) {
     }
     return json({ error: "지원하지 않는 요청입니다." }, 405);
   } catch (error) {
-    return json({ error: error.message || "작업 처리 실패" }, error.status || 500);
+    const code = ["EDITOR_SCHEMA_REQUIRED", "EDITOR_DB_UNAVAILABLE"].includes(error.code) ? error.code : null;
+    return json({ error: error.message || "작업 처리 실패", ...(code ? { code } : {}) }, error.status || 500);
   }
 }
 export {

@@ -2040,7 +2040,6 @@ async function moveAliasPrefix(env, oldPrefix, newPrefix) {
 }
 
 async function readFileMetadata(env, key = '') {
-    await ensureJsonDbSchema(env);
     const { prefix, fileName } = splitPath(key);
     const names = [fileName];
     const baseName = fileName.replace(/\.[^/.]+$/, '');
@@ -2056,7 +2055,6 @@ async function readFileMetadata(env, key = '') {
 }
 
 async function putFileMetadataForKey(env, key = '', metadata = {}) {
-    await ensureJsonDbSchema(env);
     const { prefix, fileName } = splitPath(key);
     const timestamp = nowIso();
     await env.DB.prepare(`
