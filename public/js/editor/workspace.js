@@ -78,6 +78,14 @@ class EditorWorkspace {
     this.stage = root.querySelector(".ed-stage");
     this.image = root.querySelector(".ed-image");
     this.overlay = root.querySelector(".ed-overlay");
+    this.palette = this.readThemeColors();
+    this.themeObserver = new MutationObserver(() => {
+      if (this.destroyed || !this.root.isConnected) return;
+      this.palette = this.readThemeColors();
+      for (const paint of this.curvePainters || []) paint();
+      this.draw();
+    });
+    this.themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
     const signal = this.abort.signal;
     root.addEventListener("click", (event) => this.click(event), { signal });
     root.addEventListener("input", (event) => this.input(event), { signal });
@@ -136,6 +144,22 @@ class EditorWorkspace {
   }
   get engine() {
     return this.entry.engine;
+  }
+  readThemeColors() {
+    const style = getComputedStyle(this.root.querySelector(".ed-workspace"));
+    const token = (name, fallback) => style.getPropertyValue(name).trim() || fallback;
+    return {
+      background: token("--ed-bg", "#0a0a0a"),
+      border: token("--ed-border", "#404040"),
+      accent: token("--ed-accent", "#818cf8"),
+      heading: token("--ed-heading", "#ffffff"),
+      checkerBase: token("--ed-checker-base", "#262626"),
+      checkerAlt: token("--ed-checker-alt", "#404040"),
+      selection: token("--ed-selection-tint", "rgba(129,140,248,.22)"),
+      handle: token("--ed-handle", "#e5e7eb"),
+      cursor: token("--ed-cursor", "#f5f5f5"),
+      guide: token("--ed-guide", "#a5b4fc")
+    };
   }
   useEntry(entry) {
     if (this.destroyed) return;
@@ -205,6 +229,7 @@ class EditorWorkspace {
     active.querySelectorAll("[data-field]").forEach((input) => input.closest("label").hidden = !keys.includes(input.dataset.field.slice(7)));
   }
   renderProperties() {
+    this.curvePainters = [];
     const e = this.engine, l = e.layer(), target = this.root.querySelector(".ed-properties");
     if (!l) {
       target.innerHTML = `<h3>작업 속성</h3><p>레이어를 선택하면 속성을 편집할 수 있습니다.</p>${select("document.preset", "규격", e.doc.preset, Object.keys(PRESETS).map((k) => [k, PRESETS[k].join("×")]))}${button("crop", "구도 조절")}${button("histogram", "히스토그램")}${button("preset-save", "프리셋 저장")}`;
@@ -260,9 +285,9 @@ class EditorWorkspace {
       const paint = () => {
         const ctx = c.getContext("2d");
         ctx.clearRect(0, 0, 256, 160);
-        ctx.fillStyle = "#17212e";
+        ctx.fillStyle = this.palette.background;
         ctx.fillRect(0, 0, 256, 160);
-        ctx.strokeStyle = "#3b4b63";
+        ctx.strokeStyle = this.palette.border;
         ctx.beginPath();
         for (let k = 1; k < 4; k++) {
           ctx.moveTo(k * 64, 0);
@@ -271,11 +296,11 @@ class EditorWorkspace {
           ctx.lineTo(256, k * 40);
         }
         ctx.stroke();
-        ctx.strokeStyle = "#9ac9ff";
+        ctx.strokeStyle = this.palette.accent;
         ctx.beginPath();
         for (const p of points().slice().sort((a, b) => a[0] - b[0])) ctx.lineTo(p[0], 160 - p[1] / 255 * 160);
         ctx.stroke();
-        ctx.fillStyle = "#d6e9ff";
+        ctx.fillStyle = this.palette.heading;
         for (const p of points()) {
           ctx.beginPath();
           ctx.arc(p[0], 160 - p[1] / 255 * 160, 4, 0, Math.PI * 2);
@@ -334,6 +359,7 @@ class EditorWorkspace {
         list.splice(best, 1);
         e.transaction("커브 점 삭제", () => e.doc.layers.find((l) => l.id === layerId).effects[index].params.points = list);
       };
+      this.curvePainters.push(paint);
       paint();
     });
   }
@@ -880,10 +906,10 @@ class EditorWorkspace {
     ctx.scale(ratio, ratio);
     ctx.translate(v.x, v.y);
     ctx.scale(v.zoom, v.zoom);
-    ctx.fillStyle = "#3a3e46";
+    ctx.fillStyle = this.palette.checkerBase;
     ctx.fillRect(0, 0, e.doc.width, e.doc.height);
     const tile = 16;
-    ctx.fillStyle = "#454a54";
+    ctx.fillStyle = this.palette.checkerAlt;
     for (let y = 0; y < e.doc.height; y += tile) for (let x = 0; x < e.doc.width; x += tile) if ((x / tile + y / tile) % 2 === 0) ctx.fillRect(x, y, tile, tile);
     const rendered = e.renderer.render(e.doc, { original: this.compare });
     ctx.drawImage(rendered, 0, 0);
@@ -910,12 +936,12 @@ class EditorWorkspace {
     oc.translate(v.x, v.y);
     oc.scale(v.zoom, v.zoom);
     oc.lineWidth = 1.5 / v.zoom;
-    oc.strokeStyle = "#82c9ff";
+    oc.strokeStyle = this.palette.accent;
     oc.setLineDash([5 / v.zoom, 4 / v.zoom]);
     if (e.selection) {
       const tint = copy(e.selection), tc = tint.getContext("2d");
       tc.globalCompositeOperation = "source-in";
-      tc.fillStyle = "rgba(61,162,255,.22)";
+      tc.fillStyle = this.palette.selection;
       tc.fillRect(0, 0, tint.width, tint.height);
       oc.drawImage(tint, 0, 0);
     }
@@ -942,7 +968,7 @@ class EditorWorkspace {
           }
         }
         for (const h of this.handles) {
-          oc.fillStyle = "#e7f5ff";
+          oc.fillStyle = this.palette.handle;
           oc.fillRect(h.x - 4 / v.zoom, h.y - 4 / v.zoom, 8 / v.zoom, 8 / v.zoom);
         }
       }
@@ -989,13 +1015,13 @@ class EditorWorkspace {
     if (this.cursor && ["brush", "eraser", "clone", "heal", "dodge", "burn", "smudge", "blur-brush", "sharpen-brush", "liquify"].includes(this.tool)) {
       oc.setLineDash([]);
       oc.lineWidth = 1 / v.zoom;
-      oc.strokeStyle = "#edf5ff";
+      oc.strokeStyle = this.palette.cursor;
       oc.beginPath();
       oc.arc(this.cursor.x, this.cursor.y, this.options.size / 2, 0, Math.PI * 2);
       oc.stroke();
     }
     if (this.snapLines) {
-      oc.strokeStyle = "#ee9dff";
+      oc.strokeStyle = this.palette.guide;
       oc.setLineDash([3 / v.zoom, 3 / v.zoom]);
       oc.beginPath();
       if (this.snapLines.x != null) {
@@ -1329,7 +1355,7 @@ class EditorWorkspace {
   }
   histogramDialog() {
     const bins = histogram(this.engine.renderer.render(this.engine.doc)), max = Math.max(...bins, 1);
-    this.dialog("밝기 히스토그램", `<svg viewBox="0 0 256 120" aria-label="밝기 분포"><polyline fill="none" stroke="#85c9ff" points="${Array.from(bins, (v, i) => `${i},${120 - v / max * 115}`).join(" ")}"/></svg>`);
+    this.dialog("밝기 히스토그램", `<svg viewBox="0 0 256 120" aria-label="밝기 분포"><polyline class="ed-histogram-line" fill="none" points="${Array.from(bins, (v, i) => `${i},${120 - v / max * 115}`).join(" ")}"/></svg>`);
   }
   async loadLut() {
     const input = document.createElement("input");
@@ -1769,6 +1795,8 @@ class EditorWorkspace {
     this.controller?.destroy();
     this.resizeObserver.disconnect();
     this.detachObserver.disconnect();
+    this.themeObserver.disconnect();
+    this.curvePainters = [];
     this.engine.removeEventListener("change", this.onEngineChange);
     if (this.raf) cancelAnimationFrame(this.raf);
     for (const entry of this.session.entries) if (entry.engine.dirty && (entry.started || entry.engine.doc.layers.length)) void entry.persistence.save().catch(() => {
