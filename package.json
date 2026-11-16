@@ -13,10 +13,12 @@
     "check:planner-background-recovery": "node scripts/check-planner-background-recovery.mjs",
     "check:planner-workspace": "node scripts/check-planner-workspace.mjs",
     "postinstall": "npm run build:version",
-    "deploy:background": "wrangler deploy -c wrangler.background.toml"
+    "deploy:background": "wrangler deploy -c wrangler.background.toml",
+    "check:editor-static": "node scripts/check-editor-static.mjs"
   },
   "devDependencies": {
-    "wrangler": "latest"
+    "wrangler": "latest",
+    "esbuild": "0.28.1"
   },
   "dependencies": {
     "@jsquash/jpeg": "^1.6.0",

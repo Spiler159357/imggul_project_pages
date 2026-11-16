@@ -1,6 +1,7 @@
 const RESERVED_PATH_SEGMENTS = new Set([
     '_planner_temp_image',
     '_guest_posts',
+    '__editor',
     '__editor_sessions',
     '__editor_backups',
     'logs'

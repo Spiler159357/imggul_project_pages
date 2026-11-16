@@ -1,0 +1,140 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="900" viewBox="0 0 1440 900" role="img" aria-labelledby="title desc">
+<title id="title">AI 이미지 편집기 세 비율 화면 구조</title>
+<desc id="desc">가로, 정사각, 세로 작업 화면과 마스크, AI 후보, 저장 충돌, 출력 상태 시안. 실행 화면 캡처가 아니다.</desc>
+<defs><linearGradient id="art" x2="1" y2="1"><stop stop-color="#355781"/><stop offset="1" stop-color="#6e567c"/></linearGradient></defs>
+<rect width="1440" height="900" fill="#111923"/>
+<g font-family="Noto Sans KR, Malgun Gothic, sans-serif" fill="#dfe8f7">
+<text x="24" y="40" font-size="23" font-weight="700">AI 이미지 편집기 · 세 비율 작업 공간</text>
+<text x="24" y="66" font-size="13" fill="#a9bad0">구조 시안 · 실행 화면 캡처 아님 · 도구와 패널은 같은 자리에 두고 이미지 비율만 변경</text>
+<rect x="18" y="94" width="456" height="465" rx="10" fill="#222e3c"/>
+<text x="32" y="120" font-size="16" fill="#c3ddff">가로 · 1216 × 832</text>
+<rect x="27" y="134" width="438" height="30" rx="5" fill="#344256"/>
+<text x="34" y="154" font-size="10" fill="#cad8ec">← 프로젝트   작업명   파일 · 편집 · 레이어       저장  출력</text>
+<rect x="27" y="168" width="438" height="25" rx="5" fill="#2b384a"/>
+<text x="34" y="185" font-size="10" fill="#cad8ec">브러시   크기 24  경도 80%  흐름 100%   필압</text>
+<text x="33" y="211" font-size="10" fill="#9dc6ff">캐릭터 A •      배경 B      AI 요청 당시</text>
+<rect x="27" y="220" width="34" height="278" rx="5" fill="#303e50"/>
+<text x="36" y="243" font-size="13" fill="#cad8ec">V</text>
+<text x="35" y="273" font-size="13" fill="#cad8ec">M</text>
+<text x="36" y="303" font-size="13" fill="#cad8ec">L</text>
+<text x="36" y="333" font-size="13" fill="#cad8ec">B</text>
+<text x="36" y="363" font-size="13" fill="#cad8ec">E</text>
+<text x="36" y="393" font-size="13" fill="#cad8ec">T</text>
+<text x="36" y="423" font-size="13" fill="#cad8ec">P</text>
+<text x="36" y="453" font-size="13" fill="#cad8ec">H</text>
+<rect x="65" y="220" width="268" height="278" rx="5" fill="#151f2b"/>
+<rect x="76.0" y="274.8421052631579" width="246.0" height="168.31578947368422" fill="url(#art)" stroke="#829bbe"/>
+<ellipse cx="199.0" cy="340.4852631578948" rx="41.82" ry="28.61368421052632" fill="#a4b8d3" opacity=".7"/>
+<path d="M 115.36 433.05894736842106 Q 199.0 316.92105263157896 282.64 433.05894736842106 Z" fill="#8ba4c3" opacity=".8"/>
+<text x="84.0" y="294.8421052631579" font-size="10" fill="#e9f2ff">AI 이미지</text>
+<rect x="337" y="220" width="128" height="131" rx="5" fill="#2e3d50"/>
+<text x="345" y="240" font-size="10" fill="#cad8ec">속성  /  AI 편집</text>
+<text x="345" y="265" font-size="10" fill="#cad8ec">위치 · 배율 · 회전</text>
+<text x="345" y="288" font-size="10" fill="#cad8ec">마스크 · 효과</text>
+<text x="345" y="311" font-size="10" fill="#cad8ec">밝기  ━━━━━</text>
+<text x="345" y="335" font-size="10" fill="#cad8ec">불투명도 100%</text>
+<rect x="337" y="356" width="128" height="142" rx="5" fill="#283749"/>
+<text x="345" y="376" font-size="10" fill="#cad8ec">레이어 / 기록</text>
+<text x="345" y="401" font-size="10" fill="#cad8ec">▾ 캐릭터 그룹</text>
+<rect x="343" y="410" width="116" height="25" rx="5" fill="#3a567a"/>
+<text x="349" y="426" font-size="10" fill="#cad8ec">◧ 수정 레이어</text>
+<text x="349" y="452" font-size="10" fill="#cad8ec">◧ 원본 마스크</text>
+<text x="349" y="478" font-size="10" fill="#cad8ec">🔒 원본 이미지</text>
+<text x="33" y="519" font-size="10" fill="#a5d2ab">맞춤 · 100%     대상: 마스크       로컬 복구됨</text>
+<text x="33" y="542" font-size="10" fill="#91a5bf">선택·핸들·가이드는 출력에서 제외</text>
+<rect x="492" y="94" width="456" height="465" rx="10" fill="#222e3c"/>
+<text x="506" y="120" font-size="16" fill="#c3ddff">정사각 · 1024 × 1024</text>
+<rect x="501" y="134" width="438" height="30" rx="5" fill="#344256"/>
+<text x="508" y="154" font-size="10" fill="#cad8ec">← 프로젝트   작업명   파일 · 편집 · 레이어       저장  출력</text>
+<rect x="501" y="168" width="438" height="25" rx="5" fill="#2b384a"/>
+<text x="508" y="185" font-size="10" fill="#cad8ec">브러시   크기 24  경도 80%  흐름 100%   필압</text>
+<text x="507" y="211" font-size="10" fill="#9dc6ff">캐릭터 A •      배경 B      AI 요청 당시</text>
+<rect x="501" y="220" width="34" height="278" rx="5" fill="#303e50"/>
+<text x="510" y="243" font-size="13" fill="#cad8ec">V</text>
+<text x="509" y="273" font-size="13" fill="#cad8ec">M</text>
+<text x="510" y="303" font-size="13" fill="#cad8ec">L</text>
+<text x="510" y="333" font-size="13" fill="#cad8ec">B</text>
+<text x="510" y="363" font-size="13" fill="#cad8ec">E</text>
+<text x="510" y="393" font-size="13" fill="#cad8ec">T</text>
+<text x="510" y="423" font-size="13" fill="#cad8ec">P</text>
+<text x="510" y="453" font-size="13" fill="#cad8ec">H</text>
+<rect x="539" y="220" width="268" height="278" rx="5" fill="#151f2b"/>
+<rect x="550.0" y="236.0" width="246.0" height="246.0" fill="url(#art)" stroke="#829bbe"/>
+<ellipse cx="673.0" cy="331.94" rx="41.82" ry="41.82" fill="#a4b8d3" opacity=".7"/>
+<path d="M 589.36 467.24 Q 673.0 297.5 756.64 467.24 Z" fill="#8ba4c3" opacity=".8"/>
+<text x="558.0" y="256.0" font-size="10" fill="#e9f2ff">AI 이미지</text>
+<rect x="811" y="220" width="128" height="131" rx="5" fill="#2e3d50"/>
+<text x="819" y="240" font-size="10" fill="#cad8ec">속성  /  AI 편집</text>
+<text x="819" y="265" font-size="10" fill="#cad8ec">위치 · 배율 · 회전</text>
+<text x="819" y="288" font-size="10" fill="#cad8ec">마스크 · 효과</text>
+<text x="819" y="311" font-size="10" fill="#cad8ec">밝기  ━━━━━</text>
+<text x="819" y="335" font-size="10" fill="#cad8ec">불투명도 100%</text>
+<rect x="811" y="356" width="128" height="142" rx="5" fill="#283749"/>
+<text x="819" y="376" font-size="10" fill="#cad8ec">레이어 / 기록</text>
+<text x="819" y="401" font-size="10" fill="#cad8ec">▾ 캐릭터 그룹</text>
+<rect x="817" y="410" width="116" height="25" rx="5" fill="#3a567a"/>
+<text x="823" y="426" font-size="10" fill="#cad8ec">◧ 수정 레이어</text>
+<text x="823" y="452" font-size="10" fill="#cad8ec">◧ 원본 마스크</text>
+<text x="823" y="478" font-size="10" fill="#cad8ec">🔒 원본 이미지</text>
+<text x="507" y="519" font-size="10" fill="#a5d2ab">맞춤 · 100%     대상: 마스크       로컬 복구됨</text>
+<text x="507" y="542" font-size="10" fill="#91a5bf">선택·핸들·가이드는 출력에서 제외</text>
+<rect x="966" y="94" width="456" height="465" rx="10" fill="#222e3c"/>
+<text x="980" y="120" font-size="16" fill="#c3ddff">세로 · 832 × 1216</text>
+<rect x="975" y="134" width="438" height="30" rx="5" fill="#344256"/>
+<text x="982" y="154" font-size="10" fill="#cad8ec">← 프로젝트   작업명   파일 · 편집 · 레이어       저장  출력</text>
+<rect x="975" y="168" width="438" height="25" rx="5" fill="#2b384a"/>
+<text x="982" y="185" font-size="10" fill="#cad8ec">브러시   크기 24  경도 80%  흐름 100%   필압</text>
+<text x="981" y="211" font-size="10" fill="#9dc6ff">캐릭터 A •      배경 B      AI 요청 당시</text>
+<rect x="975" y="220" width="34" height="278" rx="5" fill="#303e50"/>
+<text x="984" y="243" font-size="13" fill="#cad8ec">V</text>
+<text x="983" y="273" font-size="13" fill="#cad8ec">M</text>
+<text x="984" y="303" font-size="13" fill="#cad8ec">L</text>
+<text x="984" y="333" font-size="13" fill="#cad8ec">B</text>
+<text x="984" y="363" font-size="13" fill="#cad8ec">E</text>
+<text x="984" y="393" font-size="13" fill="#cad8ec">T</text>
+<text x="984" y="423" font-size="13" fill="#cad8ec">P</text>
+<text x="984" y="453" font-size="13" fill="#cad8ec">H</text>
+<rect x="1013" y="220" width="268" height="278" rx="5" fill="#151f2b"/>
+<rect x="1060.1052631578948" y="232.0" width="173.78947368421052" height="254.0" fill="url(#art)" stroke="#829bbe"/>
+<ellipse cx="1147.0" cy="331.06" rx="29.54421052631579" ry="43.18" fill="#a4b8d3" opacity=".7"/>
+<path d="M 1087.9115789473685 470.76 Q 1147.0 295.5 1206.0884210526317 470.76 Z" fill="#8ba4c3" opacity=".8"/>
+<text x="1068.1052631578948" y="252.0" font-size="10" fill="#e9f2ff">AI 이미지</text>
+<rect x="1285" y="220" width="128" height="131" rx="5" fill="#2e3d50"/>
+<text x="1293" y="240" font-size="10" fill="#cad8ec">속성  /  AI 편집</text>
+<text x="1293" y="265" font-size="10" fill="#cad8ec">위치 · 배율 · 회전</text>
+<text x="1293" y="288" font-size="10" fill="#cad8ec">마스크 · 효과</text>
+<text x="1293" y="311" font-size="10" fill="#cad8ec">밝기  ━━━━━</text>
+<text x="1293" y="335" font-size="10" fill="#cad8ec">불투명도 100%</text>
+<rect x="1285" y="356" width="128" height="142" rx="5" fill="#283749"/>
+<text x="1293" y="376" font-size="10" fill="#cad8ec">레이어 / 기록</text>
+<text x="1293" y="401" font-size="10" fill="#cad8ec">▾ 캐릭터 그룹</text>
+<rect x="1291" y="410" width="116" height="25" rx="5" fill="#3a567a"/>
+<text x="1297" y="426" font-size="10" fill="#cad8ec">◧ 수정 레이어</text>
+<text x="1297" y="452" font-size="10" fill="#cad8ec">◧ 원본 마스크</text>
+<text x="1297" y="478" font-size="10" fill="#cad8ec">🔒 원본 이미지</text>
+<text x="981" y="519" font-size="10" fill="#a5d2ab">맞춤 · 100%     대상: 마스크       로컬 복구됨</text>
+<text x="981" y="542" font-size="10" fill="#91a5bf">선택·핸들·가이드는 출력에서 제외</text>
+<rect x="18" y="588" width="337" height="166" rx="9" fill="#25364c"/>
+<text x="34" y="616" font-size="17" fill="#bddbff">마스크 편집</text>
+<text x="34" y="648" font-size="12" fill="#cad8ec">픽셀 / 마스크 / 벡터 대상</text>
+<text x="34" y="679" font-size="12" fill="#cad8ec">선택 → 마스크 · 펜 앵커 편집</text>
+<text x="34" y="710" font-size="12" fill="#cad8ec">밀도 · 페더 · 연결/분리</text>
+<rect x="373" y="588" width="337" height="166" rx="9" fill="#25364c"/>
+<text x="389" y="616" font-size="17" fill="#bddbff">AI 후보</text>
+<text x="389" y="648" font-size="12" fill="#cad8ec">모델 · 프롬프트 · 예상 Anlas</text>
+<text x="389" y="679" font-size="12" fill="#cad8ec">생성 응답 대기 / 수신 중단</text>
+<text x="389" y="710" font-size="12" fill="#cad8ec">비교 · 레이어 추가 · 당시 작업</text>
+<rect x="728" y="588" width="337" height="166" rx="9" fill="#25364c"/>
+<text x="744" y="616" font-size="17" fill="#bddbff">저장 충돌</text>
+<text x="744" y="648" font-size="12" fill="#cad8ec">서버 revision이 변경됨</text>
+<text x="744" y="679" font-size="12" fill="#cad8ec">로컬 복구본 유지</text>
+<text x="744" y="710" font-size="12" fill="#cad8ec">재시도 · 복제 저장 · 다시 열기</text>
+<rect x="1083" y="588" width="337" height="166" rx="9" fill="#25364c"/>
+<text x="1099" y="616" font-size="17" fill="#bddbff">내보내기</text>
+<text x="1099" y="648" font-size="12" fill="#cad8ec">PNG / JPEG / WebP</text>
+<text x="1099" y="679" font-size="12" fill="#cad8ec">다운로드 / 프로젝트 폴더</text>
+<text x="1099" y="710" font-size="12" fill="#cad8ec">충돌: 백업 후 덮어쓰기 · 복구</text>
+<text x="24" y="796" font-size="13" fill="#cad8ec">좁은 화면: 속성·AI·레이어를 하단 시트로 표시 / 펜은 편집, 손가락은 화면 이동, 두 손가락은 핀치</text>
+<text x="24" y="829" font-size="13" fill="#cad8ec">작업 저장: 로컬 복구 → 자산 업로드 → revision 확정 / 결과 출력: 저장 상태와 별도 표시</text>
+<text x="24" y="866" font-size="13" fill="#a3bddc">지원 문서·출력은 1216×832 · 1024×1024 · 832×1216으로 고정</text>
+</g></svg>

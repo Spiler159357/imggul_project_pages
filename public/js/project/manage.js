@@ -2,7 +2,7 @@ import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootP
 import { renderCharacterSection } from './character.js?v=planner-workspace-20261109a';
 import { closePlannerWorkspaceModals, getPlannerPlanScope, loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, loadPlannerMultiScopeData, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=planner-workspace-20261109a';
 import { renderSituationSection } from './situation.js?v=planner-workspace-20261109a';
-import { renderImageEditor } from '../image_editor.js';
+import { renderEditorWorkspace } from '../editor/index.js?v=editor-20261117a';
 
 export async function renderProjectManage(skipHistory = true) {
     closePlannerWorkspaceModals();
@@ -641,7 +641,7 @@ export function renderProjectPanelItems(project, section) {
             <span class="h-full flex flex-col items-center justify-center text-center text-xs text-gray-500 dark:text-gray-400">
                 <i data-lucide="scissors" class="w-8 h-8 mb-2 text-indigo-500"></i>
                 <span class="font-bold text-gray-700 dark:text-gray-200">${escapeHtml(section.emptyText)}</span>
-                <span class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">프로젝트 이미지의 간단한 보정과 저장을 관리합니다.</span>
+                <span class="mt-1 text-[11px] text-gray-400 dark:text-gray-500">레이어·마스크·부분 보정·AI 수정으로 프로젝트 이미지를 편집합니다.</span>
             </span>
         `;
     }
@@ -726,39 +726,10 @@ export async function openProjectSection(sectionKey, skipHistory = false) {
     }
     else if (section.key === 'image-editor') {
         const project = getActiveProject();
-        renderProjectShell(`
-            ${renderSectionHeader(section.title, {
-                backButtonId: 'image-editor-back-btn',
-                backOnClick: '',
-                actionsHtml: `
-                    <div class="hidden sm:flex min-w-0 flex-col items-end mr-1">
-                        <span id="image-editor-name" class="max-w-48 truncate text-xs font-bold text-gray-700 dark:text-gray-200">이미지 편집기</span>
-                        <span id="image-editor-dirty" class="max-w-48 truncate text-[11px] text-gray-500 dark:text-gray-400">이미지 없음</span>
-                    </div>
-                    <button id="image-editor-open-library-btn" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs font-bold hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 transition" title="이미지 열기">
-                        <i data-lucide="folder-open" class="w-4 h-4"></i><span class="hidden sm:inline">열기</span>
-                    </button>
-                    <button id="image-editor-save-work-btn" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs font-bold hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed transition" disabled title="작업 저장">
-                        <i data-lucide="file-check" class="w-4 h-4"></i><span class="hidden sm:inline">작업 저장</span>
-                    </button>
-                    <button id="image-editor-undo-btn" type="button" class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed transition" title="되돌리기" aria-label="되돌리기">
-                        <i data-lucide="undo-2" class="w-4 h-4"></i>
-                    </button>
-                    <button id="image-editor-redo-btn" type="button" class="inline-flex items-center justify-center w-9 h-9 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed transition" title="다시 실행" aria-label="다시 실행">
-                        <i data-lucide="redo-2" class="w-4 h-4"></i>
-                    </button>
-                    <button id="image-editor-save-btn" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg bg-indigo-600 text-white text-xs font-bold hover:bg-indigo-700 disabled:opacity-40 disabled:cursor-not-allowed transition" disabled title="저장">
-                        <i data-lucide="save" class="w-4 h-4"></i><span class="hidden sm:inline">저장</span>
-                    </button>
-                    <button id="image-editor-save-as-btn" type="button" class="inline-flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 text-xs font-bold hover:border-indigo-300 dark:hover:border-indigo-600 hover:text-indigo-600 dark:hover:text-indigo-400 disabled:opacity-40 disabled:cursor-not-allowed transition" disabled title="다른 이름으로 저장">
-                        <i data-lucide="copy-plus" class="w-4 h-4"></i><span class="hidden sm:inline">다른 이름</span>
-                    </button>
-                `
-            })}
-            <div id="project-image-editor-content" class="flex-1 min-h-0 bg-gray-100 dark:bg-gray-900"></div>
-        `);
-        renderImageEditor(true, {
+        renderProjectShell('<div id="project-image-editor-content" class="flex-1 min-h-0"></div>');
+        renderEditorWorkspace({
             rootId: 'project-image-editor-content',
+            projectId: project?.id || '',
             projectPrefix: project?.prefix || '',
             ...(window.PROJECT_IMAGE_EDITOR_NEXT_OPTIONS || {})
         });

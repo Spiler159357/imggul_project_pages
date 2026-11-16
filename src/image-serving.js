@@ -11,6 +11,7 @@ const INTERNAL_PATH_PARTS = new Set([
     '_planner_temp_image',
     'editor_session',
     'editor_sessions',
+    '__editor',
     '__editor_sessions',
     '__editor_backups',
     '_guest_posts'

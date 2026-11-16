@@ -490,20 +490,7 @@ async function commitCharacterD1(env, migration, input, manifest) {
             SET ${makePrefixUpdateSql('r2_key')}, updated_at = ?
             WHERE substr(r2_key, 1, length(?)) = ?
         `).bind(input.newPrefix, input.oldPrefix, timestamp, input.oldPrefix, input.oldPrefix),
-        env.DB.prepare(`
-            UPDATE image_editor_documents SET status = 'stale_path_migration', updated_at = ?
-            WHERE status IN ('draft', 'saved')
-              AND (
-                  substr(source_key, 1, length(?)) = ?
-                  OR substr(output_key, 1, length(?)) = ?
-                  OR substr(preview_key, 1, length(?)) = ?
-              )
-        `).bind(
-            timestamp,
-            input.oldPrefix, input.oldPrefix,
-            input.oldPrefix, input.oldPrefix,
-            input.oldPrefix, input.oldPrefix
-        ),
+
         ...planner.statements,
         env.DB.prepare(`UPDATE path_migrations SET status = 'committed', updated_at = ? WHERE id = ?`)
             .bind(timestamp, migration.id)
@@ -606,10 +593,7 @@ async function commitSituationD1(env, migration, input, manifest, document) {
         const newPath = splitObjectKey(entry.targetKey);
         const moveKey = `${oldPath.prefix}\u0000${oldPath.fileName}`;
         metadataMoves.set(moveKey, { oldPath, newPath });
-        statements.push(env.DB.prepare(`
-            UPDATE image_editor_documents SET status = 'stale_path_migration', updated_at = ?
-            WHERE status IN ('draft', 'saved') AND (source_key = ? OR output_key = ? OR preview_key = ?)
-        `).bind(timestamp, entry.sourceKey, entry.sourceKey, entry.sourceKey));
+
     }
     for (const { oldPath, newPath } of metadataMoves.values()) {
         statements.push(env.DB.prepare(`

@@ -10,7 +10,7 @@ const RESERVED_PROJECT_PATHS = new Set([
 ]);
 const INTERNAL_PATH_PARTS = new Set([
     'logs', '_temp_craft', '_planner_temp_image', 'editor_session',
-    'editor_sessions', '__editor_sessions', '__editor_backups', '_guest_posts'
+    'editor_sessions', '__editor', '__editor_sessions', '__editor_backups', '_guest_posts'
 ]);
 
 const MAX_TITLE_LENGTH = 100;
