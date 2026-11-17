@@ -1,17 +1,18 @@
-import { PRESETS, uid, clone, newDocument, newLayer, presetFor, validateDocument, worldMatrix, multiply, inverse, point, identity } from "./model.js";
-import { canvas, copy, decode, blobOf, maskCombine, invertMask, blur, maskMorph, colorSelection } from "./bitmap.js";
-import { Renderer } from "./render.js";
+import { PRESETS, uid, clone, newDocument, newLayer, presetFor, validateDocument, worldMatrix, multiply, inverse, point, identity } from "./model.js?v=editor-rework-20261117a";
+import { canvas, copy, decode, blobOf, maskCombine, invertMask, blur, maskMorph, colorSelection } from "./bitmap.js?v=editor-rework-20261117a";
+import { Renderer } from "./render.js?v=editor-rework-20261117a";
 class EditorEngine extends EventTarget {
   constructor(projectId = "", prefix = "") {
     super();
     this.doc = newDocument("square", projectId, prefix);
-    this.retainedDocuments = /* @__PURE__ */ new Set();
     this.assets = /* @__PURE__ */ new Map();
     this.renderer = new Renderer(this.assets);
     this.undoStack = [];
     this.redoStack = [];
     this.stateId = uid();
-    this.savedId = "";
+    this.savedId = this.stateId;
+    this.initialStateId = this.stateId;
+    this.everSaved = false;
     this.revision = 0;
     this.selected = [];
     this.target = "pixels";
@@ -31,8 +32,12 @@ class EditorEngine extends EventTarget {
       this.addEventListener("change", done);
     });
   }
-  emit() {
-    this.dispatchEvent(new Event("change"));
+  emit(contentChanged = false) {
+    this.dispatchEvent(new Event('change'));
+    if(contentChanged)this.dispatchEvent(new Event('document:changed'));
+  }
+  baseline(saved = false){
+    this.undoStack=[];this.redoStack=[];this.initialStateId=this.stateId;this.savedId=this.stateId;this.everSaved=saved;this.emit();
   }
   get dirty() {
     return this.stateId !== this.savedId;
@@ -64,7 +69,7 @@ class EditorEngine extends EventTarget {
     this.redoStack = [];
     this.trim();
     this.renderer.clear();
-    this.emit();
+    this.emit(true);
   }
   pixelCommand(label, assetId, before, after, x = 0, y = 0, beforeDoc = null) {
     if (before.data.length === after.data.length && before.data.every((value, index) => value === after.data[index])) {
@@ -79,7 +84,7 @@ class EditorEngine extends EventTarget {
     this.undoStack.push({ label, assetId, before, after, x, y, beforeDoc, afterDoc: beforeDoc ? clone(this.doc) : null, beforeId, afterId: this.stateId, bytes: before.data.byteLength + after.data.byteLength });
     this.redoStack = [];
     this.trim();
-    this.touch(assetId);
+    this.touch(assetId, true);
   }
   trim() {
     this.historyBytes = this.undoStack.reduce((n, e) => n + e.bytes, 0);
@@ -94,46 +99,45 @@ class EditorEngine extends EventTarget {
         if (l.data.assetId) used.add(l.data.assetId);
         if (l.mask) used.add(l.mask.assetId);
       }
-      for (const c of d.candidates || []) {
-        used.add(c.assetId);
-        used.add(c.maskId);
-        if (c.sourceDocument) scan(c.sourceDocument);
-      }
+
     };
     scan(this.doc);
-    for (const document of this.retainedDocuments) scan(document);
     for (const e of [...this.undoStack, ...this.redoStack]) {
       if (e.assetId) used.add(e.assetId);
       for (const d of [e.beforeDoc, e.afterDoc, e.assetId ? null : e.before, e.assetId ? null : e.after]) if (d) scan(d);
     }
     for (const id of this.assets.keys()) if (!used.has(id)) this.assets.delete(id);
   }
-  touch(id) {
+  touch(id, contentChanged = false) {
     const a = this.assets.get(id);
     if (a) a.version++;
     this.renderer.clear();
-    this.emit();
+    this.emit(contentChanged);
   }
   history(direction) {
     const from = direction < 0 ? this.undoStack : this.redoStack, to = direction < 0 ? this.redoStack : this.undoStack, e = from.pop();
     if (!e) return;
+    const identityFields={id:this.doc.id,projectId:this.doc.projectId,prefix:this.doc.prefix,title:this.doc.title};
     if (e.assetId) {
       const a = this.assets.get(e.assetId);
       a.canvas.getContext("2d").putImageData(direction < 0 ? e.before : e.after, e.x, e.y);
       a.version++;
       if (e.beforeDoc) this.doc = clone(direction < 0 ? e.beforeDoc : e.afterDoc);
     } else this.doc = clone(direction < 0 ? e.before : e.after);
+    Object.assign(this.doc,identityFields);
     this.stateId = direction < 0 ? e.beforeId : e.afterId;
     to.push(e);
     this.selected = (direction < 0 ? e.beforeSelected || this.selected : e.afterSelected || this.selected).filter((id) => this.doc.layers.some((l) => l.id === id));
     if (this.selection && (this.selection.width !== this.doc.width || this.selection.height !== this.doc.height)) this.selection = null;
     this.renderer.clear();
-    this.emit();
+    this.emit(true);
   }
-  async addImage(blob, { original = false, key = "" } = {}) {
+  async addImage(blob, { original = false, key = "", guard=()=>true } = {}) {
     const c = await decode(blob);
+    if(!guard())throw new Error('이미지 불러오기가 취소되었습니다.');
     const preset = presetFor(c.width, c.height);
-    if (!preset) throw new Error("1216×832, 1024×1024, 832×1216 이미지만 열 수 있습니다.");
+    if (original&&!preset) throw new Error("1216×832, 1024×1024, 832×1216 이미지만 열 수 있습니다.");
+    if(c.width>1216||c.height>1216)throw new Error('레이어 이미지는 가로·세로 1216px 이내여야 합니다.');
     const assetId = this.register(c), l = newLayer("image", c.width, c.height, { assetId, original });
     l.locked = original;
     l.name = original ? "원본 이미지" : "추가 이미지";
@@ -384,45 +388,40 @@ class EditorEngine extends EventTarget {
     });
   }
   async pack() {
-    const document = clone(this.doc), blobs = [];
-    const used = /* @__PURE__ */ new Set();
-    const scan = (doc) => {
-      if (doc.originalAssetId) used.add(doc.originalAssetId);
-      for (const layer of doc.layers) {
-        if (layer.data.assetId) used.add(layer.data.assetId);
-        if (layer.mask) used.add(layer.mask.assetId);
+    const document=clone(this.doc),blobs=[],used=new Set();
+    if(document.originalAssetId)used.add(document.originalAssetId);
+    for(const layer of document.layers){if(layer.data.assetId)used.add(layer.data.assetId);if(layer.mask)used.add(layer.mask.assetId);}
+    // Capture changed pixels synchronously; encoding/hash results are cached by asset version.
+    const pending=[...used].map(id=>{
+      const asset=this.assets.get(id);if(!asset)throw new Error('누락된 자산이 있습니다.');
+      if(!asset.encoded||asset.encodedVersion!==asset.version){
+        asset.encodedVersion=asset.version;const width=asset.canvas.width,height=asset.canvas.height;
+        asset.encoded=blobOf(asset.canvas).then(async blob=>{const digest=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer());return{blob,width,height,hash:[...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('')};});
+        asset.encoded.catch(()=>{if(this.assets.get(id)===asset)asset.encoded=null;});
       }
-      for (const candidate of doc.candidates) {
-        used.add(candidate.assetId);
-        used.add(candidate.maskId);
-        if (candidate.sourceDocument) scan(candidate.sourceDocument);
-      }
-    };
-    scan(document);
-    const pending = [...used].map((id) => {
-      const a = this.assets.get(id);
-      if (!a) throw new Error("누락된 자산이 있습니다.");
-      const width = a.canvas.width, height = a.canvas.height;
-      return blobOf(a.canvas).then((blob) => ({ id, blob, width, height }));
+      return asset.encoded.then(item=>({...item,id}));
     });
-    const preview = canvas(192, 192), previewCtx = preview.getContext("2d"), rendered = this.renderer.render(document), scale = Math.min(192 / rendered.width, 192 / rendered.height);
-    previewCtx.drawImage(rendered, (192 - rendered.width * scale) / 2, (192 - rendered.height * scale) / 2, rendered.width * scale, rendered.height * scale);
-    pending.push(blobOf(preview).then((blob) => ({ id: "preview", blob, width: 192, height: 192 })));
-    for (const item of await Promise.all(pending)) {
-      const bytes = await item.blob.arrayBuffer(), digest = await crypto.subtle.digest("SHA-256", bytes), hash = Array.from(new Uint8Array(digest), (v) => v.toString(16).padStart(2, "0")).join("");
-      const metadata = { hash, width: item.width, height: item.height, type: "image/png" };
-      if (item.id === "preview") document.preview = metadata;
-      else document.assets[item.id] = metadata;
-      blobs.push({ ...item, hash });
+    if(!this.previewCache||this.previewCache.stateId!==this.stateId){
+      const preview=canvas(192,192),rendered=this.renderer.render(document),scale=Math.min(192/rendered.width,192/rendered.height);
+      preview.getContext('2d').drawImage(rendered,(192-rendered.width*scale)/2,(192-rendered.height*scale)/2,rendered.width*scale,rendered.height*scale);
+      this.previewCache={stateId:this.stateId,promise:blobOf(preview).then(async blob=>{const digest=await crypto.subtle.digest('SHA-256',await blob.arrayBuffer());return{id:'preview',blob,width:192,height:192,hash:[...new Uint8Array(digest)].map(b=>b.toString(16).padStart(2,'0')).join('')};})};
     }
-    for (const id of Object.keys(document.assets)) if (!used.has(id)) delete document.assets[id];
-    return { document, blobs };
+    const previewCache=this.previewCache;previewCache.promise.catch(()=>{if(this.previewCache===previewCache)this.previewCache=null;});
+    pending.push(previewCache.promise);
+    document.assets={};
+    for(const item of await Promise.all(pending)){
+      const metadata={hash:item.hash,width:item.width,height:item.height,type:'image/png',bytes:item.blob.size};
+      if(item.id==='preview')document.preview=metadata;else document.assets[item.id]=metadata;
+      blobs.push(item);
+    }
+    return{document,blobs};
   }
   async hydrate(document, loader) {
     validateDocument(document);
     const staged = /* @__PURE__ */ new Map();
     await Promise.all(Object.entries(document.assets).map(async ([id, meta]) => {
-      staged.set(id, { canvas: await decode(await loader(id, meta)), version: 0 });
+      const blob=await loader(id,meta);
+      staged.set(id,{canvas:await decode(blob),version:0,encodedVersion:0,encoded:Promise.resolve({blob,width:meta.width,height:meta.height,hash:meta.hash})});
     }));
     this.doc = clone(document);
     this.assets.clear();
@@ -433,6 +432,9 @@ class EditorEngine extends EventTarget {
     this.selection = null;
     this.stateId = uid();
     this.savedId = this.stateId;
+    this.initialStateId = this.stateId;
+    this.everSaved = true;
+    this.previewCache = null;
     this.renderer.clear();
     this.emit();
   }

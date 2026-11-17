@@ -1,5 +1,5 @@
-import { worldMatrix, clamp, identity } from "./model.js";
-import { canvas, copy, applyEffect, pathShape, traceBezier, blur, maskMorph } from "./bitmap.js";
+import { worldMatrix, clamp, identity } from "./model.js?v=editor-rework-20261117a";
+import { canvas, copy, applyEffect, pathShape, traceBezier, blur, maskMorph } from "./bitmap.js?v=editor-rework-20261117a";
 function drawTriangle(ctx, source, a, b, c, u, v, w) {
   const det = u.x * (v.y - w.y) + v.x * (w.y - u.y) + w.x * (u.y - v.y);
   if (Math.abs(det) < 1e-8) return;

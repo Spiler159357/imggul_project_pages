@@ -14,7 +14,8 @@
     "check:planner-workspace": "node scripts/check-planner-workspace.mjs",
     "postinstall": "npm run build:version",
     "deploy:background": "wrangler deploy -c wrangler.background.toml",
-    "check:editor-static": "node scripts/check-editor-static.mjs"
+    "check:editor-static": "node scripts/check-editor-static.mjs",
+    "deploy:editor-maintenance": "wrangler deploy -c wrangler.editor-maintenance.toml"
   },
   "devDependencies": {
     "wrangler": "latest",

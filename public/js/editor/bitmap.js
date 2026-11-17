@@ -1,4 +1,4 @@
-import { clamp } from "./model.js";
+import { clamp } from "./model.js?v=editor-rework-20261117a";
 function canvas(width, height) {
   const c = document.createElement("canvas");
   c.width = width;

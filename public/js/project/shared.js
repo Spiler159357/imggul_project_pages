@@ -4,6 +4,7 @@ export const EXCLUDED_PROJECT_FOLDERS = new Set([
     '_planner_temp_image',
     'editor_session',
     'editor_sessions',
+    '__editor',
     '__editor_sessions',
     '__editor_backups',
     '_guest_posts'

@@ -1,0 +1,13 @@
+name = "imggul-editor-maintenance"
+main = "src/editor/maintenance.js"
+compatibility_date = "2024-09-23"
+
+[observability]
+enabled = true
+
+[[r2_buckets]]
+binding = "imgBucket"
+bucket_name = "imggul-storage"
+
+[triggers]
+crons = ["23 * * * *"]

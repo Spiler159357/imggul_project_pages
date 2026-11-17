@@ -1,5 +1,5 @@
-import { clone, uid, newLayer, inverse, worldMatrix, point, multiply, identity, clamp } from "./model.js";
-import { canvas, copy, colorSelection, pathShape, hexRgb } from "./bitmap.js";
+import { clone, uid, newLayer, inverse, worldMatrix, point, multiply, identity, clamp } from "./model.js?v=editor-rework-20261117a";
+import { canvas, copy, colorSelection, pathShape, hexRgb } from "./bitmap.js?v=editor-rework-20261117a";
 function region(image, x, y, w, h) {
   const out = new ImageData(w, h);
   for (let row = 0; row < h; row++) out.data.set(image.data.subarray(((y + row) * image.width + x) * 4, ((y + row) * image.width + x + w) * 4), row * w * 4);
@@ -13,12 +13,14 @@ class ToolController {
     this.path = [];
     this.sample = null;
     this.space = false;
+    this.pointerId = null;
     this.abort = new AbortController();
     const signal = this.abort.signal, c = view.overlay;
-    c.addEventListener("pointerdown", (event) => this.safe(() => this.down(event)), { signal });
-    c.addEventListener("pointermove", (event) => this.safe(() => this.move(event)), { signal });
-    c.addEventListener("pointerup", (event) => this.safe(() => this.up(event)), { signal });
-    c.addEventListener("pointercancel", () => this.cancel(), { signal });
+    c.addEventListener('pointerdown',event=>this.safe(()=>{if(this.pointerId!==null)return;this.pointerId=event.pointerId;this.pointerType=event.pointerType;this.down(event);}),{signal});
+    c.addEventListener('pointermove',event=>this.safe(()=>{if(this.pointerId!==null&&event.pointerId!==this.pointerId)return;this.move(event);}),{signal});
+    c.addEventListener('pointerup',event=>this.safe(()=>{if(event.pointerId!==this.pointerId)return;this.up(event);this.pointerId=null;this.pointerType=null;}),{signal});
+    c.addEventListener('pointercancel',event=>{if(event.pointerId===this.pointerId)this.cancel();},{signal});
+    c.addEventListener('lostpointercapture',event=>{if(event.pointerId===this.pointerId&&this.drag)this.cancel();},{signal});
     c.addEventListener("dblclick", () => this.finishPath(), { signal });
   }
   position(event) {
@@ -26,18 +28,19 @@ class ToolController {
     return { x: (event.clientX - r.left - v.x) / v.zoom, y: (event.clientY - r.top - v.y) / v.zoom };
   }
   down(event) {
-    if (event.button !== 0 && event.button !== 1) return;
+    if(event.button!==0&&event.button!==1){this.pointerId=null;this.pointerType=null;return;}
     this.view.stage.focus({ preventScroll: true });
     event.preventDefault();
-    const p = this.position(event), e = this.e, o = this.view.options, tool = this.space || event.button === 1 || event.pointerType === "touch" ? "hand" : this.view.tool;
+    const p = this.position(event), e = this.e, o = this.view.options, tool = this.space || event.button === 1 ? "hand" : this.view.tool;
+    this.view.overlay.setPointerCapture(event.pointerId);
     if (tool === "clone" || tool === "heal" || tool === "patch") {
-      if (event.altKey) {
+      if (event.altKey || this.view.options.pickSample) {
+        this.view.options.pickSample=false;
         this.sample = p;
         this.view.notify("샘플 기준점을 지정했습니다.");
         return;
       }
     }
-    this.view.overlay.setPointerCapture(event.pointerId);
     if (tool === "zoom") {
       this.view.zoom(this.view.viewport.zoom * (event.altKey ? 0.8 : 1.25), p);
       return;
@@ -125,7 +128,7 @@ class ToolController {
     }
   }
   startStroke(p, event, tool) {
-    if (!clamp(this.view.options.opacity) || !clamp(this.view.options.flow)) return;
+    if (!clamp(this.view.options.opacity) || !clamp(this.view.options.flow)){this.view.notify("불투명도 또는 흐름이 0입니다. 도구 옵션을 올려주세요.");return;}
     const e = this.e;
     if (e.target === "vector") {
       this.view.notify("벡터 마스크는 펜으로 앵커를 편집하세요.");
@@ -133,7 +136,8 @@ class ToolController {
     }
     let beforeDoc = clone(e.doc);
     let l = e.layer();
-    const sampled = e.renderer.render(e.doc, this.view.options.sampleMerged || !l ? {} : { onlyLayerId: l.id }), composite = e.renderer.render(e.doc);
+    const needsSample = ["clone","heal","dodge","burn","smudge","blur-brush","sharpen-brush","liquify"].includes(tool);
+    const composite = needsSample ? e.renderer.render(e.doc) : null, sampled = needsSample ? this.view.options.sampleMerged || !l ? composite : e.renderer.render(e.doc,{onlyLayerId:l.id}) : null;
     if (tool === "eraser" && e.target === "pixels" && l?.type === "image") {
       if (!l.mask) e.addMask(false);
       l = e.layer();
@@ -161,12 +165,12 @@ class ToolController {
     }
     if (["clone", "heal", "patch"].includes(tool) && !this.sample) {
       e.doc = beforeDoc;
-      this.view.notify("Alt+클릭으로 복사할 기준점을 지정하세요.");
+      this.view.notify("샘플 위치 선택 버튼 또는 Alt+클릭으로 복사할 기준점을 지정하세요.");
       return;
     }
     e.isEditing = true;
     this.drag = { kind: "stroke", tool, layer: l, assetId, m, inv, before, beforeDoc: JSON.stringify(beforeDoc) !== JSON.stringify(e.doc) ? beforeDoc : null, last: p, start: p, bounds: { x: a.canvas.width, y: a.canvas.height, right: 0, bottom: 0 }, selection, sample: sampled, composite, previous: copy(a.canvas) };
-    this.stamp(p, event.pressure || 0.5);
+    this.stamp(p, event.pointerType === "pen" && event.pressure > 0 ? event.pressure : 1);
     e.emit();
   }
   stamp(p, pressure) {
@@ -317,7 +321,7 @@ class ToolController {
       const smooth = clamp(this.view.options.smoothing || 0, 0, 0.9);
       p = { x: d.last.x * smooth + p.x * (1 - smooth), y: d.last.y * smooth + p.y * (1 - smooth) };
       const distance = Math.hypot(p.x - d.last.x, p.y - d.last.y), step = Math.max(1, this.view.options.size * this.view.options.spacing), n = Math.max(1, Math.ceil(distance / step)), previous = { ...d.last };
-      for (let i = 1; i <= n; i++) this.stamp({ x: previous.x + (p.x - previous.x) * i / n, y: previous.y + (p.y - previous.y) * i / n }, event.pressure || 0.5);
+      for (let i = 1; i <= n; i++) this.stamp({ x: previous.x + (p.x - previous.x) * i / n, y: previous.y + (p.y - previous.y) * i / n }, event.pointerType === "pen" && event.pressure > 0 ? event.pressure : 1);
       d.last = p;
     }
     this.view.draw();
@@ -535,12 +539,14 @@ class ToolController {
     if (d?.kind === "stroke") {
       this.e.assets.get(d.assetId).canvas.getContext("2d").putImageData(d.before, 0, 0);
       if (d.beforeDoc) this.e.doc = d.beforeDoc;
+      this.e.assets.get(d.assetId).version++;
       this.e.renderer.clear();
     }
     if (d?.kind === "transform" || d?.kind === "anchor") this.e.doc = pending || d.before;
     if (d?.kind === "selection-move") this.e.selection = d.mask;
     if (pending) this.e.doc = pending;
     this.drag = null;
+    this.pointerId = null;this.pointerType=null;
     this.path = [];
     this.e.isEditing = false;
     this.e.emit();

@@ -1,4 +1,4 @@
-import { handleEditorApi } from "../src/editor/api.js";
+import { handleEditorApi, outputMetadataKey } from "../src/editor/api.js";
 // functions/[[path]].js
 import { proxyNovelAi } from "../src/novelai-proxy.js";
 import {
@@ -2039,33 +2039,6 @@ async function moveAliasPrefix(env, oldPrefix, newPrefix) {
     }
 }
 
-async function readFileMetadata(env, key = '') {
-    const { prefix, fileName } = splitPath(key);
-    const names = [fileName];
-    const baseName = fileName.replace(/\.[^/.]+$/, '');
-    for (const ext of ['.png', '.webp', '.jpg', '.jpeg']) {
-        const fallbackName = baseName + ext;
-        if (!names.includes(fallbackName)) names.push(fallbackName);
-    }
-    const placeholders = names.map(() => '?').join(',');
-    const row = await env.DB.prepare(
-        `SELECT metadata_json FROM file_metadata WHERE folder_prefix = ? AND file_name IN (${placeholders}) ORDER BY CASE file_name WHEN ? THEN 0 ELSE 1 END LIMIT 1`
-    ).bind(prefix, ...names, fileName).first();
-    return row?.metadata_json ? JSON.parse(row.metadata_json) : {};
-}
-
-async function putFileMetadataForKey(env, key = '', metadata = {}) {
-    const { prefix, fileName } = splitPath(key);
-    const timestamp = nowIso();
-    await env.DB.prepare(`
-        INSERT INTO file_metadata (folder_prefix, file_name, metadata_json, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(folder_prefix, file_name) DO UPDATE SET
-            metadata_json = excluded.metadata_json,
-            updated_at = excluded.updated_at
-    `).bind(prefix, fileName, JSON.stringify(metadata || {}), timestamp, timestamp).run();
-}
-
 const FULL_GIT_SHA_PATTERN = /^[0-9a-f]{40}$/i;
 let cachedAppVersion;
 
@@ -2132,10 +2105,7 @@ export async function onRequest(context) {
     const cookies = getCookies(request.headers.get('Cookie'));
     const isAdmin = !!secret && await constantTimeTextEqual(cookies['auth'], secret);
     if (path.startsWith('/api/editor/')) {
-        return handleEditorApi(request, env, isAdmin, {
-            readMetadata: readFileMetadata,
-            writeMetadata: putFileMetadataForKey
-        });
+        return handleEditorApi(request, { bucket: env.imgBucket }, isAdmin);
     }
 
 
@@ -2611,10 +2581,16 @@ export async function onRequest(context) {
     if (path === "/api/db/file-metadata" && method === "GET") {
         if (!isAdmin) return jsonResponse({ error: 'Unauthorized' }, { status: 403 });
         try {
-            await ensureJsonDbSchema(env);
             const folderPrefix = url.searchParams.get('folderPrefix') || '';
             const fileName = url.searchParams.get('fileName') || '';
             if (!folderPrefix || !fileName) return jsonResponse({ error: 'folderPrefix and fileName are required' }, { status: 400 });
+            const outputKey = folderPrefix + fileName;
+            const sidecar = await env.imgBucket.get(await outputMetadataKey(outputKey));
+            if (sidecar) {
+                const metadata = await sidecar.json(), image = await env.imgBucket.head(outputKey);
+                if (image && image.etag === metadata.etag) return jsonResponse({ data: metadata });
+            }
+            await ensureJsonDbSchema(env);
 
             const names = [fileName];
             const baseName = fileName.replace(/\.[^/.]+$/, '');

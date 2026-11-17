@@ -1,11 +1,13 @@
-import { EditorEngine } from "./engine.js";
-import { ToolController } from "./tools.js";
-import { Persistence, api, local } from "./storage.js";
-import { InpaintSession, MODELS, estimate } from "./ai.js";
-import { PRESETS, BLENDS, uid, clone, newLayer, worldMatrix, inverse, multiply, point, identity, clamp, validateDocument } from "./model.js";
-import { canvas, copy, blobOf, histogram, parseCube, colorSelection, invertMask, maskCombine, blur, maskMorph, decontaminate, traceBezier } from "./bitmap.js";
-import { segmentSubject } from "./subject.js";
-import { colorControl, EditorColorPicker } from "./color-picker.js";
+import { EditorEngine } from "./engine.js?v=editor-rework-20261117a";
+import { ToolController } from "./tools.js?v=editor-rework-20261117a";
+import { Persistence, api, queryFor, clearLegacyRecovery } from "./storage.js?v=editor-rework-20261117a";
+import { createAssetFolderCard, createAssetImageCard, createAssetParentCard } from "../asset-picker-cards.js?v=selection-ui-20261106c";
+import { getSelectionFolderImage, getSelectionFileAlias } from "../selection-ui.js?v=selection-ui-20261106c";
+import { TOOL_HELP, HELP_HTML } from "./help.js?v=editor-rework-20261117a";
+import { PRESETS, BLENDS, uid, clone, newLayer, worldMatrix, inverse, multiply, point, identity, clamp, validateDocument } from "./model.js?v=editor-rework-20261117a";
+import { canvas, copy, blobOf, histogram, parseCube, colorSelection, invertMask, maskCombine, blur, maskMorph, decontaminate, traceBezier } from "./bitmap.js?v=editor-rework-20261117a";
+import { segmentSubject } from "./subject.js?v=editor-rework-20261117a";
+import { colorControl, EditorColorPicker } from "./color-picker.js?v=editor-rework-20261117a";
 const escape = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 const button = (action, label, extra = "") => `<button type="button" data-action="${action}" ${extra}>${label}</button>`;
 const field = (path, label, value, type = "number", extra = "") => {
@@ -30,30 +32,14 @@ function projectSession(projectId, prefix) {
   session.prefix = prefix;
   return session;
 }
-function entryFor(session, preset = "square") {
-  const unused = session.entries.find((entry2) => !entry2.started && !entry2.engine.doc.layers.length && !entry2.engine.revision);
-  if (unused) {
-    unused.engine.doc.preset = preset;
-    [unused.engine.doc.width, unused.engine.doc.height] = PRESETS[preset];
-    session.current = unused;
-    return unused;
-  }
-  if (session.entries.length >= 8) throw new Error("열린 작업은 최대 8개입니다. 저장 후 일부 작업을 닫으세요.");
-  const engine = new EditorEngine(session.projectId, session.prefix);
-  engine.doc.preset = preset;
-  [engine.doc.width, engine.doc.height] = PRESETS[preset];
-  const entry = { engine, status: "작업 저장 전", settings: { model: MODELS[1]?.[0] || MODELS[0][0], prompt: "", negative: "", strength: 1, seed: -1, steps: 28, scale: 5, count: 1, input: "composite" }, preview: null };
-  entry.persistence = new Persistence(engine, (text) => {
-    entry.status = text;
-    if (session.view?.entry === entry) session.view.updateStatus();
-  });
-  entry.ai = new InpaintSession(engine, (text) => session.view?.notify(text), () => {
-    if (session.view?.entry === entry) session.view.updateAI();
-  });
-  session.entries.push(entry);
-  session.current = entry;
-  return entry;
+function entryFor(session,preset='square',attach=true){
+  if(session.entries.length>=8)throw new Error('열린 작업은 최대 8개입니다. 일부 작업을 닫아주세요.');
+  const engine=new EditorEngine(session.projectId,session.prefix);engine.doc.preset=preset;[engine.doc.width,engine.doc.height]=PRESETS[preset];engine.baseline();
+  const entry={engine,status:'작업 저장 전',collapsed:new Set()};
+  entry.persistence=new Persistence(engine,text=>{entry.status=text;session.view?.updateStatus();});
+  if(attach){session.entries.push(entry);session.current=entry;}return entry;
 }
+
 class EditorWorkspace {
   constructor(root, options = {}) {
     this.root = root;
@@ -67,19 +53,22 @@ class EditorWorkspace {
     this.abort = new AbortController();
     this.session = projectSession(options.projectId || "global", options.projectPrefix || "");
     this.session.view = this;
-    this.root.innerHTML = `<section class="ed-workspace" aria-label="AI 이미지 편집기"><header class="ed-header">${button("back", "← 프로젝트")}<input class="ed-title" aria-label="작업 이름" maxlength="200"><nav class="ed-menu">
-            <details><summary>파일</summary><div>${button("new", "새 작업")}${button("open", "프로젝트 이미지")}${button("local", "로컬 이미지 열기")}${button("add-local", "이미지 레이어 추가")}${button("add-project", "프로젝트 이미지 추가")}${button("recent", "저장 작업")}${button("recovery", "복구본")}${button("versions", "저장 버전")}${button("duplicate-doc", "작업 복제")}${button("close-doc", "작업 닫기")}${button("template-save", "템플릿 저장")}${button("template-open", "템플릿 열기")}</div></details>
-            <details><summary>편집</summary><div>${button("undo", "되돌리기")}${button("redo", "다시 실행")}${button("copy", "선택 복사")}${button("copy-merged", "합성 선택 복사")}${button("cut", "선택 잘라내기")}${button("paste", "붙여넣기")}${button("commands", "명령 검색")}</div></details>
-            <details><summary>이미지</summary><div>${button("crop", "구도/규격")}${button("rotate-doc", "90° 회전")}${button("subject", "AI 피사체 선택")}${button("auto-background", "배경색 자동 분리")}${button("refine", "마스크 경계 다듬기")}${button("lut", "3D LUT 가져오기")}</div></details>
-            <details><summary>레이어</summary><div>${button("paint", "새 페인트")}${button("duplicate", "복제")}${button("group", "그룹")}${button("ungroup", "그룹 해제")}${button("merge", "선택 병합")}${button("flatten", "전체 평면화")}${button("mask", "선택으로 마스크")}${button("vector-mask", "패스로 마스크")}${button("clip", "클리핑 전환")}${button("delete", "삭제")}</div></details>
-            <details><summary>선택</summary><div>${button("all", "전체")}${button("deselect", "해제")}${button("invert", "반전")}${button("selection-transform", "선택 변형")}${button("feather", "페더")}${button("grow", "확장")}${button("shrink", "축소")}${button("save-selection", "선택 저장")}${button("load-selection", "선택 불러오기")}</div></details>
-            <details><summary>보정/필터</summary><div>${EFFECTS.map(([id, name]) => button("effect", name, `data-effect="${id}"`)).join("")}${button("histogram", "히스토그램")}</div></details>
-            <details><summary>보기</summary><div>${button("fit", "화면 맞춤")}${button("actual", "100%")}${button("compare", "원본 비교")}${button("split", "분할 비교")}${button("grid", "픽셀 격자")}${button("guides", "중앙 가이드")}${button("panel", "패널 접기")}${button("preset-save", "프리셋 저장")}${button("preset-load", "프리셋 적용")}${button("batch-preset", "열린 작업 보정 적용")}</div></details>
-            </nav><span class="ed-header-spacer"></span>${button("save", "작업 저장", 'class="ed-primary"')}${button("export", "내보내기")}${button("panel", "패널")}${button("commands", "⌕")}</header>
-            <div class="ed-options" aria-label="도구 옵션"></div><div class="ed-tabs" role="tablist"></div><div class="ed-body"><aside class="ed-tools" aria-label="편집 도구">${TOOLS.map(([name, items], i) => `<details ${i === 0 || i === 1 || i === 3 ? "open" : ""}><summary>${name}</summary>${items.map(([id, label]) => `<button type="button" data-tool="${id}" title="${label}" aria-label="${label}">${label}</button>`).join("")}</details>`).join("")}${colorControl(`<input type="color" class="ed-foreground" aria-label="전경색" value="${this.options.color}">`, this.options.color, "전경색")}</aside>
-            <div class="ed-stage" tabindex="0" aria-label="편집 캔버스"><canvas class="ed-image"></canvas><canvas class="ed-overlay"></canvas><div class="ed-start"><h2>AI 이미지 편집</h2><p>이미지를 선택하고, 원하는 부분을 정밀하게 다듬으세요.</p><div>${button("open", "프로젝트 이미지 열기")}${button("local", "파일 열기")}${button("recent", "작업 이어 열기")}</div><p>지원 규격 · 1216×832 · 1024×1024 · 832×1216</p><div>${Object.keys(PRESETS).map((p) => button("preset-new", `${{ landscape: "가로", square: "정사각", portrait: "세로" }[p]} ${PRESETS[p].join("×")}`, `data-preset="${p}"`)).join("")}</div></div></div>
-            <aside class="ed-inspector"><div class="ed-width-resizer" role="separator" aria-label="패널 너비 조절"></div><div class="ed-panel-tabs">${button("props-tab", "속성")}${button("ai-tab", "AI 편집")}${button("panel", "접기")}</div><div class="ed-properties"></div><div class="ed-ai" hidden></div><div class="ed-resizer" role="separator" aria-label="패널 높이 조절"></div><div class="ed-layer-tabs">${button("layers-tab", "레이어")}${button("history-tab", "기록")}<canvas class="ed-navigator" width="96" height="64" title="클릭해 화면 이동"></canvas></div><div class="ed-layer-controls">${select("layer.blend", "혼합", "source-over", BLENDS.map((value) => [value, BLEND_LABELS[value]]))}${field("layer.opacity", "불투명도", 1, "number", 'min="0" max="1" step="0.05"')}</div><div class="ed-layers"></div><div class="ed-history" hidden></div><div class="ed-layer-actions">${button("paint", "＋")}${button("duplicate", "복제")}${button("mask", "마스크")}${button("group", "그룹")}${button("delete", "삭제")}</div></aside></div>
-            <footer class="ed-status">${button("fit", "맞춤")}${button("actual", "100%")}<span class="ed-document-info"></span><span class="ed-target"></span>${button("compare", "원본 비교")}<span class="ed-save-status" role="status" aria-live="polite"></span></footer></section>`;
+    this.options={...this.options,...this.session.options};this.session.options=this.options;this.tool=this.session.tool||this.tool;
+    this.root.innerHTML=`<section class="ed-workspace" aria-label="이미지 편집기"><header class="ed-header">${button('back','←','aria-label="프로젝트로 돌아가기" title="프로젝트로 돌아가기"')}<span class="ed-title" title="작업 이름">이미지 편집기</span><nav class="ed-menu">
+      <details><summary>파일</summary><div>${button('new','새 작업')}${button('recent','작업 불러오기')}${button('save','작업 저장')}${button('save-as','다른 이름으로 저장')}</div></details>
+      <details><summary>편집</summary><div>${button('undo','실행 취소')}${button('redo','다시 실행')}${button('copy','복사')}${button('copy-merged','합성 내용 복사')}${button('cut','잘라내기')}${button('paste','붙여넣기')}${button('commands','명령 검색')}</div></details>
+      <details><summary>이미지</summary><div>${button('crop','구도·크기 변경')}${button('rotate-doc','90° 회전')}${button('subject','피사체 선택')}${button('auto-background','배경색으로 선택')}${button('refine','마스크 경계 다듬기')}${button('lut','LUT 불러오기')}</div></details>
+      <details><summary>레이어</summary><div>${button('paint','페인트 레이어 만들기')}${button('duplicate','레이어 복제')}${button('group','그룹 만들기')}${button('ungroup','그룹 해제')}${button('merge','선택 레이어 병합')}${button('flatten','전체 병합')}${button('mask','선택으로 마스크 만들기')}${button('vector-mask','패스로 마스크 만들기')}${button('clip','아래 레이어에 클리핑')}${button('delete','레이어 삭제')}</div></details>
+      <details><summary>선택</summary><div>${button('all','전체 선택')}${button('deselect','선택 해제')}${button('invert','선택 반전')}${button('selection-transform','선택 영역 변형')}${button('feather','경계 부드럽게')}${button('grow','선택 확장')}${button('shrink','선택 축소')}</div></details>
+      <details><summary>보정</summary><div>${EFFECTS.map(([id,name])=>button('effect',name,`data-effect="${id}"`)).join('')}${button('histogram','히스토그램')}</div></details>
+      <details><summary>보기</summary><div>${button('fit','화면에 맞추기')}${button('actual','100% 보기')}${button('compare','원본 비교')}${button('split','원본과 분할 비교')}${button('grid','픽셀 격자')}${button('guides','중앙 가이드')}${button('panel','속성 패널 접기/펼치기')}</div></details>
+      </nav><span class="ed-header-spacer"></span>${button('save','작업 저장','class="ed-primary"')}${button('export','이미지 내보내기')}${button('help','도움말')}</header>
+      <div class="ed-quick-actions">${button('new','새 작업')}${button('recent','작업 불러오기')}${button('add-images','이미지 불러오기')}${button('commands','모든 명령')}${button('panel','속성·레이어')}${button('sample-point','샘플 위치 선택','data-sample-button hidden')}</div>
+      <div class="ed-options" aria-label="도구 옵션"></div><div class="ed-tabs" role="tablist" aria-label="열린 작업"></div>
+      <div class="ed-body"><aside class="ed-tools" aria-label="편집 도구">${TOOLS.map(([name,items],i)=>`<details ${i===0||i===1||i===3?'open':''}><summary>${name}</summary>${items.map(([id,label])=>`<button type="button" data-tool="${id}" title="${label} · ${escape(TOOL_HELP[id]||'')}" aria-label="${label}">${label}</button>`).join('')}</details>`).join('')}${colorControl(`<input type="color" class="ed-foreground" aria-label="전경색" value="${this.options.color}">`,this.options.color,'전경색')}</aside>
+      <div class="ed-stage" tabindex="0" aria-label="편집 캔버스"><canvas class="ed-image"></canvas><canvas class="ed-overlay"></canvas><div class="ed-start"><h2>이미지 편집기</h2><p>이미지로 새 작업을 시작하거나 저장한 작업을 불러오세요.</p><div>${button('new','새 작업','class="ed-primary"')}${button('recent','작업 불러오기')}</div><p>작업 저장은 레이어를 보존하고, 이미지 내보내기는 PNG·JPEG·WebP를 만듭니다.</p><p>지원 규격 · 가로형 1216×832 px · 정사각형 1024×1024 px · 세로형 832×1216 px</p>${button('help','사용 방법 보기')}</div></div>
+      <aside class="ed-inspector"><div class="ed-width-resizer" role="separator" aria-label="패널 너비 조절"></div><div class="ed-panel-tabs"><strong>속성</strong>${button('panel','접기')}</div><div class="ed-properties"></div><div class="ed-resizer" role="separator" aria-label="패널 높이 조절"></div><div class="ed-layer-tabs">${button('layers-tab','레이어')}${button('history-tab','기록')}<canvas class="ed-navigator" width="96" height="64" title="클릭해 화면 이동"></canvas></div><div class="ed-layer-controls">${select('layer.blend','혼합','source-over',BLENDS.map(value=>[value,BLEND_LABELS[value]]))}${field('layer.opacity','불투명도',1,'number','min="0" max="1" step="0.05"')}</div><div class="ed-layers"></div><div class="ed-history" hidden></div><div class="ed-layer-actions">${button('paint','＋')}${button('duplicate','복제')}${button('mask','마스크')}${button('group','그룹')}${button('delete','삭제')}</div></aside></div>
+      <footer class="ed-status">${button('fit','맞춤')}${button('actual','100%')}<span class="ed-document-info"></span><span class="ed-target"></span><span class="ed-location"></span><span class="ed-save-status" role="status" aria-live="polite"></span></footer></section>`;
     this.stage = root.querySelector(".ed-stage");
     this.image = root.querySelector(".ed-image");
     this.overlay = root.querySelector(".ed-overlay");
@@ -97,17 +86,16 @@ class EditorWorkspace {
     root.addEventListener("input", (event) => this.input(event), { signal });
     root.addEventListener("change", (event) => this.change(event), { signal });
     root.addEventListener("focusin", (event) => {
-      if (event.target.matches('[data-field^="layer."]')) this.propertyBefore = clone(this.engine.doc);
+      if (this.engine && event.target.matches('[data-field^="layer."]')) this.propertyBefore = clone(this.engine.doc);
     }, { signal });
     document.addEventListener("keydown", (event) => this.key(event), { signal });
     document.addEventListener("keyup", (event) => {
-      if (event.code === "Space") this.controller.space = false;
+      if (event.code === "Space" && this.controller) this.controller.space = false;
     }, { signal });
     window.addEventListener("blur", () => {
       this.cancelProperty();
       this.curveCancel?.();
-      this.controller.space = false;
-      this.controller.cancel();
+      if(this.controller){this.controller.space=false;this.controller.cancel();}
     }, { signal });
     root.addEventListener("dragover", (event) => {
       event.preventDefault();
@@ -115,7 +103,7 @@ class EditorWorkspace {
     root.addEventListener("drop", (event) => {
       if (event.dataTransfer.files.length) {
         event.preventDefault();
-        void this.importFiles(event.dataTransfer.files, true).catch((error) => this.notify(error.message));
+        void this.importFiles(event.dataTransfer.files, !!this.entry).catch((error) => this.notify(error.message));
       }
     }, { signal });
     root.addEventListener("paste", (event) => {
@@ -123,11 +111,12 @@ class EditorWorkspace {
       const file = [...event.clipboardData.items].find((i) => i.type.startsWith("image/"))?.getAsFile();
       if (file) {
         event.preventDefault();
-        void this.importFiles([file], true).catch((error) => this.notify(error.message));
-      }
+        void this.importFiles([file], !!this.entry).catch((error) => this.notify(error.message));
+      }else if(clipboard&&this.entry){event.preventDefault();this.pasteInternal();}
     }, { signal });
     this.stage.addEventListener("wheel", (event) => {
       event.preventDefault();
+      if(!this.controller)return;
       const p = this.controller.position(event);
       if (event.ctrlKey || event.metaKey || this.tool === "zoom") this.zoom(this.viewport.zoom * Math.exp(-event.deltaY * 2e-3), p);
       else {
@@ -142,14 +131,19 @@ class EditorWorkspace {
       if (!root.isConnected) this.destroy();
     });
     this.detachObserver.observe(document.body, { childList: true, subtree: true });
-    this.useEntry(this.session.current || entryFor(this.session));
+    this.useEntry(this.session.current || null);
     this.restoreLayout();
     this.bindResize();
     this.bindTouch();
+    clearLegacyRecovery(message=>this.notify(message));
+    window.addEventListener('pagehide',()=>{this.controller?.cancel();void this.flushEntries();},{signal});
+    document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='hidden'){this.controller?.cancel();void this.flushEntries();}},{signal});
+    document.addEventListener('pointerdown',event=>{const menu=event.target.closest('.ed-menu details');this.root.querySelectorAll('.ed-menu details[open]').forEach(details=>{if(details!==menu)details.open=false;});},{signal});
+
     if (options.sourceKey) void this.openKey(options.sourceKey, false).catch((error) => this.notify(error.message));
   }
   get engine() {
-    return this.entry.engine;
+    return this.entry?.engine || null;
   }
   readThemeColors() {
     const style = getComputedStyle(this.root.querySelector(".ed-workspace"));
@@ -167,63 +161,65 @@ class EditorWorkspace {
       guide: token("--ed-guide", "#a5b4fc")
     };
   }
-  useEntry(entry) {
-    if (this.destroyed) return;
-    this.cancelProperty();
-    this.curveCancel?.();
-    this.controller?.destroy();
-    if (this.entry && this.onEngineChange) this.entry.engine.removeEventListener("change", this.onEngineChange);
-    this.entry = entry;
-    this.session.current = entry;
-    this.controller = new ToolController(this, entry.engine);
-    this.onEngineChange = () => {
-      this.update();
-      this.draw();
-    };
-    entry.engine.addEventListener("change", this.onEngineChange);
-    this.update();
-    this.updateAI();
-    void this.readyFonts(entry.engine).then(() => {
-      entry.engine.renderer.clear();
-      if (this.entry === entry) this.draw();
-    });
-    this.fit();
-  }
-  notify(message) {
-    this.entry.status = message;
-    this.updateStatus();
-  }
-  updateStatus() {
-    if (this.destroyed) return;
-    const el = this.root.querySelector(".ed-save-status");
-    if (el) el.textContent = this.entry.status;
-  }
-  update() {
-    if (this.destroyed) return;
-    const e = this.engine, focused = e.isEditing || this.colorPicker.isOpen || this.root.contains(document.activeElement) && document.activeElement.matches("input,textarea,select");
-    this.root.querySelector(".ed-start").hidden = e.doc.layers.length > 0 || !!this.entry.started;
-    this.root.querySelector(".ed-document-info").textContent = `${Math.round(this.viewport.zoom * 100)}% · ${e.doc.width}×${e.doc.height} · ${e.dirty ? "수정됨" : "저장됨"}`;
-    this.root.querySelector(".ed-target").textContent = `대상: ${e.target === "mask" ? "마스크" : e.target === "vector" ? "벡터 마스크" : "픽셀"} · ${e.layer()?.name || "선택 없음"}`;
-    if (!focused) {
-      this.root.querySelector(".ed-title").value = e.doc.title;
-      this.renderProperties();
-      this.renderLayers();
+  useEntry(entry){
+    if(this.destroyed)return;
+    this.cancelProperty();this.curveCancel?.();
+    const previous=this.entry;if(previous)previous.engine.removeEventListener('change',this.onEngineChange);
+    this.controller?.destroy();this.controller=null;
+    if(previous)void previous.persistence.flush().catch(()=>{});
+    this.entry=entry;this.session.current=entry;
+    if(entry){
+      this.controller=new ToolController(this,entry.engine);
+      this.onEngineChange=()=>{this.update();this.draw();};entry.engine.addEventListener('change',this.onEngineChange);
+      void this.readyFonts(entry.engine).then(()=>{entry.engine.renderer.clear();if(this.entry===entry)this.draw();});
     }
-    this.renderTabs();
+    this.update();if(entry)this.fit();
+  }
+
+  notify(message,dialog=null){
+    if(this.destroyed)return;
+    if(this.entry)this.entry.status=message;else this.homeStatus=message;
     this.updateStatus();
-    this.renderHistory();
-    this.root.querySelectorAll("[data-tool]").forEach((b) => b.classList.toggle("active", b.dataset.tool === this.tool));
-    this.updateOptions();
+    const target=dialog||[...(this.dialogs||[])].reverse().find(d=>d.open);
+    const status=target?.querySelector('.ed-dialog-status');if(status)status.textContent=message;
   }
-  renderTabs() {
-    this.root.querySelector(".ed-tabs").innerHTML = this.session.entries.map((entry, i) => `<button role="tab" aria-selected="${entry === this.entry}" data-entry="${i}">${escape(entry.engine.doc.title)}${entry.engine.dirty ? " •" : ""}${entry.ai.running ? " ◌" : ""}</button>`).join("");
+
+  updateStatus(){
+    if(this.destroyed)return;
+    const status=this.root.querySelector('.ed-save-status');if(status)status.textContent=this.entry?.status||this.homeStatus||'';
   }
+
+  update(){
+    if(this.destroyed)return;
+    const sampleButton=this.root.querySelector('[data-sample-button]');sampleButton.hidden=!this.entry||!['clone','heal'].includes(this.tool);
+    const home=!this.entry;this.root.querySelector('.ed-workspace').classList.toggle('ed-home',home);
+    this.root.querySelector('.ed-start').hidden=!home;
+    const general=new Set(['new','recent','help','back','commands']);
+    this.root.querySelectorAll('[data-action]').forEach(button=>{if(button.closest('.ed-header')||button.closest('.ed-quick-actions'))button.disabled=home&&!general.has(button.dataset.action);});
+    this.root.querySelector('.ed-title').textContent=home?'이미지 편집기':this.engine.doc.title;
+    this.renderTabs();this.updateStatus();
+    if(home){this.curvePainters=[];this.root.querySelector('.ed-options').innerHTML='';for(const name of ['.ed-document-info','.ed-target','.ed-location'])this.root.querySelector(name).textContent='';return;}
+    const e=this.engine,focused=e.isEditing||this.colorPicker.isOpen||this.root.contains(document.activeElement)&&document.activeElement.matches('input,textarea,select');
+    this.root.querySelector('.ed-document-info').textContent=`${Math.round(this.viewport.zoom*100)}% · ${e.doc.width}×${e.doc.height} px · ${e.dirty?'미저장 변경':e.everSaved?'저장됨':'편집 전'}`;
+    this.root.querySelector('.ed-target').textContent=`대상: ${e.target==='mask'?'마스크':e.target==='vector'?'벡터 마스크':'픽셀'} · ${e.layer()?.name||'선택 없음'}`;
+    this.root.querySelector('.ed-location').textContent=e.everSaved?`${this.projectLabel()} / 편집 작업 / ${e.doc.title}`:'정식 저장 전 · 자동 저장은 임시 공간';
+    if(!focused){this.renderProperties();this.renderLayers();}
+    this.renderHistory();this.updateOptions();
+    this.root.querySelectorAll('[data-tool]').forEach(button=>button.classList.toggle('active',button.dataset.tool===this.tool));
+    this.root.querySelector('[data-sample-button]').hidden=!['clone','heal','patch'].includes(this.tool);
+  }
+
+  renderTabs(){
+    this.root.querySelector('.ed-tabs').innerHTML=this.session.entries.map((entry,index)=>`<div class="ed-tab"><button role="tab" aria-selected="${entry===this.entry}" data-entry="${index}">${escape(entry.engine.doc.title)}${entry.engine.dirty?' •':''}</button><button type="button" data-close-entry="${index}" title="작업 닫기" aria-label="${escape(entry.engine.doc.title)} 닫기">×</button></div>`).join('');
+  }
+
   updateOptions() {
     if (this.colorPicker.isOpen) return;
     const active = this.root.querySelector(".ed-options");
-    if (active.contains(document.activeElement)) return;
+    if (!this.entry || active.contains(document.activeElement)) return;
     const o = this.options;
     active.innerHTML = `${this.controller?.pendingTransform ? button("apply-transform", "변형 적용") + button("cancel-transform", "변형 취소") : ""}<strong>${escape(TOOLS.flatMap((g) => g[1]).find((t) => t[0] === this.tool)?.[1] || this.tool)}</strong>${field("option.size", "크기", o.size, "number", 'min="1" max="240"')}${field("option.color", "색", o.color, "color")}${field("option.opacity", "불투명도", o.opacity, "number", 'min="0" max="1" step="0.05"')}${field("option.hardness", "경도", o.hardness, "number", 'min="0" max="1" step="0.05"')}${field("option.flow", "흐름", o.flow, "number", 'min="0" max="1" step="0.05"')}${field("option.spacing", "간격", o.spacing, "number", 'min="0.01" max="1" step="0.01"')}${field("option.pressure", "필압", o.pressure, "checkbox")}${field("option.smoothing", "선 보정", o.smoothing || 0, "number", 'min="0" max="0.9" step="0.1"')}${field("option.snap", "스냅", o.snap !== false, "checkbox")}${select("option.selectionMode", "선택", o.selectionMode, [["replace", "교체"], ["add", "추가"], ["subtract", "빼기"], ["intersect", "교차"]])}${field("option.tolerance", "허용치", o.tolerance, "number", 'min="0" max="255"')}${field("option.contiguous", "인접", o.contiguous, "checkbox")}${field("option.sampleMerged", "합성 샘플", o.sampleMerged, "checkbox")}${field("option.maskErase", "마스크 지우기", o.maskErase, "checkbox")}${field("option.fill", "도형 채우기", o.fill, "text")}${field("option.background", "배경색", o.background, "color")}${field("option.strokeWidth", "획", o.strokeWidth, "number", 'min="0" max="40"')}${field("option.radial", "방사형", o.radial, "checkbox")}`;
+    if(["polygon","pen"].includes(this.tool))active.insertAdjacentHTML("beforeend",button("finish-path","선택·패스 완료"));
     let keys = [];
     if (["brush", "eraser", "clone", "heal", "patch", "dodge", "burn", "smudge", "blur-brush", "sharpen-brush", "liquify"].includes(this.tool)) keys = ["size", "color", "opacity", "hardness", "flow", "spacing", "pressure", "smoothing", "maskErase"];
     else if (["rect-select", "ellipse-select", "lasso", "polygon"].includes(this.tool)) keys = ["selectionMode"];
@@ -241,7 +237,7 @@ class EditorWorkspace {
     this.curvePainters = [];
     const e = this.engine, l = e.layer(), target = this.root.querySelector(".ed-properties");
     if (!l) {
-      target.innerHTML = `<h3>작업 속성</h3><p>레이어를 선택하면 속성을 편집할 수 있습니다.</p>${select("document.preset", "규격", e.doc.preset, Object.keys(PRESETS).map((k) => [k, PRESETS[k].join("×")]))}${button("crop", "구도 조절")}${button("histogram", "히스토그램")}${button("preset-save", "프리셋 저장")}`;
+      target.innerHTML = `<h3>작업 속성</h3><p>레이어를 선택하면 속성을 편집할 수 있습니다.</p>${select("document.preset", "규격", e.doc.preset, Object.keys(PRESETS).map((k) => [k, PRESETS[k].join("×")]))}${button("crop", "구도 조절")}${button("histogram", "히스토그램")}`;
       return;
     }
     let html = `<h3>${escape(l.name)}</h3>${field("layer.name", "이름", l.name, "text")}${field("layer.visible", "표시", l.visible, "checkbox")}${field("layer.locked", "잠금", l.locked, "checkbox")}${field("layer.alphaLock", "알파 잠금", l.alphaLock, "checkbox")}<div class="ed-button-row">${button("pixels-target", "픽셀 선택")}${l.mask ? button("mask-target", "마스크 선택") : button("mask", "마스크 추가")}</div><fieldset ${l.locked ? "disabled" : ""}>`;
@@ -418,6 +414,7 @@ class EditorWorkspace {
   }
   input(event) {
     const el = event.target;
+    if(!this.entry)return;
     if (el.classList.contains("ed-foreground")) {
       this.options.color = el.value;
       this.updateOptions();
@@ -429,11 +426,6 @@ class EditorWorkspace {
     const value = el.type === "checkbox" ? el.checked : el.hasAttribute("data-json") ? null : ["number", "range"].includes(el.type) ? Number(el.value) : el.value;
     if (path.startsWith("option.")) {
       this.options[path.slice(7)] = value;
-      return;
-    }
-    if (path.startsWith("ai.")) {
-      this.entry.settings[path.slice(3)] = value;
-      this.costText();
       return;
     }
     if (path.startsWith("document.")) return;
@@ -455,10 +447,7 @@ class EditorWorkspace {
   }
   change(event) {
     const el = event.target, path = el.dataset.field;
-    if (el.classList.contains("ed-title")) {
-      this.engine.transaction("작업명 변경", () => this.engine.doc.title = el.value || "작업");
-      return;
-    }
+    if(!this.entry)return;
     if (path === "document.preset") {
       this.engine.changePreset(el.value);
       this.fit();
@@ -481,7 +470,6 @@ class EditorWorkspace {
         this.notify(error.message);
       }
     }
-    if (path?.startsWith("ai.")) this.costText();
     if (path === "option.anchorIndex") this.renderProperties();
   }
   setProperty(path, value) {
@@ -539,10 +527,11 @@ class EditorWorkspace {
     });
   }
   click(event) {
+    const close=event.target.closest("[data-close-entry]");if(close){event.stopPropagation();void this.run(()=>this.closeDocument(this.session.entries[Number(close.dataset.closeEntry)]));return;}
     const tool = event.target.closest("[data-tool]");
-    if (tool) {
+    if (tool && this.entry) {
       this.controller.cancel();
-      this.tool = tool.dataset.tool;
+      this.tool = tool.dataset.tool;this.session.tool=this.tool;this.notify(TOOL_HELP[this.tool]||"도구를 선택했습니다.");
       this.update();
       return;
     }
@@ -577,8 +566,13 @@ class EditorWorkspace {
     }
   }
   async command(action, data = {}) {
-    const e = this.engine, l = e.layer();
-    if (!["apply-transform", "cancel-transform", "fit", "actual", "compare", "split", "panel", "grid", "guides"].includes(action)) this.controller.commitTransform();
+    if(action==='new')return this.newDialog();
+    if(action==='recent')return this.recent();
+    if(action==='help')return this.dialog('이미지 편집기 도움말',HELP_HTML);
+    if(action==='commands')return this.commandPalette();
+    if(action==='back'){await this.flushEntries();window.openProjectDetail?.(this.session.projectId,false);return;}
+    const e=this.engine;if(!e){this.notify('새 작업을 시작하거나 작업을 불러오세요.');return;}const l=e.layer();
+    if(!['apply-transform','cancel-transform','fit','actual','compare','split','panel','grid','guides'].includes(action))this.controller.commitTransform();
     switch (action) {
       case "apply-transform":
         this.controller.commitTransform();
@@ -586,36 +580,12 @@ class EditorWorkspace {
       case "cancel-transform":
         this.controller.cancel();
         return;
-      case "new":
-        return this.newDialog();
-      case "preset-new": {
-        const entry = entryFor(this.session, data.preset);
-        entry.started = true;
-        this.useEntry(entry);
-        return;
-      }
-      case "open":
-        return this.library(false);
-      case "add-project":
-        return this.library(true);
-      case "local":
-        return this.pickFiles(false);
-      case "add-local":
-        return this.pickFiles(true);
-      case "recent":
-        return this.recent();
-      case "recovery":
-        return this.recoveries();
-      case "versions":
-        return this.versions();
-      case "save":
-        return this.entry.persistence.pending ? this.entry.persistence.retry() : this.entry.persistence.save();
-      case "export":
-        return this.exportDialog();
-      case "back":
-        await Promise.all(this.session.entries.filter((v) => v.engine.dirty).map((v) => v.persistence.save()));
-        window.openProjectDetail?.(this.session.projectId, false);
-        return;
+      case 'add-images':return this.imagePicker(true);
+      case 'save':return this.saveDocument();
+      case 'save-as':return this.saveDocument(true);
+      case 'export':return this.exportDialog();
+      case 'sample-point':this.options.pickSample=true;this.notify('복사할 위치를 한 번 누른 뒤 수정할 곳을 문지르세요.');return;
+      case 'finish-path':this.controller.finishPath();this.draw();return;
       case "undo":
         this.controller.cancel();
         e.history(-1);
@@ -751,15 +721,6 @@ class EditorWorkspace {
         this.saveLayout();
         this.draw();
         return;
-      case "props-tab":
-        this.root.querySelector(".ed-ai").hidden = true;
-        this.root.querySelector(".ed-properties").hidden = false;
-        return;
-      case "ai-tab":
-        this.root.querySelector(".ed-ai").hidden = false;
-        this.root.querySelector(".ed-properties").hidden = true;
-        this.updateAI();
-        return;
       case "layers-tab":
         this.root.querySelector(".ed-layers").hidden = false;
         this.root.querySelector(".ed-history").hidden = true;
@@ -818,65 +779,12 @@ class EditorWorkspace {
         return this.autoBackground();
       case "refine":
         return this.refineMask();
-      case "preset-save":
-        return this.savePreset();
-      case "preset-load":
-        return this.loadPreset();
-      case "template-save":
-        return this.saveTemplate();
-      case "template-open":
-        return this.templates();
-      case "batch-preset":
-        return this.batchPreset();
-      case "save-selection":
-        if (e.selection) {
-          this.session.selection = copy(e.selection);
-          this.notify("선택을 이 작업 공간에 저장했습니다.");
-        }
-        return;
-      case "load-selection":
-        if (this.session.selection) {
-          if (this.session.selection.width !== e.doc.width || this.session.selection.height !== e.doc.height) throw new Error("저장된 선택의 규격이 다릅니다.");
-          e.selection = copy(this.session.selection);
-          e.emit();
-        }
-        return;
-      case "duplicate-doc":
-        return this.duplicateDocument();
-      case "close-doc":
-        return this.closeDocument();
-      case "commands":
-        return this.commandPalette();
-      case "ai-generate":
-        return this.generate();
-      case "ai-cancel":
-        this.entry.ai.cancel();
-        return;
-      case "candidate-preview":
-        this.entry.preview = data.id;
-        this.draw();
-        return;
-      case "candidate-clear":
-        this.entry.preview = null;
-        this.draw();
-        return;
-      case "candidate-add":
-        this.entry.ai.add(e.doc.candidates.find((c) => c.id === data.id));
-        this.entry.preview = null;
-        return;
-      case "candidate-source":
-        return this.openCandidateSource(e.doc.candidates.find((c) => c.id === data.id));
-      case "candidate-delete":
-        e.transaction("후보 삭제", () => e.doc.candidates = e.doc.candidates.filter((c) => c.id !== data.id));
-        this.entry.preview = null;
-        this.updateAI();
-        return;
       default:
         if (action.startsWith("align-")) this.align(action.slice(6));
     }
   }
   fit() {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.entry) return;
     const r = this.stage.getBoundingClientRect();
     this.viewport.zoom = Math.min(1, Math.max(0.1, (r.width - 48) / this.engine.doc.width), Math.max(0.1, (r.height - 48) / this.engine.doc.height));
     this.viewport.x = (r.width - this.engine.doc.width * this.viewport.zoom) / 2;
@@ -891,14 +799,14 @@ class EditorWorkspace {
     this.draw();
   }
   draw() {
-    if (this.destroyed || this.raf || !this.root.isConnected) return;
+    if (this.destroyed || !this.entry || this.raf || !this.root.isConnected) return;
     this.raf = requestAnimationFrame(() => {
       this.raf = null;
       this.paintView();
     });
   }
   paintView() {
-    if (this.destroyed) return;
+    if (this.destroyed || !this.entry) return;
     const r = this.stage.getBoundingClientRect(), ratio = window.devicePixelRatio || 1, e = this.engine, v = this.viewport;
     for (const c of [this.image, this.overlay]) {
       const w = Math.round(r.width * ratio), h = Math.round(r.height * ratio);
@@ -930,13 +838,6 @@ class EditorWorkspace {
       ctx.clearRect(0, 0, e.doc.width / 2, e.doc.height);
       ctx.drawImage(e.renderer.render(e.doc, { original: true }), 0, 0);
       ctx.restore();
-    }
-    const candidate = e.doc.candidates.find((c) => c.id === this.entry.preview);
-    if (candidate && candidate.width === e.doc.width && candidate.height === e.doc.height) {
-      const temp = copy(e.assets.get(candidate.assetId).canvas), tc = temp.getContext("2d");
-      tc.globalCompositeOperation = "destination-in";
-      tc.drawImage(e.assets.get(candidate.maskId).canvas, 0, 0);
-      ctx.drawImage(temp, 0, 0);
     }
     const oc = this.overlay.getContext("2d");
     oc.resetTransform();
@@ -1046,51 +947,30 @@ class EditorWorkspace {
     const nav = this.root.querySelector(".ed-navigator");
     nav.getContext("2d").clearRect(0, 0, 96, 64);
     nav.getContext("2d").drawImage(rendered, 0, 0, 96, 64);
-    this.root.querySelector(".ed-document-info").textContent = `${Math.round(v.zoom * 100)}% · ${e.doc.width}×${e.doc.height} · ${e.dirty ? "수정됨" : "저장됨"}`;
+    this.root.querySelector(".ed-document-info").textContent = `${Math.round(v.zoom * 100)}% · ${e.doc.width}×${e.doc.height} · ${e.dirty ? "미저장 변경" : e.everSaved ? "저장됨" : "편집 전"}`;
   }
   handleAt(p) {
     return this.handles?.find((h) => Math.hypot(h.x - p.x, h.y - p.y) < 10 / this.viewport.zoom);
   }
-  key(event) {
-    if (this.destroyed || !this.root.isConnected || !this.root.getClientRects().length || event.isComposing || event.target.closest("input,textarea,select,[contenteditable],dialog")) return;
-    if (event.code === "Space") {
-      event.preventDefault();
-      this.controller.space = true;
-      return;
-    }
-    if (event.key === "Escape") {
-      this.controller.cancel();
-      return;
-    }
-    if (event.key === "Enter") {
-      this.controller.commitTransform();
-      this.controller.finishPath();
-      return;
-    }
-    if (event.ctrlKey || event.metaKey) {
-      const actions = { z: event.shiftKey ? "redo" : "undo", y: "redo", s: "save", c: "copy", x: "cut", v: "paste", a: "all", d: "deselect", j: "duplicate" };
-      if (actions[event.key.toLowerCase()]) {
-        event.preventDefault();
-        void this.run(() => this.command(actions[event.key.toLowerCase()]));
-      }
-      return;
-    }
-    const map = { v: "move", b: "brush", e: "eraser", m: "rect-select", l: "lasso", t: "text", i: "eyedropper", h: "hand", p: "pen" };
-    if (map[event.key.toLowerCase()]) {
-      event.preventDefault();
-      this.controller.cancel();
-      this.tool = map[event.key.toLowerCase()];
-      this.update();
-    }
-    if (event.key === "Delete") {
-      event.preventDefault();
-      this.engine.remove();
-    }
-    if (event.key === "[" || event.key === "]") {
-      this.options.size = clamp(this.options.size + (event.key === "[" ? -2 : 2), 1, 240);
-      this.updateOptions();
-    }
+  key(event){
+    if(this.destroyed||!this.root.isConnected||!this.root.getClientRects().length||event.isComposing||document.querySelector('.ed-dialog[open]'))return;
+    const text=event.target.closest('input,textarea,select,[contenteditable]'),mod=event.ctrlKey||event.metaKey,k=event.key.toLowerCase();
+    if(event.key==='Escape')this.root.querySelectorAll('.ed-menu details[open]').forEach(menu=>menu.open=false);
+    if(mod&&['s','o'].includes(k)){event.preventDefault();if(k==='s'&&text){event.target.blur();}void this.run(()=>this.command(k==='o'?'recent':event.shiftKey?'save-as':'save'));return;}
+    if(text)return;
+    if(mod&&k==='v')return;
+    if(mod){const action={z:event.shiftKey?'redo':'undo',y:'redo',c:event.shiftKey?'copy-merged':'copy',x:'cut',a:'all',d:'deselect',j:'duplicate',w:'close-document'}[k];if(action){event.preventDefault();void this.run(()=>action==='close-document'?this.closeDocument():this.command(action));}return;}
+    if(event.key==='?'){event.preventDefault();void this.command('help');return;}
+    if(!this.entry)return;
+    if(event.code==='Space'){event.preventDefault();this.controller.space=true;return;}
+    if(event.key==='Escape'){this.controller.cancel();return;}
+    if(event.key==='Enter'){this.controller.commitTransform();this.controller.finishPath();return;}
+    const tool={v:'move',b:'brush',e:'eraser',m:'rect-select',l:'lasso',t:'text',i:'eyedropper',h:'hand',p:'pen'}[k];
+    if(tool){event.preventDefault();this.controller.cancel();this.tool=tool;this.session.tool=tool;this.update();this.notify(TOOL_HELP[tool]);}
+    if(event.key==='Delete'||event.key==='Backspace'){event.preventDefault();this.engine.remove();}
+    if(event.key==='['||event.key===']'){this.options.size=clamp(this.options.size+(event.key==='['?-2:2),1,240);this.updateOptions();}
   }
+
   saveLayout() {
     const panel = this.root.querySelector(".ed-inspector");
     try {
@@ -1155,6 +1035,8 @@ class EditorWorkspace {
     };
     this.overlay.addEventListener("pointerdown", (event) => {
       if (event.pointerType !== "touch") return;
+      if(this.controller?.pointerType==="pen"&&this.controller.pointerId!==null){event.preventDefault();event.stopImmediatePropagation();return;}
+      if(!this.entry)return;
       fingers.set(event.pointerId, { x: event.clientX, y: event.clientY });
       if (fingers.size === 2) {
         this.controller.cancel();
@@ -1186,23 +1068,14 @@ class EditorWorkspace {
     this.overlay.addEventListener("pointerup", end, { signal, capture: true });
     this.overlay.addEventListener("pointercancel", end, { signal, capture: true });
   }
-  dialog(title, content, bind) {
-    if (this.destroyed) throw new Error("편집 화면이 닫혔습니다.");
-    const d = document.createElement("dialog");
-    d.className = "ed-dialog";
-    this.dialogs ??= /* @__PURE__ */ new Set();
-    this.dialogs.add(d);
-    d.innerHTML = `<header><h2>${escape(title)}</h2><button type="button" data-close aria-label="닫기">×</button></header><div class="ed-dialog-content">${content}</div>`;
-    document.body.appendChild(d);
-    d.querySelector("[data-close]").onclick = () => d.close();
-    d.addEventListener("close", () => {
-      this.dialogs.delete(d);
-      d.remove();
-    }, { once: true });
-    d.showModal();
-    bind?.(d);
-    return d;
+  dialog(title,content,bind){
+    if(this.destroyed)throw new Error('편집 화면이 닫혔습니다.');
+    const d=document.createElement('dialog');d.className='ed-dialog';this.dialogs??=new Set();this.dialogs.add(d);
+    d.innerHTML=`<header><h2>${escape(title)}</h2><button type="button" data-close aria-label="닫기">×</button></header><div class="ed-dialog-content">${content}<div class="ed-dialog-status" role="status" aria-live="polite"></div></div>`;
+    document.body.appendChild(d);d.querySelector('[data-close]').onclick=()=>d.close();
+    d.addEventListener('close',()=>{this.dialogs.delete(d);d.remove();},{once:true});d.showModal();bind?.(d);return d;
   }
+
   numberDialog(title, value, commit) {
     this.dialog(title, `<form><label>값<input name="value" type="number" min="0" max="30" value="${value}"></label><button>적용</button></form>`, (d) => d.querySelector("form").onsubmit = (event) => {
       event.preventDefault();
@@ -1210,110 +1083,103 @@ class EditorWorkspace {
       d.close();
     });
   }
-  newDialog() {
-    this.dialog("새 작업", Object.keys(PRESETS).map((p) => `<button data-preset="${p}">${PRESETS[p].join("×")}</button>`).join(""), (d) => d.querySelectorAll("[data-preset]").forEach((b) => b.onclick = () => {
-      const entry = entryFor(this.session, b.dataset.preset);
-      entry.started = true;
-      this.useEntry(entry);
-      d.close();
-    }));
+  async flushEntries(){await Promise.allSettled(this.session.entries.map(entry=>entry.persistence.flush()));}
+  projectLabel(){return window.getAliasOnly?.(this.session.prefix,true)||(window.PROJECTS||[]).find(p=>p.id===this.session.projectId)?.name||'현재 프로젝트';}
+  folderLabel(prefix){const root=this.projectLabel();if(prefix===this.session.prefix)return root;const tail=prefix.slice(this.session.prefix.length).split('/').filter(Boolean);let path=this.session.prefix;return[root,...tail.map(part=>{path+=part+'/';return window.getAliasOnly?.(path,true)||part;})].join(' / ');}
+  parentFolder(prefix){const parent=prefix.split('/').filter(Boolean).slice(0,-1).join('/')+'/';return parent.startsWith(this.session.prefix)?parent:this.session.prefix;}
+  adoptEntry(entry){if(this.session.entries.length>=8){entry.persistence.stop();entry.engine.destroy();throw new Error('열린 작업은 최대 8개입니다.');}this.session.entries.push(entry);entry.started=true;this.useEntry(entry);}
+  choose(title,message,buttons){return new Promise(resolve=>{let choice='cancel';const d=this.dialog(title,`<p>${escape(message)}</p><div class="ed-choice-actions">${buttons.map(([id,label])=>`<button data-choice="${id}" type="button">${escape(label)}</button>`).join('')}</div>`,dialog=>dialog.querySelectorAll('[data-choice]').forEach(button=>button.onclick=()=>{choice=button.dataset.choice;dialog.close();}));d.addEventListener('close',()=>resolve(choice),{once:true});});}
+  async saveDocument(saveAs=false,entry=this.entry){
+    if(!entry)throw new Error('먼저 새 작업을 시작하세요.');
+    if(entry===this.entry)this.controller.commitTransform();
+    if(!saveAs&&entry.engine.everSaved){await entry.persistence.save();this.notify('작업 저장됨');return true;}
+    return new Promise(resolve=>{let completed=false;const d=this.dialog(saveAs?'다른 이름으로 저장':'작업 저장',`<form><label>작업 이름<input name="title" maxlength="200" value="${escape(entry.engine.doc.title==='제목 없음'?'':entry.engine.doc.title)}" placeholder="예: 캐릭터 표정 보정" required></label><p>저장 위치: ${escape(this.projectLabel())} / 편집 작업</p><p>레이어와 마스크를 보존합니다. 이미지 파일은 이미지 내보내기로 만듭니다.</p><button type="submit" class="ed-primary">작업 저장</button></form>`,dialog=>dialog.querySelector('form').onsubmit=event=>{event.preventDefault();const form=event.currentTarget,title=new FormData(form).get('title').trim();if(!title)return;void this.run(async()=>{const submit=form.querySelector('button');submit.disabled=true;dialog.querySelector('[data-close]').disabled=true;dialog.oncancel=event=>event.preventDefault();try{this.notify('작업 저장 중…',dialog);if(saveAs)await entry.persistence.saveAs(title);else await entry.persistence.save(title);completed=true;dialog.close();resolve(true);this.update();}finally{submit.disabled=false;dialog.querySelector('[data-close]').disabled=false;dialog.oncancel=null;}});});d.addEventListener('close',()=>{if(!completed)resolve(false);},{once:true});});
   }
-  async pickFiles(add = false, replace = false) {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = "image/png,image/jpeg,image/webp";
-    input.multiple = add && !replace;
-    input.onchange = () => {
-      void this.run(async () => {
-        if (replace) {
-          const l = this.engine.layer();
-          if (l?.type !== "image" || l.locked) throw new Error("잠기지 않은 이미지 레이어를 선택하세요.");
-          const temp = new EditorEngine();
-          const added = await temp.addImage(input.files[0]);
-          const c = copy(temp.assets.get(added.data.assetId).canvas), assetId = this.engine.register(c);
-          this.engine.patch({ data: { ...l.data, assetId }, width: c.width, height: c.height }, "이미지 교체");
-          temp.destroy();
-        } else await this.importFiles(input.files, add);
-      });
+  newDialog(){return this.imagePicker(false);}
+
+  async pickFiles(add=false,replace=false){
+    const input=document.createElement('input');input.type='file';input.accept='image/png,image/jpeg,image/webp';input.multiple=add&&!replace;
+    input.onchange=()=>void this.run(async()=>{
+      if(!input.files.length)return;
+      if(replace){const entry=this.entry,layer=entry?.engine.layer();if(layer?.type!=='image'||layer.locked)throw new Error('잠기지 않은 이미지 레이어를 선택하세요.');const stage=new EditorEngine();try{const added=await stage.addImage(input.files[0]);const c=copy(stage.assets.get(added.data.assetId).canvas);entry.engine.patch({data:{...layer.data,assetId:entry.engine.register(c)},width:c.width,height:c.height},'이미지 교체');}finally{stage.destroy();}}
+      else await this.importFiles(input.files,add);
+    });input.click();
+  }
+
+  async importFiles(files,add,guard=()=>!this.destroyed){
+    const list=[...files];if(!list.length)return;
+    let entry=add?this.entry:null;
+    if(!entry){entry=entryFor(this.session,'square',false);try{await entry.engine.addImage(list.shift(),{original:true,guard});entry.engine.doc.title='제목 없음';entry.engine.baseline();this.adoptEntry(entry);}catch(error){entry.persistence.stop();entry.engine.destroy();throw error;}}
+    for(const file of list)await entry.engine.addImage(file,{guard});
+    if(this.entry===entry)this.fit();
+  }
+
+  async openKey(key,add,guard=()=>!this.destroyed){
+    this.notify('이미지 불러오는 중…');const response=await fetch('/i/'+key.split('/').map(encodeURIComponent).join('/'),{cache:'no-store'});if(!response.ok)throw new Error('이미지를 불러오지 못했습니다.');
+    const blob=await response.blob();
+    if(!guard())throw new Error('이미지 불러오기가 취소되었습니다.');
+    if(add&&this.entry){await this.engine.addImage(blob,{guard});this.fit();return;}
+    const entry=entryFor(this.session,'square',false);try{await entry.engine.addImage(blob,{original:true,key,guard});entry.engine.doc.title='제목 없음';entry.engine.baseline();this.adoptEntry(entry);}catch(error){entry.persistence.stop();entry.engine.destroy();throw error;}
+  }
+
+  async imagePicker(add=false){
+    if(add&&!this.entry)throw new Error('먼저 새 작업을 시작하세요.');
+    const d=this.dialog(add?'현재 작업에 이미지 불러오기':'새 작업',`<p>${add?'이미지를 현재 작업의 새 레이어로 배치합니다.':'이미지로 시작하거나 빈 캔버스를 만드세요. 파일 선택을 취소하면 작업을 만들지 않습니다.'}</p><div class="ed-source-actions"><button type="button" data-local>내 기기 이미지 선택</button>${!add?`<details><summary>빈 캔버스로 시작</summary>${Object.entries(PRESETS).map(([id,size])=>`<button data-blank="${id}">${{landscape:'가로형',square:'정사각형',portrait:'세로형'}[id]} ${size.join('×')} px</button>`).join('')}</details>`:''}</div><h3>프로젝트 이미지에서 선택</h3><nav class="ed-library-path"></nav><input class="ed-search" type="search" placeholder="별명 · 파일 이름 검색" aria-label="이미지 검색"><div class="ed-library"></div>`);
+    let prefix=this.session.prefix,records=[],loadVersion=0;
+    const grid=d.querySelector('.ed-library');
+    const filter=()=>{const q=d.querySelector('.ed-search').value.toLocaleLowerCase();for(const record of records)record.element.hidden=!record.search.includes(q);};
+    const load=async()=>{
+      const version=++loadVersion;this.notify('폴더와 이미지를 불러오는 중…',d);grid.replaceChildren();records=[];
+      const response=await fetch(`/api/list?prefix=${encodeURIComponent(prefix)}`,{cache:'no-store'});if(!response.ok)throw new Error('프로젝트 목록을 불러오지 못했습니다.');const result=await response.json();if(!d.open||version!==loadVersion)return;
+      d.querySelector('.ed-library-path').textContent=this.folderLabel(prefix);
+      if(prefix!==this.session.prefix)grid.appendChild(createAssetParentCard(()=>{prefix=this.parentFolder(prefix);void this.run(load);}));
+      for(const folder of (result.folders||[]).filter(path=>!path.split('/').some(part=>part.startsWith('__')))){
+        const raw=folder.split('/').filter(Boolean).at(-1),alias=window.getAliasOnly?.(folder,true)||'',image=getSelectionFolderImage(folder);
+        const element=createAssetFolderCard({folderName:raw,alias,image,onClick:()=>{prefix=folder;void this.run(load);}});grid.appendChild(element);records.push({element,search:`${alias} ${raw}`.toLocaleLowerCase()});
+      }
+      for(const file of (result.files||[]).filter(file=>/\.(png|jpe?g|webp)$/i.test(file.key))){
+        const raw=file.key.split('/').at(-1),alias=getSelectionFileAlias(file.key);
+        const element=createAssetImageCard({fileName:raw,alias,fileUrl:'/i/'+file.key.split('/').map(encodeURIComponent).join('/'),onClick:()=>void this.run(async()=>{element.disabled=true;try{await this.openKey(file.key,add,()=>d.open&&!this.destroyed);d.close();}finally{element.disabled=false;}})});grid.appendChild(element);records.push({element,search:`${alias} ${raw}`.toLocaleLowerCase()});
+      }
+      this.notify(records.length?'이미지를 선택하세요.':'이 폴더에는 불러올 이미지가 없습니다.',d);filter();
     };
-    input.click();
+    d.querySelector('[data-local]').onclick=()=>{const input=document.createElement('input');input.type='file';input.accept='image/png,image/jpeg,image/webp';input.multiple=add;input.onchange=()=>{if(!input.files.length)return;void this.run(async()=>{this.notify('이미지 불러오는 중…',d);await this.importFiles(input.files,add,()=>d.open&&!this.destroyed);d.close();});};input.click();};
+    d.querySelectorAll('[data-blank]').forEach(button=>button.onclick=()=>{const entry=entryFor(this.session,button.dataset.blank);entry.started=true;this.useEntry(entry);d.close();});d.querySelector('.ed-search').oninput=filter;await load();
   }
-  async importFiles(files, add) {
-    if (!add) this.useEntry(entryFor(this.session));
-    for (const file of files) {
-      await this.engine.addImage(file, { original: !this.engine.doc.layers.length });
-    }
-    this.fit();
-  }
-  async openKey(key, add) {
-    const response = await fetch("/i/" + key.split("/").map(encodeURIComponent).join("/"), { cache: "no-store" });
-    if (!response.ok) throw new Error("원본 이미지를 열지 못했습니다.");
-    if (!add) this.useEntry(entryFor(this.session));
-    await this.engine.addImage(await response.blob(), { original: !this.engine.doc.layers.length, key });
-    this.fit();
-  }
-  async library(add = false) {
-    const d = this.dialog(add ? "이미지 레이어 추가" : "프로젝트 이미지 열기", '<input class="ed-search" placeholder="이미지 검색" aria-label="이미지 검색"><div class="ed-library"></div>');
-    const list = d.querySelector(".ed-library");
-    let prefix = this.session.prefix;
-    const load = async () => {
-      list.textContent = "불러오는 중…";
-      const response = await fetch(`/api/list?prefix=${encodeURIComponent(prefix)}`, { cache: "no-store" });
-      if (!response.ok) throw new Error("목록을 열지 못했습니다.");
-      const data = await response.json();
-      list.innerHTML = `${prefix !== this.session.prefix ? "<button data-parent>↑ 상위 폴더</button>" : ""}${(data.folders || []).filter((p) => !p.includes("__editor")).map((p) => `<button data-folder="${escape(p)}">▣ ${escape(p.split("/").filter(Boolean).at(-1))}</button>`).join("")}${(data.files || []).filter((f) => /\.(png|jpe?g|webp)$/i.test(f.key)).map((f) => `<button data-file="${escape(f.key)}"><img loading="lazy" src="/i/${f.key.split("/").map(encodeURIComponent).join("/")}" alt=""><span>${escape(f.key.split("/").at(-1))}</span></button>`).join("")}`;
-      list.querySelector("[data-parent]")?.addEventListener("click", () => {
-        prefix = prefix.split("/").filter(Boolean).slice(0, -1).join("/") + "/";
-        if (prefix.length < this.session.prefix.length) prefix = this.session.prefix;
-        void this.run(load);
-      });
-      list.querySelectorAll("[data-folder]").forEach((b) => b.onclick = () => {
-        prefix = b.dataset.folder;
-        void this.run(load);
-      });
-      list.querySelectorAll("[data-file]").forEach((b) => b.onclick = () => {
-        void this.run(async () => {
-          await this.openKey(b.dataset.file, add);
-          d.close();
+
+  async recent(){
+    const d=this.dialog('작업 불러오기',`<p>저장 위치: R2 · ${escape(this.projectLabel())} / 편집 작업</p><div class="ed-source-actions"><button data-kind="saved">저장한 작업</button><button data-kind="autosave">임시 편집 이어하기</button></div><div class="ed-work-list"></div><details><summary>이전 편집기 테스트 데이터 정리</summary><p>이전 편집기의 작업·복구본·백업을 삭제합니다. 현재 버전의 작업과 원본 이미지는 유지합니다.</p><label><input type="checkbox" data-outputs>이전 편집기가 만든 출력 이미지도 포함</label><button data-inspect>삭제 대상 확인</button><div data-inventory></div></details>`);
+    let kind='saved',loadVersion=0;const projectId=encodeURIComponent(this.session.projectId);
+    const load=async()=>{
+      const version=++loadVersion;d.querySelector('.ed-work-list').replaceChildren();d.querySelectorAll('[data-kind]').forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.kind===kind)));
+      this.notify('작업 목록을 불러오는 중…',d);const result=await api(`/documents?projectId=${projectId}&kind=${kind}`);if(!d.open||version!==loadVersion)return;
+      const list=d.querySelector('.ed-work-list');list.replaceChildren();
+      for(const row of result.documents){
+        if(!row.id)continue;const item=document.createElement('div');item.className='ed-work-row';
+        const query=new URLSearchParams({projectId:this.session.projectId,kind,...(row.sessionId?{sessionId:row.sessionId}:{})});
+        item.innerHTML=`<button data-open><img class="ed-recent-preview" loading="lazy" src="/api/editor/v2/documents/${row.id}/preview?${query}" alt=""><span>${escape(row.title)}<small>${escape(new Date(row.updatedAt).toLocaleString())}</small></span></button><button data-delete aria-label="${escape(row.title)} 삭제">삭제</button>`;
+        item.querySelector('[data-open]').onclick=()=>void this.run(async()=>{
+          const opened=this.session.entries.find(entry=>entry.engine.doc.id===row.id);
+          if(opened){this.useEntry(opened);d.close();this.notify('이미 열려 있는 작업으로 이동했습니다.');return;}
+          const entry=entryFor(this.session,'square',false);try{await entry.persistence.open(row);if(!d.open||this.destroyed)throw new Error('작업 불러오기가 취소되었습니다.');this.adoptEntry(entry);d.close();}catch(error){entry.persistence.stop();entry.engine.destroy();throw error;}
         });
-      });
+        item.querySelector('[data-delete]').onclick=()=>void this.run(async()=>{
+          const answer=await this.choose('작업 삭제',`“${row.title}”${kind==='saved'?'와 연결된 임시 편집':' 임시 편집'}을 삭제합니다. 원본·내보낸 이미지는 유지합니다.`,[['delete','삭제'],['cancel','취소']]);if(answer!=='delete')return;
+          const opened=this.session.entries.filter(entry=>entry.engine.doc.id===row.id&&(kind==='saved'||entry.persistence.sessionId===row.sessionId));
+          for(const entry of opened){if(!await this.closeDocument(entry,true))return;}
+          await api(`/documents/${row.id}?${query}`,{method:'DELETE'});this.notify('작업과 전용 이미지 자산을 삭제했습니다.',d);await load();
+        });list.appendChild(item);
+      }
+      if(!list.children.length)list.textContent=kind==='saved'?'저장한 작업이 없습니다.':'이어할 임시 편집이 없습니다.';
+      this.notify(kind==='saved'?'작업 저장은 레이어와 편집 정보를 보존합니다.':'임시 저장: 프로젝트당 10개 · 256 MiB · 마지막 저장 후 7일. 정식 저장과 구분됩니다.',d);
     };
-    d.querySelector(".ed-search").oninput = (event) => list.querySelectorAll("[data-file]").forEach((b) => b.hidden = !b.dataset.file.toLowerCase().includes(event.target.value.toLowerCase()));
-    await load();
+    d.querySelector('[data-inspect]').onclick=()=>void this.run(async()=>{
+      const includeOutputs=d.querySelector('[data-outputs]').checked;const inventory=await api('/maintenance/legacy?includeOutputs='+(includeOutputs?'1':'0'));
+      const box=d.querySelector('[data-inventory]');box.innerHTML=`<p>${inventory.count}개 · ${(inventory.bytes/1048576).toFixed(1)} MiB</p><pre>${escape(inventory.keys.join('\n')||'삭제 대상 없음')}</pre><button data-clean ${inventory.count?'':'disabled'}>확인한 대상 모두 삭제</button>`;
+      box.querySelector('[data-clean]').onclick=()=>void this.run(async()=>{if(await this.choose('이전 데이터 영구 삭제','확인한 이전 편집기 데이터를 삭제합니다. 되돌릴 수 없습니다.',[['delete','영구 삭제'],['cancel','취소']])!=='delete')return;const result=await api('/maintenance/legacy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:inventory.token,includeOutputs})});box.textContent=`${result.deleted}개 삭제됨`;this.notify('이전 데이터 정리 완료',d);});
+    });d.querySelectorAll('[data-kind]').forEach(button=>button.onclick=()=>{kind=button.dataset.kind;void this.run(load);});await load();
   }
-  async recent() {
-    const { documents } = await api(`/documents?projectId=${encodeURIComponent(this.session.projectId)}`);
-    this.dialog("저장 작업", documents.map((v) => `<button data-id="${v.id}"><img class="ed-recent-preview" loading="lazy" src="/api/editor/documents/${v.id}/preview" alt="">${escape(v.title)} <small>${escape(v.updated_at)}</small></button>`).join("") || "<p>저장한 작업이 없습니다.</p>", (d) => d.querySelectorAll("[data-id]").forEach((b) => b.onclick = () => {
-      void this.run(async () => {
-        const entry = entryFor(this.session);
-        await entry.persistence.open(b.dataset.id);
-        this.useEntry(entry);
-        d.close();
-      });
-    }));
-  }
-  async recoveries() {
-    const rows = (await local("list")).filter((r) => r.projectId === this.session.projectId && r.kind !== "template");
-    this.dialog("로컬 복구본", rows.map((v) => `<button data-id="${v.id}">${escape(v.title)} · ${new Date(v.updatedAt).toLocaleString()}</button>`).join("") || "<p>복구본이 없습니다.</p>", (d) => d.querySelectorAll("[data-id]").forEach((b) => b.onclick = () => {
-      void this.run(async () => {
-        const entry = entryFor(this.session);
-        await entry.persistence.recover(b.dataset.id);
-        this.useEntry(entry);
-        d.close();
-      });
-    }));
-  }
-  async versions() {
-    const { versions } = await api(`/documents/${this.engine.doc.id}/versions`);
-    this.dialog("저장 버전", versions.map((v) => `<button data-version="${v.id}">${escape(v.created_at)}</button>`).join("") || "<p>저장 버전이 없습니다.</p>", (d) => d.querySelectorAll("[data-version]").forEach((b) => b.onclick = () => {
-      void this.run(async () => {
-        if (this.engine.dirty) await this.entry.persistence.save();
-        await this.entry.persistence.open(this.engine.doc.id, b.dataset.version);
-        this.fit();
-        d.close();
-      });
-    }));
-  }
+
   addText(p) {
     this.dialog("텍스트 추가", '<form><textarea name="text" rows="5" placeholder="여러 줄 텍스트" required></textarea><button>레이어로 추가</button></form>', (d) => d.querySelector("form").onsubmit = (event) => {
       event.preventDefault();
@@ -1414,7 +1280,7 @@ class EditorWorkspace {
       dialog.close();
     });
   }
-  copySelection(cut, merged = false) {
+  async copySelection(cut, merged = false) {
     const e = this.engine, l = e.layer();
     let c = e.renderer.render(e.doc, merged || !l ? {} : { onlyLayerId: l.id });
     if (e.selection) {
@@ -1423,7 +1289,10 @@ class EditorWorkspace {
       ctx.drawImage(e.selection, 0, 0);
     }
     clipboard = { canvas: c, width: c.width, height: c.height };
+    let system=false;
+    if(navigator.clipboard?.write&&window.ClipboardItem){try{await navigator.clipboard.write([new ClipboardItem({'image/png':blobOf(c)})]);system=true;}catch{}}
     if (cut) {
+      if(this.engine!==e||this.destroyed)throw new Error('복사하는 동안 작업이 바뀌었습니다. 잘라내기를 다시 실행하세요.');
       if (!l || !["paint", "image"].includes(l.type)) throw new Error("이미지 또는 페인트 레이어를 선택하세요.");
       if (l.locked && !l.data.original) throw new Error("잠긴 레이어입니다.");
       if (l.type === "paint" && !l.locked) {
@@ -1462,9 +1331,13 @@ class EditorWorkspace {
         e.emit();
       }
     }
-    this.notify("선택 이미지를 복사했습니다.");
+    this.notify(system?"이미지를 시스템 클립보드에 복사했습니다.":"브라우저 권한 제한으로 편집기 안에 복사했습니다. 편집 메뉴의 붙여넣기를 사용할 수 있습니다.");
   }
-  paste() {
+  async paste(){
+    if(navigator.clipboard?.read){try{const items=await navigator.clipboard.read();for(const item of items){const type=item.types.find(type=>type.startsWith('image/'));if(type){await this.importFiles([await item.getType(type)],!!this.entry);return;}}}catch{}}
+    if(clipboard&&this.entry)return this.pasteInternal();throw new Error('붙여넣을 이미지가 없습니다. 이미지 파일을 복사한 뒤 Ctrl/Cmd+V를 사용하세요.');
+  }
+  pasteInternal() {
     if (!clipboard) return;
     const e = this.engine, l = newLayer("image", clipboard.width, clipboard.height, { assetId: e.register(copy(clipboard.canvas)) });
     l.name = "붙여넣은 이미지";
@@ -1569,89 +1442,24 @@ class EditorWorkspace {
       d.close();
     });
   }
-  savePreset() {
-    const l = this.engine.layer();
-    const value = { options: this.options, effects: l?.effects || [], style: l?.style || {} };
-    localStorage.setItem("imggul-editor-preset", JSON.stringify(value));
-    this.saveLayout();
-    this.notify("브러시·보정·스타일 프리셋 저장됨");
-  }
-  loadPreset() {
-    const raw = localStorage.getItem("imggul-editor-preset");
-    if (!raw) throw new Error("저장한 프리셋이 없습니다.");
-    const p = JSON.parse(raw);
-    this.options = { ...this.options, ...p.options };
-    if (this.engine.layer()) this.engine.patch({ effects: p.effects, style: p.style }, "프리셋 적용");
-    const layout = JSON.parse(localStorage.getItem("imggul-editor-layout") || "{}");
-    this.root.classList.toggle("ed-panel-hidden", !!layout.hidden);
-    this.update();
-  }
-  async saveTemplate() {
-    this.controller.commitTransform();
-    const pack = await this.engine.pack();
-    await local("put", { id: `template_${uid()}`, kind: "template", projectId: this.session.projectId, title: this.engine.doc.title, document: pack.document, blobs: pack.blobs, updatedAt: Date.now() });
-    this.notify("현재 레이어 구성을 로컬 템플릿으로 저장했습니다.");
-  }
-  async templates() {
-    const rows = (await local("list")).filter((row) => row.kind === "template");
-    this.dialog("작업 템플릿", rows.map((row) => `<button data-template="${row.id}">${escape(row.title)}</button>`).join("") || "<p>저장된 템플릿이 없습니다.</p>", (dialog) => dialog.querySelectorAll("[data-template]").forEach((button2) => button2.onclick = () => void this.run(async () => {
-      const row = rows.find((row2) => row2.id === button2.dataset.template), entry = entryFor(this.session, row.document.preset), doc = clone(row.document), blobs = new Map(row.blobs.map((a) => [a.id, a.blob]));
-      doc.id = entry.engine.doc.id;
-      doc.projectId = this.session.projectId;
-      doc.prefix = this.session.prefix;
-      doc.title += " · 템플릿";
-      await entry.engine.hydrate(doc, (id) => blobs.get(id));
-      entry.engine.savedId = "";
-      entry.started = true;
-      this.useEntry(entry);
-      dialog.close();
-    })));
-  }
-  batchPreset() {
-    const raw = localStorage.getItem("imggul-editor-preset");
-    if (!raw) throw new Error("저장한 프리셋이 없습니다.");
-    const preset = JSON.parse(raw);
-    if (!preset.effects?.length) throw new Error("보정 효과가 있는 레이어를 프리셋으로 저장하세요.");
-    for (const entry of this.session.entries) {
-      const layer = newLayer("adjustment", entry.engine.doc.width, entry.engine.doc.height);
-      layer.name = "일괄 보정";
-      layer.effects = clone(preset.effects);
-      entry.engine.transaction("보정 프리셋 일괄 적용", () => entry.engine.doc.layers.push(layer));
+  async closeDocument(entry=this.entry,discard=false){
+    if(!entry)return true;
+    if(entry===this.entry)this.controller?.cancel();
+    clearTimeout(entry.persistence.timer);
+    if(entry.engine.dirty&&!discard){
+      const choice=await this.choose('작업 닫기','저장하지 않은 편집이 있습니다.',[['save','작업 저장 후 닫기'],['discard','저장하지 않고 닫기'],['cancel','취소']]);
+      if(choice==='cancel')return false;
+      if(choice==='save'&&!await this.saveDocument(false,entry))return false;
     }
-    this.notify("열린 작업에 보정 프리셋을 적용했습니다. 각 작업에서 되돌릴 수 있습니다.");
+    entry.persistence.suspended=true;
+    try{if(entry.persistence.active)await entry.persistence.active.catch(()=>{});await entry.persistence.discardAuto();entry.persistence.stop();}
+    catch(error){entry.persistence.suspended=false;entry.persistence.onChange();throw error;}
+    const current=entry===this.entry;
+    this.session.entries=this.session.entries.filter(value=>value!==entry);
+    if(current)this.useEntry(this.session.entries.at(-1)||null);else this.renderTabs();
+    entry.engine.destroy();return true;
   }
-  async openCandidateSource(candidate) {
-    if (!candidate?.sourceDocument) throw new Error("요청 당시 작업이 없습니다.");
-    const source = this.engine, pack = await source.pack(), snapshot = clone(candidate.sourceDocument), entry = entryFor(this.session, snapshot.preset);
-    snapshot.id = entry.engine.doc.id;
-    snapshot.title += " · AI 요청 당시";
-    snapshot.assets = pack.document.assets;
-    snapshot.candidates = [{ ...clone(candidate), documentId: snapshot.id }];
-    await entry.engine.hydrate(snapshot, (id) => pack.blobs.find((asset) => asset.id === id).blob);
-    entry.engine.savedId = "";
-    entry.started = true;
-    this.useEntry(entry);
-    entry.ai.add(snapshot.candidates[0]);
-  }
-  async duplicateDocument() {
-    const source = this.engine;
-    await source.whenIdle();
-    const pack = await source.pack(), entry = entryFor(this.session, source.doc.preset);
-    pack.document.id = entry.engine.doc.id;
-    pack.document.title += " 복사";
-    await entry.engine.hydrate(pack.document, (id) => pack.blobs.find((a) => a.id === id).blob);
-    entry.engine.savedId = "";
-    this.useEntry(entry);
-  }
-  async closeDocument() {
-    const entry = this.entry;
-    if (entry.ai.running) throw new Error("생성 중인 작업은 결과 수신을 중단한 뒤 닫으세요.");
-    if (entry.engine.dirty) await entry.persistence.save();
-    entry.persistence.stop();
-    entry.engine.destroy();
-    this.session.entries = this.session.entries.filter((v) => v !== entry);
-    this.useEntry(this.session.entries.at(-1) || entryFor(this.session));
-  }
+
   commandPalette() {
     const items = [...this.root.querySelectorAll(".ed-menu [data-action]")].map((b) => ({ action: b.dataset.action, text: b.textContent, effect: b.dataset.effect })).filter((v) => v.action !== "commands");
     this.dialog("명령 검색", '<input class="ed-search" placeholder="명령 이름"><div class="ed-command-results"></div>', (d) => {
@@ -1668,133 +1476,59 @@ class EditorWorkspace {
       show("");
     });
   }
-  updateAI() {
-    const target = this.root.querySelector(".ed-ai");
-    if (!target || target.contains(document.activeElement) && document.activeElement.matches("input,textarea,select")) return;
-    const settings = this.entry.settings;
-    target.innerHTML = `<h3>선택 영역 AI 수정</h3><p>선택한 부분만 다시 생성하고 레이어로 비교합니다.</p>${select("ai.model", "모델", settings.model, MODELS)}${select("ai.input", "입력", settings.input, [["composite", "현재 합성"], ["original", "원본"]])}<label>프롬프트<textarea data-field="ai.prompt">${escape(settings.prompt)}</textarea></label><label>제외 프롬프트<textarea data-field="ai.negative">${escape(settings.negative)}</textarea></label>${field("ai.strength", "강도", settings.strength, "number", 'min="0.01" max="1" step="0.05"')}${field("ai.steps", "Steps", settings.steps, "number", 'min="1" max="50"')}${field("ai.scale", "Scale", settings.scale, "number", 'min="1" max="20" step="0.5"')}${field("ai.seed", "Seed (-1 무작위)", settings.seed)}${field("ai.count", "후보 요청 수", settings.count, "number", 'min="1" max="8"')}<p class="ed-cost"></p><p class="ed-ai-status" role="status">${escape(this.entry.ai.status)}</p>${this.entry.ai.running ? button("ai-cancel", "결과 수신 중단") : button("ai-generate", "선택 영역 생성", 'class="ed-primary"')}${button("candidate-clear", "후보 미리보기 해제")}<div class="ed-candidates">${this.engine.doc.candidates.map((c) => `<article><canvas data-candidate="${c.id}" width="128" height="96"></canvas><small>${escape(c.createdAt)} · seed ${escape(c.settings.seed)}</small>${button("candidate-preview", "비교", `data-id="${c.id}"`)}${button("candidate-add", "레이어로 추가", `data-id="${c.id}"`)}${c.sourceDocument ? button("candidate-source", "요청 당시 작업 열기", `data-id="${c.id}"`) : ""}${button("candidate-delete", "삭제", `data-id="${c.id}"`)}</article>`).join("")}</div>`;
-    target.querySelectorAll("[data-candidate]").forEach((c) => {
-      const candidate = this.engine.doc.candidates.find((v) => v.id === c.dataset.candidate), bitmap = this.engine.assets.get(candidate.assetId)?.canvas;
-      if (bitmap) c.getContext("2d").drawImage(bitmap, 0, 0, 128, 96);
-    });
-    this.costText();
-  }
-  costText() {
-    const target = this.root.querySelector(".ed-cost");
-    if (!target) return;
-    const s = this.entry.settings, cost = estimate(s, this.engine.doc.width, this.engine.doc.height, this.subscription);
-    this.approvedCost = cost;
-    target.textContent = `예상 ${cost.minimum === cost.maximum ? cost.maximum : `${cost.minimum}~${cost.maximum}`} Anlas · ${s.count}회 순차 요청${!this.subscription?.available ? " · 구독 미확인" : ""}`;
-  }
-  async generate() {
-    const approved = this.approvedCost || estimate(this.entry.settings, this.engine.doc.width, this.engine.doc.height);
-    await this.entry.ai.generate(clone(this.entry.settings), approved.maximum / Math.max(1, this.entry.settings.count));
-    this.updateAI();
-  }
-  exportDialog() {
-    const name = (this.engine.doc.title || "edited").replace(/\.[^.]+$/, "") + "_edited";
-    this.dialog("내보내기", `<form><label>형식<select name="format"><option value="webp">WebP</option><option value="png">PNG · 투명</option><option value="jpeg">JPEG · 배경색</option></select></label><label>품질<input name="quality" type="number" min="0.1" max="1" step="0.01" value="0.92"></label><label>JPEG 배경${colorControl('<input name="background" type="color" value="#ffffff">', "#ffffff", "JPEG 배경")}</label><label>파일명<input name="name" value="${escape(name)}" required></label><label>저장<select name="destination"><option value="download">다운로드</option><option value="project">프로젝트 이미지</option></select></label><label>폴더<input name="folder" value="${escape(this.session.prefix)}" readonly></label><button type="button" data-folder>폴더 선택</button><label><input name="batch" type="checkbox">열린 모든 작업 출력</label><p>현재 작업 규격으로 출력합니다. 각 작업의 편집 상태는 유지됩니다.</p><button>출력</button></form>`, (d) => {
-      d.querySelector("[data-folder]").onclick = () => void this.folderPicker((folder) => d.querySelector('[name="folder"]').value = folder);
-      d.querySelector("form").onsubmit = (event) => {
-        event.preventDefault();
-        const settings = Object.fromEntries(new FormData(event.currentTarget));
-        const entries = settings.batch ? this.session.entries.slice() : [this.entry];
-        void this.run(async () => {
-          for (const [i, entry] of entries.entries()) await this.exportEntry(entry, settings, i, entries.length);
-          d.close();
-        });
-      };
+
+
+
+
+
+
+  exportDialog(){
+    const entry=this.entry,name=(entry.engine.doc.title||'edited').replace(/\.[^.]+$/,'')+'_edited';
+    this.dialog('이미지 내보내기',`<form><label>형식<select name="format"><option value="png">PNG · 투명</option><option value="webp">WebP</option><option value="jpeg">JPEG · 배경색</option></select></label><label>품질<input name="quality" type="number" min="0.1" max="1" step="0.01" value="0.92"></label><label>JPEG 배경${colorControl('<input name="background" type="color" value="#ffffff">','#ffffff','JPEG 배경')}</label><label>파일명<input name="name" value="${escape(name)}" required></label><label>저장 위치<select name="destination"><option value="download">내 기기에 다운로드</option><option value="project">프로젝트 이미지 폴더</option></select></label><label>폴더<span data-path>${escape(this.folderLabel(this.session.prefix))}</span><input name="folder" type="hidden" value="${escape(this.session.prefix)}"></label><button type="button" data-folder>폴더 선택</button><p>현재 작업의 합성 이미지를 출력합니다. 레이어를 보존하려면 작업 저장을 사용하세요.</p><button type="submit">이미지 내보내기</button></form>`,d=>{
+      d.querySelector('[data-folder]').onclick=()=>void this.run(()=>this.folderPicker(folder=>{d.querySelector('[name="folder"]').value=folder;d.querySelector('[data-path]').textContent=this.folderLabel(folder);}));
+      d.querySelector('form').onsubmit=event=>{event.preventDefault();const form=event.currentTarget,settings=Object.fromEntries(new FormData(form)),submit=form.querySelector('[type="submit"]');void this.run(async()=>{submit.disabled=true;try{await this.exportEntry(entry,settings);d.close();}finally{submit.disabled=false;}});};
     });
   }
-  async folderPicker(commit) {
-    const d = this.dialog("저장 폴더", '<p class="ed-folder-path"></p><div class="ed-folder-list"></div><button data-use>이 폴더 사용</button>');
-    let prefix = this.session.prefix;
-    const load = async () => {
-      d.querySelector(".ed-folder-path").textContent = prefix;
-      const response = await fetch(`/api/list?prefix=${encodeURIComponent(prefix)}`, { cache: "no-store" });
-      if (!response.ok) throw new Error("폴더 목록을 열 수 없습니다.");
-      const result = await response.json(), list = d.querySelector(".ed-folder-list");
-      list.innerHTML = `${prefix !== this.session.prefix ? "<button data-parent>↑ 상위</button>" : ""}${result.folders.filter((p) => !p.includes("__editor")).map((p) => `<button data-path="${escape(p)}">${escape(p)}</button>`).join("")}`;
-      list.querySelector("[data-parent]")?.addEventListener("click", () => {
-        prefix = prefix.split("/").filter(Boolean).slice(0, -1).join("/") + "/";
-        if (prefix.length < this.session.prefix.length) prefix = this.session.prefix;
-        void this.run(load);
-      });
-      list.querySelectorAll("[data-path]").forEach((b) => b.onclick = () => {
-        prefix = b.dataset.path;
-        void this.run(load);
-      });
+  async folderPicker(commit){
+    const d=this.dialog('저장 폴더 선택','<p class="ed-folder-path"></p><div class="ed-library ed-folder-list"></div><button data-use>이 폴더 사용</button>');let prefix=this.session.prefix,loadVersion=0;
+    const load=async()=>{
+      const version=++loadVersion;this.notify('폴더를 불러오는 중…',d);d.querySelector('[data-use]').disabled=true;
+      const response=await fetch(`/api/list?prefix=${encodeURIComponent(prefix)}`,{cache:'no-store'});if(!response.ok)throw new Error('폴더 목록을 불러오지 못했습니다.');const result=await response.json();if(!d.open||version!==loadVersion)return;
+      d.querySelector('.ed-folder-path').textContent=this.folderLabel(prefix);const list=d.querySelector('.ed-folder-list');list.replaceChildren();
+      if(prefix!==this.session.prefix)list.appendChild(createAssetParentCard(()=>{prefix=this.parentFolder(prefix);void this.run(load);}));
+      for(const folder of (result.folders||[]).filter(path=>!path.split('/').some(part=>part.startsWith('__'))))list.appendChild(createAssetFolderCard({folderName:folder.split('/').filter(Boolean).at(-1),alias:window.getAliasOnly?.(folder,true)||'',image:getSelectionFolderImage(folder),onClick:()=>{prefix=folder;void this.run(load);}}));
+      d.querySelector('[data-use]').disabled=false;this.notify('저장할 폴더를 선택하세요.',d);
     };
-    d.querySelector("[data-use]").onclick = () => {
-      commit(prefix);
-      d.close();
-    };
-    await load();
+    d.querySelector('[data-use]').onclick=()=>{commit(prefix);d.close();};await load();
   }
+
   async readyFonts(engine) {
     const requests = engine.doc.layers.filter((l) => l.type === "text").map((l) => document.fonts.load(`${l.data.italic ? "italic " : ""}${l.data.bold ? "700" : "400"} ${l.data.size || 40}px "${l.data.font || "Noto Sans KR"}"`).catch(() => []));
     await Promise.all(requests);
     await document.fonts.ready;
   }
-  async exportEntry(entry, settings, index, total) {
-    await this.readyFonts(entry.engine);
-    const e = entry.engine, c = e.renderer.render(e.doc), capturedId = e.stateId, format = settings.format, type = `image/${format}`, quality = Number(settings.quality);
-    if (format === "jpeg") {
-      const ctx = c.getContext("2d");
-      ctx.globalCompositeOperation = "destination-over";
-      ctx.fillStyle = settings.background;
-      ctx.fillRect(0, 0, c.width, c.height);
+  async exportEntry(entry,settings){
+    await this.readyFonts(entry.engine);const e=entry.engine,capturedId=e.stateId,c=e.renderer.render(e.doc),format=settings.format;
+    if(format==='jpeg'){const ctx=c.getContext('2d');ctx.globalCompositeOperation='destination-over';ctx.fillStyle=settings.background;ctx.fillRect(0,0,c.width,c.height);}
+    const blob=await blobOf(c,`image/${format}`,Number(settings.quality)),fileName=settings.name.replace(/[\\/\x00-\x1f]/g,'_')+(format==='jpeg'?'.jpg':'.'+format);
+    if(settings.destination==='download'){const url=URL.createObjectURL(blob),a=document.createElement('a');a.href=url;a.download=fileName;a.click();setTimeout(()=>URL.revokeObjectURL(url),30000);this.notify('이미지 다운로드: '+fileName);return;}
+    if(e.stateId!==capturedId)throw new Error('준비 중 편집이 변경되었습니다. 다시 내보내세요.');
+    await entry.persistence.persist('autosave');
+    if(e.stateId!==capturedId)throw new Error('준비 중 편집이 변경되었습니다. 다시 내보내세요.');
+    const query=new URLSearchParams(queryFor(e,'autosave',entry.persistence.sessionId));query.set('key',settings.folder+fileName);query.set('format',format);
+    const send=()=>api(`/documents/${e.doc.id}/export?${query}`,{method:'POST',body:blob,headers:{'X-Editor-Revision':entry.persistence.autoRevision,'X-Editor-Request':uid()}});
+    let result;try{result=await send();}catch(error){
+      if(error.code==='OUTPUT_METADATA_PENDING'){this.metadataRetry(error);throw new Error('이미지는 저장되었지만 정보 연결이 남았습니다. 열린 재시도 창에서 완료하세요.');}
+      if(error.code!=='OUTPUT_EXISTS')throw error;
+      if(await this.choose('이미지 덮어쓰기',`${settings.folder+fileName} 파일이 있습니다. 이전 이미지 1개를 백업하고 덮어쓸까요?`,[['overwrite','덮어쓰기'],['cancel','취소']])!=='overwrite')throw new Error('내보내기를 취소했습니다.');
+      query.set('etag',error.etag);try{result=await send();}catch(retryError){if(retryError.code==='OUTPUT_METADATA_PENDING')this.metadataRetry(retryError);throw retryError;}
     }
-    const blob = await blobOf(c, type, quality), base = settings.name.replace(/[\\/\x00-\x1f]/g, "_"), fileName = base + (total > 1 ? `_${index + 1}` : "") + (format === "jpeg" ? ".jpg" : `.${format}`);
-    if (settings.destination === "download") {
-      const url = URL.createObjectURL(blob), a = document.createElement("a");
-      a.href = url;
-      a.download = fileName;
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 3e4);
-      this.notify(`출력됨: ${fileName}`);
-      return;
-    }
-    if (e.stateId !== capturedId) throw new Error("출력 준비 중 문서가 변경되었습니다. 다시 출력하세요.");
-    await entry.persistence.save();
-    if (e.stateId !== capturedId) throw new Error("저장 중 문서가 변경되었습니다. 다시 출력하세요.");
-    const exportRevision = e.revision;
-    const key = settings.folder + fileName, response = await fetch(`/api/editor/documents/${e.doc.id}/export?key=${encodeURIComponent(key)}&format=${format}`, { method: "POST", body: blob, headers: { "X-Editor-Revision": exportRevision, "X-Editor-Request": uid() } }), result = await response.json();
-    if (!response.ok) {
-      if (result.code === "OUTPUT_METADATA_PENDING") {
-        this.repairDialog(e.doc.id, result);
-        return;
-      }
-      if (result.code === "OUTPUT_EXISTS") {
-        this.dialog("같은 이름의 이미지가 있습니다.", `<p>${escape(key)}</p><p>현재 파일과 메타데이터를 백업한 뒤 이 결과로 갱신합니다.</p><button data-overwrite>백업 후 덮어쓰기</button>`, (dialog) => dialog.querySelector("[data-overwrite]").onclick = () => void this.run(async () => {
-          const retry = await fetch(`/api/editor/documents/${e.doc.id}/export?key=${encodeURIComponent(key)}&format=${format}&etag=${encodeURIComponent(result.etag)}`, { method: "POST", body: blob, headers: { "X-Editor-Revision": exportRevision } }), saved = await retry.json();
-          if (!retry.ok) {
-            if (saved.code === "OUTPUT_METADATA_PENDING") {
-              dialog.close();
-              this.repairDialog(e.doc.id, saved);
-              return;
-            }
-            throw new Error(saved.error);
-          }
-          dialog.close();
-          this.notify(`프로젝트 저장됨: ${saved.outputKey}`);
-          window.refreshGallery?.();
-        }));
-        return;
-      }
-      throw Object.assign(new Error(result.error), result);
-    }
-    this.notify(`프로젝트 저장됨: ${result.outputKey}`);
-    window.refreshGallery?.();
+    this.notify('프로젝트 이미지 저장됨: '+result.outputKey);window.refreshGallery?.();
   }
-  repairDialog(documentId, result) {
-    this.dialog("이미지 저장 후 연결 정보 복구", `<p>이미지는 저장되었습니다. 프로젝트 연결 정보 갱신을 다시 시도할 수 있습니다.</p><p>${escape(result.outputKey)}</p><button data-repair>연결 정보 복구</button>`, (dialog) => dialog.querySelector("[data-repair]").onclick = () => void this.run(async () => {
-      const repaired = await api(`/documents/${documentId}/repair`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ operationId: result.operationId }) });
-      dialog.close();
-      this.notify(`연결 정보 복구됨: ${repaired.outputKey}`);
-      window.refreshGallery?.();
-    }));
+  metadataRetry(error){
+    this.dialog('이미지 정보 저장 재시도',`<p>이미지 파일은 저장되었습니다. 작업 연결 정보 저장을 다시 시도하세요.</p><button data-retry>정보 저장 재시도</button>`,d=>d.querySelector('[data-retry]').onclick=()=>void this.run(async()=>{await api('/maintenance/output-repair',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({operationId:error.operationId})});this.notify('이미지 정보 저장 완료',d);window.refreshGallery?.();d.close();}));
   }
+
   destroy() {
     if (this.destroyed) return;
     this.cancelProperty();
@@ -1806,15 +1540,16 @@ class EditorWorkspace {
     this.detachObserver.disconnect();
     this.themeObserver.disconnect();
     this.curvePainters = [];
-    this.engine.removeEventListener("change", this.onEngineChange);
+    this.engine?.removeEventListener("change", this.onEngineChange);
     if (this.raf) cancelAnimationFrame(this.raf);
-    for (const entry of this.session.entries) if (entry.engine.dirty && (entry.started || entry.engine.doc.layers.length)) void entry.persistence.save().catch(() => {
+    for (const entry of this.session.entries) if (entry.engine.dirty && (entry.started || entry.engine.doc.layers.length)) void entry.persistence.flush().catch(() => {
     });
     this.session.view = null;
     for (const dialog of this.dialogs || []) dialog.close();
   }
 }
 window.addEventListener("beforeunload", (event) => {
+  for(const session of projects.values())for(const entry of session.entries)void entry.persistence.flush().catch(()=>{});
   if ([...projects.values()].some((session) => session.entries.some((entry) => (entry.started || entry.engine.doc.layers.length) && (entry.engine.dirty || entry.engine.isEditing)))) {
     event.preventDefault();
     event.returnValue = "";

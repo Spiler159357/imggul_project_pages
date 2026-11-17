@@ -2,7 +2,7 @@ import { PROJECT_PROMPT_FIELDS, PROJECT_SECTIONS, clearProjectCaches, clearRootP
 import { renderCharacterSection } from './character.js?v=planner-workspace-20261109a';
 import { closePlannerWorkspaceModals, getPlannerPlanScope, loadPlannerMeta, loadPlannerQueueMetas, loadPlannerSettings, loadPlannerMultiScopeData, normalizePlannerSettings, refreshPlannerBackgroundStatus, renderPlannerSection } from './planner.js?v=planner-workspace-20261109a';
 import { renderSituationSection } from './situation.js?v=planner-workspace-20261109a';
-import { renderEditorWorkspace } from '../editor/index.js?v=editor-color-20261117a';
+import { renderEditorWorkspace } from '../editor/index.js?v=editor-rework-20261117a';
 
 export async function renderProjectManage(skipHistory = true) {
     closePlannerWorkspaceModals();

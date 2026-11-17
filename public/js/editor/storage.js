@@ -1,160 +1,110 @@
-import { uid } from "./model.js";
-import { decode } from "./bitmap.js";
-async function api(path, options = {}) {
-  const response = await fetch(`/api/editor${path}`, { cache: "no-store", ...options });
-  const data = await response.json();
-  if (!response.ok) throw Object.assign(new Error(data.error || "저장 요청 실패"), { status: response.status, ...data });
-  return data;
+import { uid } from './model.js?v=editor-rework-20261117a';
+export async function api(path,options={},retry=0){
+  const response=await fetch(`/api/editor/v2${path}`,{cache:'no-store',...options,headers:{'X-Editor-Protocol':'2',...options.headers}});
+  const data=await response.json();if(response.status===423&&retry<8){await new Promise(resolve=>setTimeout(resolve,250*(retry+1)));return api(path,options,retry+1);}if(!response.ok)throw Object.assign(new Error(data.error||'작업 요청 실패'),data,{status:response.status});return data;
 }
-let databasePromise;
-function database() {
-  if (!databasePromise) databasePromise = new Promise((resolve, reject) => {
-    const r = indexedDB.open("imggul-editor-workspace", 1);
-    r.onupgradeneeded = () => r.result.createObjectStore("recovery", { keyPath: "id" });
-    r.onsuccess = () => resolve(r.result);
-    r.onerror = () => {
-      databasePromise = null;
-      reject(r.error);
-    };
-  });
-  return databasePromise;
+export function queryFor(engine,kind='saved',sessionId=''){
+  return new URLSearchParams({projectId:engine.doc.projectId||'global',kind,...(kind==='autosave'?{sessionId}:{})}).toString();
 }
-async function local(action, value) {
-  const db = await database();
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction("recovery", action === "put" || action === "delete" ? "readwrite" : "readonly"), s = tx.objectStore("recovery"), r = action === "list" ? s.getAll() : action === "put" ? s.put(value) : action === "delete" ? s.delete(value) : s.get(value);
-    let result;
-    r.onsuccess = () => {
-      result = r.result;
-    };
-    tx.oncomplete = () => resolve(result);
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () => reject(tx.error || new Error("복구 저장 중단"));
-  });
-}
-class Persistence {
-  constructor(engine, status) {
-    this.engine = engine;
-    this.status = status;
-    this.timer = null;
-    this.deadline = null;
-    this.active = null;
-    this.pending = null;
-    this.uploaded = /* @__PURE__ */ new Set();
-    this.disposed = false;
-    this.onChange = () => {
-      if (!engine.dirty || this.disposed || this.pending) return;
-      clearTimeout(this.timer);
-      this.timer = setTimeout(() => {
-        void this.save().catch(() => {
-        });
-      }, 2e3);
-      if (!this.deadline) this.deadline = setTimeout(() => {
-        void this.save().catch(() => {
-        });
-      }, 15e3);
-    };
-    engine.addEventListener("change", this.onChange);
+export class Persistence{
+  constructor(engine,status){
+    this.engine=engine;this.status=status;this.sessionId=uid();this.autoRevision='0';this.autoStateId=engine.stateId;this.timer=null;this.active=null;this.pending=new Map();this.disposed=false;this.abort=new AbortController();
+    this.onChange=()=>{if(this.disposed||this.suspended||this.temporaryUnavailable)return;clearTimeout(this.timer);this.timer=setTimeout(()=>void this.flush().catch(()=>{}),5000);};
+    engine.addEventListener('document:changed',this.onChange);
   }
-  async save() {
-    if (this.engine.isEditing) await new Promise((resolve) => {
-      const done = () => {
-        if (!this.engine.isEditing) {
-          this.engine.removeEventListener("change", done);
-          resolve();
-        }
-      };
-      this.engine.addEventListener("change", done);
-    });
-    if (this.active) return this.active.then(() => this.engine.dirty ? this.save() : void 0);
+  url(action='',kind='saved',documentId=this.engine.doc.id,sessionId=this.sessionId){return `/documents/${documentId}${action}?${queryFor(this.engine,kind,sessionId)}`;}
+  async flush(){
+    if(this.disposed||this.suspended||this.temporaryUnavailable)return;
+    if(this.engine.isEditing){this.status('편집 확정 후 임시 저장합니다.');if(!this.waitingIdle)this.waitingIdle=this.engine.whenIdle().then(()=>{this.waitingIdle=null;this.onChange();});return;}
+    if(this.active){await this.active.catch(()=>{});return this.flush();}
     clearTimeout(this.timer);
-    clearTimeout(this.deadline);
-    this.deadline = null;
-    this.active = this.run().finally(() => {
-      this.active = null;
-    });
+    if(!this.engine.dirty){if(this.autoRevision!=='0')await this.discardAuto();return;}
+    if(this.engine.stateId===this.autoStateId)return;
+    return this.persist('autosave');
+  }
+  async save(name=this.engine.doc.title){
+    await this.engine.whenIdle();if(this.disposed)throw new Error('닫힌 작업입니다.');
+    if(this.pending.get('saved')?.expired)throw new Error('저장 요청이 만료되었거나 작업이 삭제되었습니다. 작업 목록을 확인하거나 다른 이름으로 저장하세요.');
+    if(this.active){await this.active.catch(()=>{});return this.save(name);}
+    const result=await this.persist('saved',name);if(this.engine.dirty||this.engine.doc.title!==name)return this.save(name);return result;
+  }
+  async saveAs(name){
+    await this.engine.whenIdle();if(this.active)await this.active.catch(()=>{});
+    const pending=this.pending.get('saved'),retryId=pending?.newId&&!pending.expired&&pending.body.document.title===name?pending.newId:null;
+    if(!retryId)this.pending.delete('saved');return this.persist('saved',name,retryId||uid());
+  }
+  async persist(kind,name=null,newId=null){
+    if(this.disposed)throw new Error('닫힌 작업입니다.');
+    if(kind==='autosave'&&this.temporaryUnavailable)throw new Error('임시 저장이 중단되었습니다. 작업 목록을 확인한 뒤 작업 저장 또는 다른 이름으로 저장하세요.');
+    if(this.active){await this.active.catch(()=>{});return kind==='autosave'?this.flush():this.persist(kind,name,newId);}
+    clearTimeout(this.timer);
+    this.active=this.run(kind,name,newId).finally(()=>this.active=null);
     return this.active;
   }
-  async run() {
-    const e = this.engine, stateId = e.stateId, baseRevision = e.revision || "0";
-    this.status("로컬 복구 저장 중");
-    const pack = await e.pack();
-    let localOk = false;
-    const recovery = { id: e.doc.id, projectId: e.doc.projectId, title: pack.document.title, document: pack.document, blobs: pack.blobs, baseRevision, stateId, updatedAt: Date.now() };
-    try {
-      await local("put", recovery);
-      localOk = true;
-      this.status("로컬 복구됨 · 서버 저장 중");
-    } catch (error) {
-      this.status(`로컬 복구 실패 · 서버 저장 시도: ${error.message}`);
-    }
-    try {
-      for (const a of pack.blobs) {
-        if (this.uploaded.has(a.hash)) continue;
-        const response = await fetch(`/api/editor/assets/${a.hash}`, { method: "PUT", body: a.blob });
-        if (!response.ok) throw new Error((await response.json()).error || "자산 업로드 실패");
-        this.uploaded.add(a.hash);
+  async run(kind,name,newId){
+    const e=this.engine,sourceId=e.doc.id,sourceState=e.stateId;
+    this.status(kind==='saved'?'작업 저장 중…':'임시 저장 중…');
+    let pending=this.pending.get(kind);
+    try{
+      if(!pending){
+        const pack=await e.pack();if(this.disposed)throw new Error('닫힌 작업입니다.');
+        if(name!==null)pack.document.title=String(name).trim()||'제목 없음';
+        if(newId)pack.document.id=newId;
+        const stateId=sourceState,body={document:pack.document,stateId,manualStateId:kind==='saved'?stateId:e.savedId,initialStateId:e.initialStateId,manualRevision:kind==='saved'&&newId?'0':String(e.revision||'0'),baseRevision:kind==='saved'?newId?'0':String(e.revision||'0'):this.autoRevision,requestId:uid()};
+        pending={pack,body,sourceId,sourceState,kind,sessionId:this.sessionId,newId};this.pending.set(kind,pending);
       }
-      if (this.pending) throw new Error("이전 저장 요청을 재시도하거나 작업을 복제하세요.");
-      const payload = JSON.stringify({ document: pack.document, baseRevision, requestId: uid() });
-      this.pending = { payload, stateId };
-      const result = await api(`/documents/${e.doc.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: payload });
-      e.revision = result.revision;
-      e.savedId = stateId;
-      this.pending = null;
-      recovery.baseRevision = result.revision;
-      recovery.saved = true;
-      await local("put", recovery).catch(() => {
-      });
-      this.status(e.dirty ? "저장됨 · 새 변경 대기" : "서버 저장됨");
+      const options={signal:this.abort.signal};
+      if(!pending.ticketId){
+        const result=await api(this.url('/prepare',kind,pending.body.document.id,pending.sessionId),{...options,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pending.body)});
+        pending.ticketId=result.ticketId;pending.missing=result.missing;
+      }
+      for(const hash of pending.missing){
+        const asset=pending.pack.blobs.find(a=>a.hash===hash);if(!asset)throw new Error('전송할 이미지가 없습니다.');
+        await api(`/tickets/${pending.ticketId}/assets/${hash}?projectId=${encodeURIComponent(e.doc.projectId||'global')}`,{...options,method:'PUT',body:asset.blob});
+      }
+      const result=await api(`/tickets/${pending.ticketId}/commit?projectId=${encodeURIComponent(e.doc.projectId||'global')}`,{...options,method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(pending.body)});
+      this.pending.delete(kind);
+      if(kind==='saved'){
+        const snapshot=pending.body.document;
+        if(e.doc.id!==pending.sourceId)throw new Error('저장 중 작업 대상이 변경되었습니다. 저장 목록에서 결과를 확인하세요.');
+        e.doc.id=snapshot.id;e.doc.title=snapshot.title;e.revision=result.revision;e.savedId=pending.sourceState;e.everSaved=true;
+        await this.discardAuto(pending.sourceId).catch(()=>{});
+        this.status(e.dirty?'작업 저장됨 · 새 변경 있음':'작업 저장됨');
+      }else{this.autoRevision=result.revision;this.autoStateId=pending.sourceState;this.status('임시 저장됨 · 작업 저장 필요');}
       e.emit();
+      if(e.stateId!==pending.sourceState){if(kind==='saved')return this.status('작업 저장됨 · 새 변경 있음');this.onChange();}
       return result;
-    } catch (error) {
-      this.status(`${error.status === 409 ? "저장 충돌" : "서버 저장 실패"} · ${localOk ? "로컬 복구본 유지" : "로컬 저장도 실패"}: ${error.message}`);
-      throw error;
+    }catch(error){
+      if(error.status===410){if(pending)pending.expired=true;if(kind==='autosave')this.temporaryUnavailable=true;}
+      if([409,507].includes(error.status))this.pending.delete(kind);
+      this.status(`${kind==='saved'?'작업 저장 실패':'임시 저장 실패'}: ${error.message}`);throw error;
     }
   }
-  async retry() {
-    if (!this.pending) return this.save();
-    const result = await api(`/documents/${this.engine.doc.id}`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: this.pending.payload });
-    this.engine.revision = result.revision;
-    this.engine.savedId = this.pending.stateId;
-    this.pending = null;
-    this.status("서버 저장됨");
-    this.engine.emit();
+  async discardAuto(documentId=this.engine.doc.id){
+    const oldSession=this.sessionId;
+    if(this.autoRevision!=='0'||this.pending.has('autosave'))await api(this.url('', 'autosave',documentId,oldSession),{method:'DELETE'});
+    this.pending.delete('autosave');this.temporaryUnavailable=false;this.sessionId=uid();this.autoRevision='0';this.autoStateId=this.engine.stateId;
   }
-  async open(id, revision = "") {
-    const result = await api(`/documents/${id}${revision ? `?revision=${encodeURIComponent(revision)}` : ""}`);
-    await this.engine.hydrate(result.document, async (_, meta) => {
-      const r = await fetch(`/api/editor/assets/${meta.hash}`, { cache: "no-store" });
-      if (!r.ok) throw new Error("저장된 자산을 열지 못했습니다.");
-      this.uploaded.add(meta.hash);
-      return r.blob();
+  async open(row){
+    const kind=row.kind||'saved',sessionId=row.sessionId||'';
+    const result=await api(this.url('',kind,row.id,sessionId));
+    await this.engine.hydrate(result.document,async(_,meta)=>{
+      const response=await fetch(`/api/editor/v2/documents/${row.id}/assets/${meta.hash}?${queryFor({doc:result.document},kind,sessionId)}`,{cache:'no-store',signal:this.abort.signal});
+      if(!response.ok)throw new Error('작업 이미지를 불러오지 못했습니다. 목록을 다시 연 뒤 시도하세요.');return response.blob();
     });
-    this.engine.revision = result.revision;
-    if (revision && revision !== result.revision) {
-      this.engine.savedId = "";
-      this.status("이전 버전 · 새 버전으로 저장 가능");
-    } else this.status("서버 작업 열림");
+    const e=this.engine;e.stateId=result.stateId;e.initialStateId=result.initialStateId||result.stateId;
+    e.savedId=kind==='saved'?result.stateId:result.manualStateId;e.everSaved=kind==='saved'||Boolean(result.manualRevision&&result.manualRevision!=='0');
+    e.revision=kind==='saved'?result.revision:result.manualRevision||'0';
+    if(kind==='autosave'){this.sessionId=sessionId;this.autoRevision=result.revision;this.autoStateId=e.stateId;}
+    else{this.sessionId=uid();this.autoRevision='0';this.autoStateId=e.stateId;}
+    this.status(kind==='saved'?'작업 불러옴':'저장하지 않은 편집을 이어갑니다.');e.emit();
   }
-  async recover(id) {
-    const result = await local("get", id);
-    if (!result) throw new Error("복구본이 없습니다.");
-    const blobs = new Map(result.blobs.map((a) => [a.id, a.blob]));
-    await this.engine.hydrate(result.document, (assetId) => blobs.get(assetId));
-    this.engine.revision = result.baseRevision;
-    this.engine.savedId = result.saved ? this.engine.stateId : "";
-    this.status("로컬 복구본 열림");
-  }
-  stop() {
-    this.disposed = true;
-    clearTimeout(this.timer);
-    clearTimeout(this.deadline);
-    this.engine.removeEventListener("change", this.onChange);
-  }
+  stop(){this.disposed=true;clearTimeout(this.timer);this.abort.abort();this.engine.removeEventListener('document:changed',this.onChange);}
 }
-export {
-  Persistence,
-  api,
-  local
-};
+export function clearLegacyRecovery(notify=()=>{}){
+  if(!('indexedDB' in window))return;
+  // No recovery database is opened or used by this editor. Remove the retired one.
+  const request=indexedDB.deleteDatabase('imggul-editor-workspace');
+  request.onerror=()=>notify('이전 임시 저장소를 정리하지 못했습니다. 브라우저 사이트 데이터에서 imggul-editor-workspace를 삭제할 수 있습니다.');request.onblocked=()=>notify('이전 편집기가 열린 다른 탭을 닫으면 구 임시 저장소 정리가 완료됩니다.');
+  try{localStorage.removeItem('imggul-editor-preset');localStorage.removeItem('imggul-editor-presets');}catch{}
+}

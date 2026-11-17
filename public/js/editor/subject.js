@@ -1,9 +1,9 @@
-import { canvas } from "./bitmap.js";
-import { presetFor } from "./model.js";
+import { canvas } from "./bitmap.js?v=editor-rework-20261117a";
+import { presetFor } from "./model.js?v=editor-rework-20261117a";
 function segmentSubject(source, onProgress, signal) {
   if (!presetFor(source.width, source.height)) return Promise.reject(new Error("지원하지 않는 이미지 규격입니다."));
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./subject-worker.js", import.meta.url), { type: "module" });
+    const worker = new Worker(new URL("./subject-worker.js?v=editor-rework-20261117a", import.meta.url), { type: "module" });
     const finish = (error, value) => {
       clearTimeout(timer);
       worker.terminate();

@@ -61,8 +61,15 @@ export class EditorColorPicker {
   constructor(workspace) {
     this.workspace = workspace;
     this.active = null;
+    document.addEventListener('pointerdown',event=>{
+      this.pointerType=event.pointerType;
+      if(!['touch','pen'].includes(event.pointerType))return;
+      const control=event.target.closest('.ed-color-control');if(!control||!this.owns(control))return;
+      event.preventDefault();event.stopPropagation();control.classList.add('ed-touch-color-control');
+      const input=control.querySelector('input');if(!this.active&&input&&!input.disabled){try{this.open(input,control);}catch(error){workspace.notify(error.message);}}
+    },{capture:true,signal:workspace.abort.signal});
     document.addEventListener("click", (event) => {
-      if (!matchMedia(MOBILE_COLOR_QUERY).matches) return;
+      if (!matchMedia(MOBILE_COLOR_QUERY).matches&&!["touch","pen"].includes(this.pointerType)&&!event.target.closest("[data-color-open]")) return;
       const trigger = event.target.closest("[data-color-open],.ed-color-control>input"), control = trigger?.closest(".ed-color-control");
       if (!control || !this.owns(control)) return;
       const input = control.querySelector("input");

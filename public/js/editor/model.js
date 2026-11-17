@@ -9,7 +9,7 @@ function presetFor(width, height) {
 }
 function newDocument(preset = "square", projectId = "", prefix = "") {
   const [width, height] = PRESETS[preset] || PRESETS.square;
-  return { schemaVersion: 1, id: uid(), projectId, prefix, title: "새 작업", width, height, preset, sourceKey: "", layers: [], assets: {}, candidates: [], background: "transparent" };
+  return { schemaVersion: 1, id: uid(), projectId, prefix, title: "제목 없음", width, height, preset, sourceKey: "", layers: [], assets: {}, background: "transparent" };
 }
 function newLayer(type, width, height, data = {}) {
   return {
