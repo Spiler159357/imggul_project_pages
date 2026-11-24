@@ -29,7 +29,8 @@ const NOVELAI_GENERATION_TIMEOUT_MS = 180_000;
 let preparation = null;
 
 function logGeneration(stage, fields = {}) {
-    void window.logFlowToStorage?.('generation_stage', { stage, attemptId: fields.requestId || preparation?.id, ...fields });
+    // 이미지 생성 단계 디버그 로그 저장을 일시 중지한다.
+    // void window.logFlowToStorage?.('generation_stage', { stage, attemptId: fields.requestId || preparation?.id, ...fields });
 }
 
 function setGenerationNotice(message = '') {
